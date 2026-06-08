@@ -2,7 +2,11 @@ const NAV_ITEMS = [
   { id: 'projects', label: 'Projects' },
 ];
 
-const AUTH_URL = 'https://aps-acc-mcp-worker.bim-engine.workers.dev/auth';
+const CLIENT_ID     = 'F2lSjFPEgbJyvjCS9xFOwel7EFEbs98ayGAjnnc6lVOVvmtO';
+const REDIRECT_URI  = 'https://mahdi-bimengine.github.io/forma-super-admin/';
+const APS_AUTH_URL  = 'https://developer.api.autodesk.com/authentication/v2/authorize';
+const APS_TOKEN_URL = 'https://developer.api.autodesk.com/authentication/v2/token';
+const SCOPES        = 'data:read';
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -19,28 +23,78 @@ function logout() {
   window.location.href = window.location.pathname;
 }
 
-// Open OAuth in a popup. When the callback lands in the popup, it relays the
-// token via localStorage and closes itself; the main tab picks it up below.
-function openAuthPopup() {
-  const popup = window.open(AUTH_URL, 'aps_auth', 'width=520,height=680,left=200,top=80');
-  if (!popup) {
-    // Blocked by browser — fall back to same-tab navigation
-    window.location.href = AUTH_URL;
-  }
+function base64urlEncode(buffer) {
+  return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
-// Capture token from URL after OAuth callback redirect.
-// Supports both ?access_token=... and #access_token=...
-function captureTokenFromUrl() {
-  const search = new URLSearchParams(window.location.search);
-  const hash   = new URLSearchParams(window.location.hash.replace('#', ''));
+async function openAuthPopup() {
+  const verifierBytes = new Uint8Array(32);
+  crypto.getRandomValues(verifierBytes);
+  const verifier  = base64urlEncode(verifierBytes);
+  const challenge = base64urlEncode(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
+  );
 
+  localStorage.setItem('pkce_verifier', verifier);
+
+  const url = `${APS_AUTH_URL}?` + new URLSearchParams({
+    response_type:         'code',
+    client_id:             CLIENT_ID,
+    redirect_uri:          REDIRECT_URI,
+    scope:                 SCOPES,
+    code_challenge:        challenge,
+    code_challenge_method: 'S256',
+  });
+
+  const popup = window.open(url, 'aps_auth', 'width=520,height=680,left=200,top=80');
+  if (!popup) window.location.href = url;
+}
+
+async function exchangeCodeForToken(code) {
+  const verifier = localStorage.getItem('pkce_verifier');
+  if (!verifier) throw new Error('PKCE verifier missing — please try signing in again.');
+  localStorage.removeItem('pkce_verifier');
+
+  const res = await fetch(APS_TOKEN_URL, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    new URLSearchParams({
+      grant_type:    'authorization_code',
+      client_id:     CLIENT_ID,
+      code,
+      redirect_uri:  REDIRECT_URI,
+      code_verifier: verifier,
+    }).toString(),
+  });
+
+  if (!res.ok) throw new Error(`Token exchange failed (${res.status}): ${await res.text()}`);
+  return (await res.json()).access_token;
+}
+
+async function captureTokenFromUrl() {
+  const search = new URLSearchParams(window.location.search);
+
+  const code = search.get('code');
+  if (code) {
+    window.history.replaceState({}, '', window.location.pathname);
+    const token = await exchangeCodeForToken(code);
+    if (window.opener) {
+      localStorage.setItem('aps_token_relay', token);
+      window.close();
+      return null;
+    }
+    storeToken(token);
+    return token;
+  }
+
+  // Fallback: direct access_token in URL (legacy)
+  const hash  = new URLSearchParams(window.location.hash.replace('#', ''));
   const token = search.get('access_token') || hash.get('access_token')
              || search.get('token')        || hash.get('token');
 
   if (!token) return null;
 
-  // If we're in the OAuth popup, relay the token to the opener and close.
   if (window.opener) {
     localStorage.setItem('aps_token_relay', token);
     window.close();
@@ -54,12 +108,17 @@ function captureTokenFromUrl() {
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
-function boot() {
-  const token = captureTokenFromUrl() || getStoredToken();
+async function boot() {
+  let token;
+  try {
+    token = await captureTokenFromUrl();
+  } catch (err) {
+    console.error('Auth error:', err);
+  }
+  token = token || getStoredToken();
 
   if (!token) {
     document.getElementById('login-page').classList.remove('hidden');
-    // Listen for the popup relay
     window.addEventListener('storage', function onRelay(e) {
       if (e.key !== 'aps_token_relay' || !e.newValue) return;
       window.removeEventListener('storage', onRelay);
