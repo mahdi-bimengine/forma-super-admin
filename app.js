@@ -2,7 +2,7 @@ const CLIENT_ID     = 'F2lSjFPEgbJyvjCS9xFOwel7EFEbs98ayGAjnnc6lVOVvmtO';
 const REDIRECT_URI  = 'https://mahdi-bimengine.github.io/forma-super-admin/';
 const APS_AUTH_URL  = 'https://developer.api.autodesk.com/authentication/v2/authorize';
 const APS_TOKEN_URL = 'https://developer.api.autodesk.com/authentication/v2/token';
-const SCOPES        = 'data:read user-profile:read';
+const SCOPES        = 'openid data:read user-profile:read';
 
 // ── Project picker state ───────────────────────────────────────────────────────
 
