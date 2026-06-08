@@ -88,13 +88,17 @@ async function captureTokenFromUrl() {
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 async function boot() {
+  const hasCode = new URLSearchParams(window.location.search).has('code');
+
   let token;
   try {
     token = await captureTokenFromUrl();
   } catch (err) {
-    console.error('Auth error:', err);
+    showAccessDenied(err.message);
+    return;
   }
-  token = token || getStoredToken();
+
+  if (!hasCode) token = token || getStoredToken();
 
   if (!token) {
     document.getElementById('login-page').classList.remove('hidden');
@@ -107,8 +111,7 @@ async function boot() {
   try {
     profile = await getUserProfile();
   } catch (err) {
-    console.error('Failed to fetch user profile:', err);
-    showAccessDenied('Could not verify your account. Please try again.');
+    showAccessDenied(err.message);
     return;
   }
 
