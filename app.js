@@ -22,7 +22,18 @@ function storeToken(token) {
 
 function logout() {
   sessionStorage.removeItem('aps_token');
+  sessionStorage.removeItem('aps_id_token');
   window.location.href = window.location.pathname;
+}
+
+function decodeIdToken(idToken) {
+  if (!idToken) return {};
+  try {
+    const payload = JSON.parse(atob(idToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return { email: payload.email || payload.preferred_username || '' };
+  } catch {
+    return {};
+  }
 }
 
 function base64urlEncode(buffer) {
@@ -68,7 +79,9 @@ async function exchangeCodeForToken(code) {
   });
 
   if (!res.ok) throw new Error(`Token exchange failed (${res.status}): ${await res.text()}`);
-  return (await res.json()).access_token;
+  const data = await res.json();
+  if (data.id_token) sessionStorage.setItem('aps_id_token', data.id_token);
+  return data.access_token;
 }
 
 async function captureTokenFromUrl() {
@@ -107,14 +120,7 @@ async function boot() {
 
   setToken(token);
 
-  let profile;
-  try {
-    profile = await getUserProfile();
-  } catch (err) {
-    showAccessDenied(err.message);
-    return;
-  }
-
+  const profile = decodeIdToken(sessionStorage.getItem('aps_id_token'));
   showApp(profile);
 }
 
