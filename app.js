@@ -1,5 +1,5 @@
 const NAV_ITEMS = [
-  // { id: 'example', label: 'Example', icon: '...' },
+  { id: 'projects', label: 'Projects' },
 ];
 
 const AUTH_URL = 'https://aps-acc-mcp-worker.bim-engine.workers.dev/auth';
@@ -115,8 +115,68 @@ function navigate(id) {
 }
 
 function renderSection(id) {
+  if (id === 'projects') { renderProjects(); return; }
   const main = document.getElementById('main-content');
   main.innerHTML = `<div class="p-8 text-ads-muted text-sm">Section "${id}" not yet implemented.</div>`;
+}
+
+// ── Projects ──────────────────────────────────────────────────────────────────
+
+async function renderProjects() {
+  const main = document.getElementById('main-content');
+  main.innerHTML = `
+    <div class="p-8">
+      <h1 class="text-base font-semibold text-ads-text mb-6">Projects</h1>
+      <div id="projects-body" class="text-ads-muted text-sm">Loading…</div>
+    </div>`;
+
+  try {
+    const hubs = await listHubs();
+    if (!hubs.length) {
+      document.getElementById('projects-body').textContent = 'No hubs found for this account.';
+      return;
+    }
+
+    const rows = await Promise.all(hubs.map(async hub => {
+      const projects = await listProjects(hub.id);
+      return projects.map(p => ({ hub: hub.attributes.name, project: p }));
+    }));
+
+    const all = rows.flat();
+
+    if (!all.length) {
+      document.getElementById('projects-body').textContent = 'No projects found.';
+      return;
+    }
+
+    document.getElementById('projects-body').innerHTML = `
+      <table class="w-full text-sm border-collapse">
+        <thead>
+          <tr class="border-b border-ads-border text-ads-muted text-xs uppercase tracking-wide">
+            <th class="text-left py-2 pr-6 font-medium">Project</th>
+            <th class="text-left py-2 pr-6 font-medium">Hub</th>
+            <th class="text-left py-2 font-medium">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${all.map(({ hub, project: p }) => `
+            <tr class="border-b border-ads-border hover:bg-ads-gray transition-colors">
+              <td class="py-2.5 pr-6 font-medium text-ads-text">${p.attributes.name}</td>
+              <td class="py-2.5 pr-6 text-ads-muted">${hub}</td>
+              <td class="py-2.5">
+                <span class="px-2 py-0.5 rounded-full text-xs font-medium ${
+                  p.attributes.status === 'active'
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-ads-gray text-ads-muted'
+                }">${p.attributes.status ?? '—'}</span>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } catch (err) {
+    document.getElementById('projects-body').innerHTML =
+      `<span class="text-red-500">Failed to load projects: ${err.message}</span>`;
+  }
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────

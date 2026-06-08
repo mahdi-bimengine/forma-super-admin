@@ -4,8 +4,16 @@ let _token = null;
 
 function setToken(token) {
   _token = token;
-  document.getElementById('auth-status').textContent = 'Connected';
-  document.getElementById('auth-status').className = 'text-xs text-green-400';
+}
+
+async function listHubs() {
+  const res = await apsGet('/project/v1/hubs');
+  return res.data;
+}
+
+async function listProjects(hubId) {
+  const res = await apsGet(`/project/v1/hubs/${hubId}/projects`);
+  return res.data;
 }
 
 async function apsGet(path) {
