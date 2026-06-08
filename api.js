@@ -6,6 +6,10 @@ function setToken(token) {
   _token = token;
 }
 
+async function getUserProfile() {
+  return apsGet('/userprofile/v1/users/@me');
+}
+
 async function listHubs() {
   const res = await apsGet('/project/v1/hubs');
   return res.data;

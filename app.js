@@ -2,6 +2,8 @@ const NAV_ITEMS = [
   { id: 'projects', label: 'Projects' },
 ];
 
+const ALLOWLIST = ['mahdi@bimengine.se', 'adrian@bimengine.se', 'edmon@bimengine.se'];
+
 const CLIENT_ID     = 'F2lSjFPEgbJyvjCS9xFOwel7EFEbs98ayGAjnnc6lVOVvmtO';
 const REDIRECT_URI  = 'https://mahdi-bimengine.github.io/forma-super-admin/';
 const APS_AUTH_URL  = 'https://developer.api.autodesk.com/authentication/v2/authorize';
@@ -119,25 +121,63 @@ async function boot() {
 
   if (!token) {
     document.getElementById('login-page').classList.remove('hidden');
-    window.addEventListener('storage', function onRelay(e) {
+    window.addEventListener('storage', async function onRelay(e) {
       if (e.key !== 'aps_token_relay' || !e.newValue) return;
       window.removeEventListener('storage', onRelay);
       localStorage.removeItem('aps_token_relay');
       storeToken(e.newValue);
       setToken(e.newValue);
-      showApp();
+      let profile;
+      try { profile = await getUserProfile(); } catch { showAccessDenied('Could not verify your account.'); return; }
+      const email = (profile.emailId || profile.email || '').toLowerCase();
+      if (!ALLOWLIST.includes(email)) { sessionStorage.removeItem('aps_token'); showAccessDenied(`${email || 'This account'} is not authorised.`); return; }
+      showApp(profile);
     });
     return;
   }
 
   setToken(token);
-  showApp();
+
+  let profile;
+  try {
+    profile = await getUserProfile();
+  } catch (err) {
+    console.error('Failed to fetch user profile:', err);
+    showAccessDenied('Could not verify your account. Please try again.');
+    return;
+  }
+
+  const email = (profile.emailId || profile.email || '').toLowerCase();
+  if (!ALLOWLIST.includes(email)) {
+    sessionStorage.removeItem('aps_token');
+    showAccessDenied(`${email || 'This account'} is not authorised to access this tool.`);
+    return;
+  }
+
+  showApp(profile);
 }
 
-function showApp() {
+function showAccessDenied(message) {
+  const page = document.getElementById('login-page');
+  page.classList.remove('hidden');
+  page.innerHTML = `
+    <div class="bg-white rounded shadow-sm border border-ads-border w-full max-w-sm p-8 flex flex-col items-center gap-5 text-center">
+      <img src="logo.png" alt="BIM Engine" class="h-14 w-auto" />
+      <div>
+        <div class="font-semibold text-ads-text">Access denied</div>
+        <p class="text-ads-muted text-xs mt-1">${message}</p>
+      </div>
+      <button onclick="logout()" class="text-xs text-ads-blue hover:underline">Sign in with a different account</button>
+    </div>`;
+}
+
+function showApp(profile) {
   document.getElementById('login-page').classList.add('hidden');
   document.getElementById('app-header').classList.remove('hidden');
   document.getElementById('sidebar').classList.remove('hidden');
+
+  const email = profile?.emailId || profile?.email || '';
+  document.getElementById('user-label').textContent = email;
 
   renderSidebar();
 
