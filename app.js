@@ -30,7 +30,7 @@ function base64urlEncode(buffer) {
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
-async function openAuthPopup() {
+async function login() {
   const verifierBytes = new Uint8Array(32);
   crypto.getRandomValues(verifierBytes);
   const verifier  = base64urlEncode(verifierBytes);
@@ -40,7 +40,7 @@ async function openAuthPopup() {
 
   localStorage.setItem('pkce_verifier', verifier);
 
-  const url = `${APS_AUTH_URL}?` + new URLSearchParams({
+  window.location.href = `${APS_AUTH_URL}?` + new URLSearchParams({
     response_type:         'code',
     client_id:             CLIENT_ID,
     redirect_uri:          REDIRECT_URI,
@@ -48,9 +48,6 @@ async function openAuthPopup() {
     code_challenge:        challenge,
     code_challenge_method: 'S256',
   });
-
-  const popup = window.open(url, 'aps_auth', 'width=520,height=680,left=200,top=80');
-  if (!popup) window.location.href = url;
 }
 
 async function exchangeCodeForToken(code) {
@@ -81,30 +78,11 @@ async function captureTokenFromUrl() {
   if (code) {
     window.history.replaceState({}, '', window.location.pathname);
     const token = await exchangeCodeForToken(code);
-    if (window.opener) {
-      localStorage.setItem('aps_token_relay', token);
-      window.close();
-      return null;
-    }
     storeToken(token);
     return token;
   }
 
-  const hash  = new URLSearchParams(window.location.hash.replace('#', ''));
-  const token = search.get('access_token') || hash.get('access_token')
-             || search.get('token')        || hash.get('token');
-
-  if (!token) return null;
-
-  if (window.opener) {
-    localStorage.setItem('aps_token_relay', token);
-    window.close();
-    return null;
-  }
-
-  storeToken(token);
-  window.history.replaceState({}, '', window.location.pathname);
-  return token;
+  return null;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -120,16 +98,6 @@ async function boot() {
 
   if (!token) {
     document.getElementById('login-page').classList.remove('hidden');
-    window.addEventListener('storage', async function onRelay(e) {
-      if (e.key !== 'aps_token_relay' || !e.newValue) return;
-      window.removeEventListener('storage', onRelay);
-      localStorage.removeItem('aps_token_relay');
-      storeToken(e.newValue);
-      setToken(e.newValue);
-      let profile;
-      try { profile = await getUserProfile(); } catch { showAccessDenied('Could not verify your account.'); return; }
-      showApp(profile);
-    });
     return;
   }
 
