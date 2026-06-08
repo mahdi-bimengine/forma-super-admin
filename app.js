@@ -2,6 +2,8 @@ const NAV_ITEMS = [
   // { id: 'example', label: 'Example', icon: '...' },
 ];
 
+const AUTH_URL = 'https://aps-acc-mcp-worker.bim-engine.workers.dev/auth';
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 function getStoredToken() {
@@ -17,6 +19,16 @@ function logout() {
   window.location.href = window.location.pathname;
 }
 
+// Open OAuth in a popup. When the callback lands in the popup, it relays the
+// token via localStorage and closes itself; the main tab picks it up below.
+function openAuthPopup() {
+  const popup = window.open(AUTH_URL, 'aps_auth', 'width=520,height=680,left=200,top=80');
+  if (!popup) {
+    // Blocked by browser — fall back to same-tab navigation
+    window.location.href = AUTH_URL;
+  }
+}
+
 // Capture token from URL after OAuth callback redirect.
 // Supports both ?access_token=... and #access_token=...
 function captureTokenFromUrl() {
@@ -26,14 +38,18 @@ function captureTokenFromUrl() {
   const token = search.get('access_token') || hash.get('access_token')
              || search.get('token')        || hash.get('token');
 
-  if (token) {
-    storeToken(token);
-    // Clean the token out of the URL bar
-    const clean = window.location.pathname;
-    window.history.replaceState({}, '', clean);
-    return token;
+  if (!token) return null;
+
+  // If we're in the OAuth popup, relay the token to the opener and close.
+  if (window.opener) {
+    localStorage.setItem('aps_token_relay', token);
+    window.close();
+    return null;
   }
-  return null;
+
+  storeToken(token);
+  window.history.replaceState({}, '', window.location.pathname);
+  return token;
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -42,12 +58,19 @@ function boot() {
   const token = captureTokenFromUrl() || getStoredToken();
 
   if (!token) {
-    // Show login, hide app chrome
     document.getElementById('login-page').classList.remove('hidden');
+    // Listen for the popup relay
+    window.addEventListener('storage', function onRelay(e) {
+      if (e.key !== 'aps_token_relay' || !e.newValue) return;
+      window.removeEventListener('storage', onRelay);
+      localStorage.removeItem('aps_token_relay');
+      storeToken(e.newValue);
+      setToken(e.newValue);
+      showApp();
+    });
     return;
   }
 
-  // We have a token — set it on the API layer and show the app
   setToken(token);
   showApp();
 }

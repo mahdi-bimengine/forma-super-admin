@@ -18,6 +18,11 @@
               border:     '#e0e0e0',
               text:       '#3d3d3d',
               muted:      '#757575',
+            },
+            be: {
+              charcoal:   '#2D2926',
+              green:      '#82B891',
+              'green-dark':'#6a9a78',
             }
           },
           fontFamily: {
@@ -34,11 +39,11 @@
 <body class="bg-ads-gray text-ads-text min-h-screen flex flex-col">
 
   <!-- Top nav (shown after login) -->
-  <header id="app-header" class="hidden bg-ads-navy text-white border-b border-ads-navy px-6 h-12 flex items-center justify-between shrink-0">
+  <header id="app-header" class="hidden bg-be-charcoal text-white border-b border-black/20 px-6 h-12 flex items-center justify-between shrink-0">
     <div class="flex items-center gap-4">
-      <span class="font-semibold text-sm tracking-wide">BIM Engine</span>
+      <img src="logo.png" alt="BIM Engine" class="h-7 w-auto brightness-0 invert" />
       <span class="text-white/30 text-xs">|</span>
-      <span class="text-white/70 text-xs">Forma Super Admin</span>
+      <span class="text-white/70 text-xs tracking-wide">Forma Super Admin</span>
     </div>
     <div class="flex items-center gap-4">
       <span id="user-label" class="text-white/60 text-xs"></span>
@@ -62,15 +67,11 @@
         <div class="bg-white rounded shadow-sm border border-ads-border w-full max-w-sm p-8 flex flex-col items-center gap-6">
 
           <!-- Logo area -->
-          <div class="flex flex-col items-center gap-2">
-            <div class="w-12 h-12 bg-ads-blue rounded flex items-center justify-center">
-              <svg class="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M3 7l9-4 9 4v10l-9 4-9-4V7z" />
-              </svg>
-            </div>
+          <div class="flex flex-col items-center gap-3">
+            <img src="logo.png" alt="BIM Engine" class="h-20 w-auto" />
             <div class="text-center">
-              <div class="font-semibold text-ads-navy text-base">Forma Super Admin</div>
-              <div class="text-ads-muted text-xs mt-0.5">BIM Engine internal tool</div>
+              <div class="font-semibold text-be-charcoal text-base tracking-wide">Forma Super Admin</div>
+              <div class="text-ads-muted text-xs mt-0.5">Internal tool</div>
             </div>
           </div>
 
@@ -79,16 +80,13 @@
           <!-- Auth button -->
           <div class="flex flex-col items-center gap-3 w-full">
             <p class="text-ads-muted text-xs text-center">Sign in with your Autodesk account to continue.</p>
-            <a
+            <button
               id="auth-btn"
-              href="https://aps-acc-mcp-worker.bim-engine.workers.dev/auth"
-              class="w-full flex items-center justify-center gap-2 bg-ads-blue hover:bg-ads-blue-dark text-white text-sm font-medium py-2.5 px-4 rounded transition-colors"
+              onclick="openAuthPopup()"
+              class="w-full flex items-center justify-center gap-2 bg-be-charcoal hover:bg-black text-white text-sm font-medium py-2.5 px-4 rounded transition-colors"
             >
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
-              </svg>
               Sign in with Autodesk
-            </a>
+            </button>
           </div>
 
           <p class="text-ads-muted text-[11px] text-center">
