@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BIM Engine | Forma Super Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50:  '#f0f4ff',
+              100: '#dde6ff',
+              500: '#3b5bdb',
+              600: '#2f4ac5',
+              700: '#2440b0',
+              900: '#1a2d7a',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col">
+
+  <!-- Top nav -->
+  <header class="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <span class="text-brand-500 font-bold text-lg tracking-tight">BIM Engine</span>
+      <span class="text-gray-500">/</span>
+      <span class="text-gray-300 text-sm">Forma Super Admin</span>
+    </div>
+    <div id="auth-status" class="text-xs text-gray-500">Not connected</div>
+  </header>
+
+  <!-- Main layout -->
+  <div class="flex flex-1 overflow-hidden">
+
+    <!-- Sidebar -->
+    <nav id="sidebar" class="w-56 border-r border-gray-800 flex flex-col gap-1 p-3 pt-4 shrink-0">
+      <!-- Nav items injected by app.js -->
+    </nav>
+
+    <!-- Content area -->
+    <main id="main-content" class="flex-1 overflow-auto p-8">
+      <div class="text-gray-500 text-sm">Select a section from the sidebar.</div>
+    </main>
+
+  </div>
+
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
