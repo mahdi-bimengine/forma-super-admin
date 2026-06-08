@@ -7,7 +7,7 @@ function setToken(token) {
 }
 
 async function getUserProfile() {
-  return apsGet('/userprofile/v1/users/@me');
+  return apsGet('/authentication/v2/userinfo');
 }
 
 async function listHubs() {
