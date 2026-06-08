@@ -377,6 +377,8 @@ function switchHub(idx) {
   loadPickerData(idx);
 }
 
+let _currentProject = null;
+
 function selectProject(projectId) {
   const hub     = _hubs[_hubIdx];
   const project = _projCache[hub?.id]?.find(p => p.id === projectId);
@@ -384,11 +386,24 @@ function selectProject(projectId) {
 }
 
 function renderProjectView(project) {
-  const name    = project?.attributes?.name || 'Projekt';
-  const sidebar = document.getElementById('sidebar');
-  const main    = document.getElementById('main-content');
+  _currentProject = project;
+  renderSidebar('overview');
+  renderOverview();
+}
 
+function renderSidebar(activeTab) {
+  const sidebar = document.getElementById('sidebar');
   sidebar.classList.remove('hidden');
+
+  const navBtn = (tab, label) => `
+    <button
+      onclick="showTab('${tab}')"
+      class="w-full text-left px-3 py-2 rounded text-sm transition-colors
+             ${activeTab === tab
+               ? 'bg-ads-gray text-ads-blue font-medium'
+               : 'text-ads-muted hover:bg-ads-gray'}"
+    >${label}</button>`;
+
   sidebar.innerHTML = `
     <button
       onclick="showProjectPicker()"
@@ -396,18 +411,43 @@ function renderProjectView(project) {
              transition-colors flex items-center gap-1.5 mb-1"
     >← Projekt</button>
     <div class="border-t border-ads-border my-1.5 mx-1"></div>
-    <button class="w-full text-left px-3 py-2 rounded text-sm bg-ads-gray text-ads-blue font-medium">
-      Översikt
-    </button>`;
+    ${navBtn('overview',       'Översikt')}
+    ${navBtn('modellkontroll', 'Modellkontroll')}`;
+}
 
-  main.innerHTML = `
+function showTab(tab) {
+  renderSidebar(tab);
+  if (tab === 'overview')       renderOverview();
+  if (tab === 'modellkontroll') renderModellkontroll();
+}
+
+function renderOverview() {
+  const name = _currentProject?.attributes?.name || 'Projekt';
+  document.getElementById('main-content').innerHTML = `
     <div class="p-8">
-      <button onclick="showProjectPicker()"
-              class="flex items-center gap-1 text-ads-blue text-sm hover:underline mb-6">
-        ← Alla projekt
-      </button>
       <h1 class="text-base font-semibold text-ads-text mb-2">${name}</h1>
       <p class="text-ads-muted text-sm">Projektverktyg kommer snart.</p>
+    </div>`;
+}
+
+// ── Modellkontroll ─────────────────────────────────────────────────────────────
+
+function renderModellkontroll() {
+  document.getElementById('main-content').innerHTML = `
+    <div class="max-w-4xl mx-auto px-6 py-8">
+      <div class="mb-6">
+        <h2 class="text-lg font-semibold text-ads-text">Modellkontroll</h2>
+        <p class="text-ads-muted text-sm mt-1">
+          Kontrollera modeller mot en kravlista för obligatoriska parametrar.
+        </p>
+      </div>
+      <div class="bg-white border border-ads-border rounded-lg p-8 flex flex-col items-center justify-center text-center gap-3 min-h-[260px]">
+        <svg class="w-10 h-10 text-ads-border" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round"
+                d="M9 12h6m-3-3v6M4.5 19.5l15-15M3 10.5A7.5 7.5 0 1 0 10.5 3"/>
+        </svg>
+        <p class="text-ads-muted text-sm">Välj en modell att kontrollera.</p>
+      </div>
     </div>`;
 }
 
