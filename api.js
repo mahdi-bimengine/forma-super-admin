@@ -16,6 +16,16 @@ async function listProjects(hubId) {
   return res.data;
 }
 
+async function getTopFolders(hubId, projectId) {
+  const res = await apsGet(`/project/v1/hubs/${hubId}/projects/${projectId}/topFolders`);
+  return res.data;
+}
+
+async function getFolderContents(projectId, folderId) {
+  const res = await apsGet(`/data/v1/projects/${projectId}/folders/${encodeURIComponent(folderId)}/contents`);
+  return res.data;
+}
+
 async function apsGet(path) {
   if (!_token) throw new Error('No APS token set. Call setToken() first.');
   const res = await fetch(`${APS_BASE}${path}`, {
