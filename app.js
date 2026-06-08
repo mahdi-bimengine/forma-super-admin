@@ -1,16 +1,16 @@
-const NAV_ITEMS = [
-  { id: 'projects', label: 'Projects' },
-];
-
-const ALLOWLIST = ['mahdi@bimengine.se', 'adrian@bimengine.se', 'edmon@bimengine.se'];
-
 const CLIENT_ID     = 'F2lSjFPEgbJyvjCS9xFOwel7EFEbs98ayGAjnnc6lVOVvmtO';
 const REDIRECT_URI  = 'https://mahdi-bimengine.github.io/forma-super-admin/';
 const APS_AUTH_URL  = 'https://developer.api.autodesk.com/authentication/v2/authorize';
 const APS_TOKEN_URL = 'https://developer.api.autodesk.com/authentication/v2/token';
 const SCOPES        = 'data:read';
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
+// ── Project picker state ───────────────────────────────────────────────────────
+
+let _hubs      = [];
+let _hubIdx    = 0;
+let _projCache = {};  // hubId → project[]
+
+// ── Auth ───────────────────────────────────────────────────────────────────────
 
 function getStoredToken() {
   return sessionStorage.getItem('aps_token');
@@ -90,7 +90,6 @@ async function captureTokenFromUrl() {
     return token;
   }
 
-  // Fallback: direct access_token in URL (legacy)
   const hash  = new URLSearchParams(window.location.hash.replace('#', ''));
   const token = search.get('access_token') || hash.get('access_token')
              || search.get('token')        || hash.get('token');
@@ -129,8 +128,6 @@ async function boot() {
       setToken(e.newValue);
       let profile;
       try { profile = await getUserProfile(); } catch { showAccessDenied('Could not verify your account.'); return; }
-      const email = (profile.emailId || profile.email || '').toLowerCase();
-      if (!ALLOWLIST.includes(email)) { sessionStorage.removeItem('aps_token'); showAccessDenied(`${email || 'This account'} is not authorised.`); return; }
       showApp(profile);
     });
     return;
@@ -144,13 +141,6 @@ async function boot() {
   } catch (err) {
     console.error('Failed to fetch user profile:', err);
     showAccessDenied('Could not verify your account. Please try again.');
-    return;
-  }
-
-  const email = (profile.emailId || profile.email || '').toLowerCase();
-  if (!ALLOWLIST.includes(email)) {
-    sessionStorage.removeItem('aps_token');
-    showAccessDenied(`${email || 'This account'} is not authorised to access this tool.`);
     return;
   }
 
@@ -174,110 +164,274 @@ function showAccessDenied(message) {
 function showApp(profile) {
   document.getElementById('login-page').classList.add('hidden');
   document.getElementById('app-header').classList.remove('hidden');
-  document.getElementById('sidebar').classList.remove('hidden');
+  document.getElementById('sidebar').classList.add('hidden');
 
   const email = profile?.emailId || profile?.email || '';
   document.getElementById('user-label').textContent = email;
 
-  renderSidebar();
-
-  if (NAV_ITEMS.length > 0) {
-    navigate(NAV_ITEMS[0].id);
-  } else {
-    document.getElementById('main-content').innerHTML =
-      '<div class="p-8 text-ads-muted text-sm">No sections configured yet.</div>';
-  }
+  showProjectPicker();
 }
 
-// ── Sidebar & navigation ──────────────────────────────────────────────────────
+// ── Project picker ─────────────────────────────────────────────────────────────
 
-function renderSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  sidebar.innerHTML = NAV_ITEMS.map(item => `
-    <button
-      onclick="navigate('${item.id}')"
-      id="nav-${item.id}"
-      class="text-left w-full px-3 py-2 rounded text-sm text-ads-text hover:bg-ads-gray transition-colors"
-    >
-      ${item.label}
-    </button>
-  `).join('');
-}
+async function showProjectPicker() {
+  document.getElementById('sidebar').classList.add('hidden');
 
-function navigate(id) {
-  document.querySelectorAll('#sidebar button').forEach(btn => {
-    btn.classList.remove('bg-ads-gray', 'text-ads-blue', 'font-medium');
-  });
-  const active = document.getElementById(`nav-${id}`);
-  if (active) active.classList.add('bg-ads-gray', 'text-ads-blue', 'font-medium');
-  renderSection(id);
-}
+  document.getElementById('main-content').innerHTML = `
+    <div class="max-w-5xl mx-auto px-6 py-8">
 
-function renderSection(id) {
-  if (id === 'projects') { renderProjects(); return; }
-  const main = document.getElementById('main-content');
-  main.innerHTML = `<div class="p-8 text-ads-muted text-sm">Section "${id}" not yet implemented.</div>`;
-}
+      <div class="flex items-center gap-3.5 mb-7">
+        <span class="text-ads-muted text-sm">Konto</span>
+        <div class="relative">
+          <button
+            id="account-switcher-btn"
+            onclick="toggleAccountMenu(event)"
+            class="inline-flex items-center gap-1.5 bg-white border border-ads-border rounded px-3 py-1.5
+                   text-sm font-medium text-ads-text hover:border-ads-blue transition-colors"
+          >
+            <span id="account-name">Laddar…</span>
+            <svg class="w-3.5 h-3.5 text-ads-muted" fill="none" viewBox="0 0 20 20">
+              <path stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M5 8l5 5 5-5"/>
+            </svg>
+          </button>
+          <ul id="account-menu"
+              class="hidden absolute left-0 top-full mt-1 bg-white border border-ads-border
+                     rounded shadow-lg z-50 min-w-[200px] py-1"
+              role="menu">
+          </ul>
+        </div>
+      </div>
 
-// ── Projects ──────────────────────────────────────────────────────────────────
+      <div class="flex items-center justify-between flex-wrap gap-3 mb-6">
+        <h2 class="text-lg font-semibold text-ads-text">Välj projekt</h2>
+        <div class="relative">
+          <label for="project-search" class="sr-only">Sök projekt</label>
+          <svg class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ads-muted"
+               fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="6"/><path stroke-linecap="round" d="M20 20l-3-3"/>
+          </svg>
+          <input
+            id="project-search"
+            type="search"
+            placeholder="sök projekt…"
+            oninput="filterProjects()"
+            class="pl-8 pr-3 py-1.5 border border-ads-border rounded text-sm w-52
+                   focus:outline-none focus:ring-1 focus:ring-ads-blue focus:border-ads-blue"
+          />
+        </div>
+      </div>
 
-async function renderProjects() {
-  const main = document.getElementById('main-content');
-  main.innerHTML = `
-    <div class="p-8">
-      <h1 class="text-base font-semibold text-ads-text mb-6">Projects</h1>
-      <div id="projects-body" class="text-ads-muted text-sm">Loading…</div>
+      <div id="project-grid"></div>
     </div>`;
 
+  await loadPickerData();
+}
+
+async function loadPickerData(hubIdx) {
+  if (hubIdx !== undefined) _hubIdx = hubIdx;
+
+  const gridEl = document.getElementById('project-grid');
+  if (!gridEl) return;
+
+  renderSkeletons(gridEl);
+
   try {
-    const hubs = await listHubs();
-    if (!hubs.length) {
-      document.getElementById('projects-body').textContent = 'No hubs found for this account.';
+    if (_hubs.length === 0) {
+      _hubs = await listHubs();
+    }
+
+    if (_hubs.length === 0) {
+      gridEl.innerHTML = centeredMsg('Inga projekt i det här kontot.');
       return;
     }
 
-    const rows = await Promise.all(hubs.map(async hub => {
-      const projects = await listProjects(hub.id);
-      return projects.map(p => ({ hub: hub.attributes.name, project: p }));
-    }));
+    const hub = _hubs[_hubIdx];
 
-    const all = rows.flat();
+    const nameEl = document.getElementById('account-name');
+    if (nameEl) nameEl.textContent = hub.attributes.name;
 
-    if (!all.length) {
-      document.getElementById('projects-body').textContent = 'No projects found.';
-      return;
+    if (!_projCache[hub.id]) {
+      _projCache[hub.id] = await listProjects(hub.id);
     }
 
-    document.getElementById('projects-body').innerHTML = `
-      <table class="w-full text-sm border-collapse">
-        <thead>
-          <tr class="border-b border-ads-border text-ads-muted text-xs uppercase tracking-wide">
-            <th class="text-left py-2 pr-6 font-medium">Project</th>
-            <th class="text-left py-2 pr-6 font-medium">Hub</th>
-            <th class="text-left py-2 font-medium">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${all.map(({ hub, project: p }) => `
-            <tr class="border-b border-ads-border hover:bg-ads-gray transition-colors">
-              <td class="py-2.5 pr-6 font-medium text-ads-text">${p.attributes.name}</td>
-              <td class="py-2.5 pr-6 text-ads-muted">${hub}</td>
-              <td class="py-2.5">
-                <span class="px-2 py-0.5 rounded-full text-xs font-medium ${
-                  p.attributes.status === 'active'
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-ads-gray text-ads-muted'
-                }">${p.attributes.status ?? '—'}</span>
-              </td>
-            </tr>`).join('')}
-        </tbody>
-      </table>`;
+    renderProjectGrid(_projCache[hub.id]);
+
   } catch (err) {
-    document.getElementById('projects-body').innerHTML =
-      `<span class="text-red-500">Failed to load projects: ${err.message}</span>`;
+    const idx = _hubIdx;
+    if (gridEl) gridEl.innerHTML = `
+      <div class="text-center py-16">
+        <p class="text-ads-muted text-sm mb-3">Det gick inte att hämta projekten.</p>
+        <button onclick="loadPickerData(${idx})" class="text-ads-blue text-sm hover:underline">Försök igen</button>
+      </div>`;
   }
 }
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+function filterProjects() {
+  const hub = _hubs[_hubIdx];
+  if (!hub || !_projCache[hub.id]) return;
+  renderProjectGrid(_projCache[hub.id], document.getElementById('project-search')?.value || '');
+}
+
+function renderSkeletons(container) {
+  container.innerHTML = `
+    <div class="grid gap-4" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
+      ${Array.from({ length: 6 }, () => `
+        <div class="bg-white border border-ads-border rounded-lg p-5 animate-pulse">
+          <div class="h-4 bg-slate-200 rounded w-3/4 mb-2.5"></div>
+          <div class="h-3 bg-slate-200 rounded w-2/5 mb-5"></div>
+          <div class="flex gap-1.5">
+            <div class="h-5 bg-slate-200 rounded-full w-14"></div>
+            <div class="h-5 bg-slate-200 rounded-full w-10"></div>
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+
+function centeredMsg(text) {
+  return `<p class="text-center text-ads-muted text-sm py-16">${text}</p>`;
+}
+
+function renderProjectGrid(projects, query = '') {
+  const gridEl = document.getElementById('project-grid');
+  if (!gridEl) return;
+
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? projects.filter(p => (p.attributes.name || '').toLowerCase().includes(q))
+    : projects;
+
+  if (!visible.length) {
+    gridEl.innerHTML = centeredMsg(q ? 'Inga projekt matchar din sökning.' : 'Inga projekt i det här kontot.');
+    return;
+  }
+
+  gridEl.innerHTML = `
+    <div class="grid gap-4" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
+      ${visible.map(projectCard).join('')}
+    </div>`;
+}
+
+const STATUS_MAP = {
+  active:   { label: 'Aktivt',    dot: 'bg-green-500', pill: 'bg-green-50 text-green-700'   },
+  planning: { label: 'Planering', dot: 'bg-amber-400', pill: 'bg-amber-50 text-amber-700'   },
+  dormant:  { label: 'Vilande',   dot: 'bg-gray-400',  pill: 'bg-slate-100 text-slate-500'  },
+};
+
+function normalizeStatus(raw) {
+  const r = (raw || '').toLowerCase();
+  if (r === 'active') return 'active';
+  if (r === 'planning' || r === 'creating') return 'planning';
+  return 'dormant';
+}
+
+function inferModules(p) {
+  const ext = (p?.attributes?.extension?.type || '').toLowerCase();
+  if (ext.includes('acc')) return ['Docs', 'Build', 'Model'];
+  if (ext.includes('bim360')) return ['Docs', 'Build'];
+  return [];
+}
+
+function projectCard(p) {
+  const name   = p.attributes.name || '(namnlöst)';
+  const status = normalizeStatus(p.attributes.status);
+  const { label, dot, pill } = STATUS_MAP[status];
+  const tags   = inferModules(p);
+  const safeId = p.id.replace(/'/g, "\\'");
+
+  return `
+    <button
+      onclick="selectProject('${safeId}')"
+      class="group w-full bg-white border border-ads-border rounded-lg p-5 text-left
+             hover:-translate-y-0.5 hover:shadow-md transition-all duration-150
+             focus:outline-none focus:ring-2 focus:ring-ads-blue focus:ring-offset-1"
+      aria-label="${name}"
+    >
+      <h3 class="font-semibold text-ads-text text-sm leading-snug mb-2 line-clamp-2">${name}</h3>
+      <div class="mb-3">
+        <span class="inline-flex items-center gap-1.5 ${pill} text-xs px-2 py-0.5 rounded-full font-medium">
+          <span class="${dot} w-1.5 h-1.5 rounded-full shrink-0"></span>${label}
+        </span>
+      </div>
+      <div class="flex flex-wrap gap-1 min-h-[22px] mb-4">
+        ${tags.map(t => `<span class="bg-ads-gray text-ads-muted text-xs px-2 py-0.5 rounded-full">${t}</span>`).join('')}
+      </div>
+      <div class="flex justify-end border-t border-ads-border pt-3">
+        <span class="text-ads-blue text-xs font-medium group-hover:underline">Öppna →</span>
+      </div>
+    </button>`;
+}
+
+function toggleAccountMenu(event) {
+  event.stopPropagation();
+  const menu = document.getElementById('account-menu');
+  if (!menu || _hubs.length <= 1) return;
+
+  const isOpen = !menu.classList.contains('hidden');
+
+  if (isOpen) {
+    menu.classList.add('hidden');
+    return;
+  }
+
+  menu.innerHTML = _hubs.map((h, i) => `
+    <li role="menuitem">
+      <button
+        onclick="switchHub(${i})"
+        class="w-full text-left px-4 py-2 text-sm hover:bg-ads-gray transition-colors ${
+          i === _hubIdx ? 'font-semibold text-ads-blue' : 'text-ads-text'
+        }"
+      >${h.attributes.name}</button>
+    </li>`).join('');
+
+  menu.classList.remove('hidden');
+
+  setTimeout(() => {
+    document.addEventListener('click', function closeMenu() {
+      document.getElementById('account-menu')?.classList.add('hidden');
+      document.removeEventListener('click', closeMenu);
+    });
+  }, 0);
+}
+
+function switchHub(idx) {
+  document.getElementById('account-menu')?.classList.add('hidden');
+  const searchEl = document.getElementById('project-search');
+  if (searchEl) searchEl.value = '';
+  loadPickerData(idx);
+}
+
+function selectProject(projectId) {
+  const hub     = _hubs[_hubIdx];
+  const project = _projCache[hub?.id]?.find(p => p.id === projectId);
+  renderProjectView(project);
+}
+
+function renderProjectView(project) {
+  const name    = project?.attributes?.name || 'Projekt';
+  const sidebar = document.getElementById('sidebar');
+  const main    = document.getElementById('main-content');
+
+  sidebar.classList.remove('hidden');
+  sidebar.innerHTML = `
+    <button
+      onclick="showProjectPicker()"
+      class="w-full text-left px-3 py-2 rounded text-sm text-ads-muted hover:bg-ads-gray
+             transition-colors flex items-center gap-1.5 mb-1"
+    >← Projekt</button>
+    <div class="border-t border-ads-border my-1.5 mx-1"></div>
+    <button class="w-full text-left px-3 py-2 rounded text-sm bg-ads-gray text-ads-blue font-medium">
+      Översikt
+    </button>`;
+
+  main.innerHTML = `
+    <div class="p-8">
+      <button onclick="showProjectPicker()"
+              class="flex items-center gap-1 text-ads-blue text-sm hover:underline mb-6">
+        ← Alla projekt
+      </button>
+      <h1 class="text-base font-semibold text-ads-text mb-2">${name}</h1>
+      <p class="text-ads-muted text-sm">Projektverktyg kommer snart.</p>
+    </div>`;
+}
 
 boot();
