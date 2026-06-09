@@ -415,6 +415,7 @@ function renderProjectView(project) {
   _itemsById      = {};
   _selectedFile   = null;
   _fids           = [];
+  mkReset();
   renderSidebar('overview');
   renderOverview();
 }
@@ -470,7 +471,7 @@ function renderSidebar(activeTab) {
       ${navItem('overview',        'Översikt',        ICONS.grid)}
       ${navItem('data-management', 'Data Management', ICONS.folder)}
       ${navItem('issues',          'Issues',          ICONS.clock)}
-      ${navItem('modelldata',      'Modelldata',      ICONS.cube)}
+      ${navItem('modelldata',      'Modellkontroll',  ICONS.cube)}
       ${navItem('assets',          'Assets',          ICONS.layers)}
     </div>
 
@@ -681,26 +682,7 @@ async function loadTopFolders() {
 }
 
 function renderModelldata() {
-  document.getElementById('main-content').innerHTML = `
-    <div class="max-w-4xl mx-auto px-6 py-8">
-      <div class="mb-5">
-        <h2 class="text-lg font-semibold text-ads-text">Modellkontroll</h2>
-        <p class="text-ads-muted text-sm mt-0.5">Kontrollera modeller mot kravlista för obligatoriska parametrar.</p>
-      </div>
-      <div class="bg-white border border-ads-border rounded-lg overflow-hidden">
-        <div class="flex items-center gap-2 px-3 py-2 border-b border-ads-border">
-          <span class="text-xs text-ads-muted">Visa:</span>
-          <div id="filter-chips" class="flex gap-1.5">${renderChips()}</div>
-        </div>
-        <div id="file-browser" class="py-1 overflow-auto" style="max-height:60vh"></div>
-      </div>
-    </div>`;
-
-  if (_folderState['__top__']?.loaded) {
-    refreshFileBrowser();
-  } else {
-    loadTopFolders();
-  }
+  renderModellkontroll();
 }
 
 boot();
