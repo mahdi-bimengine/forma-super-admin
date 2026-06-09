@@ -215,6 +215,17 @@ function mkRenderStep1() {
                   class="text-sm bg-ads-blue text-white px-4 py-1.5 rounded hover:bg-ads-blue-dark transition-colors">
             Välj fil
           </button>
+          <div class="flex items-center gap-2 justify-center mt-4">
+            <span class="text-xs text-ads-muted">eller använd förinställd:</span>
+            <button onclick="mkLoadPreset('kravst%C3%A4llda%20objektparametrar%20PAG.xlsx', 'kravställda objektparametrar PAG.xlsx')"
+                    class="text-xs border border-ads-border bg-white rounded px-2.5 py-1 hover:border-ads-blue hover:text-ads-blue
+                           transition-colors flex items-center gap-1.5 text-ads-text">
+              <svg class="w-3.5 h-3.5 text-emerald-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+              </svg>
+              kravställda objektparametrar PAG.xlsx
+            </button>
+          </div>
         `}
         <input id="mk-ref-input" type="file" accept=".csv,.xlsx,.xls" class="hidden"
                onchange="if(this.files[0]) mkHandleRefFile(this.files[0])" />
@@ -311,6 +322,26 @@ function mkHandleRefFile(file) {
     reader.readAsArrayBuffer(file);
   } else {
     alert('Endast CSV och XLSX stöds.');
+  }
+}
+
+async function mkLoadPreset(encodedUrl, displayName) {
+  const btn = event?.target?.closest('button');
+  if (btn) { btn.textContent = 'Laddar…'; btn.disabled = true; }
+  try {
+    const res = await fetch(encodedUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buffer = await res.arrayBuffer();
+    if (typeof XLSX === 'undefined') throw new Error('XLSX-biblioteket laddades inte.');
+    const wb   = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+    const ws   = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    _mk.refParams = mkRowsToParams(rows);
+    _mk.refFile   = { name: displayName };
+    renderModellkontroll();
+  } catch (err) {
+    mkToast('Kunde inte ladda förinställd fil: ' + err.message, 'red');
+    if (btn) { btn.textContent = displayName; btn.disabled = false; }
   }
 }
 
