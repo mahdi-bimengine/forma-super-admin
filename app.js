@@ -29,8 +29,11 @@ function logout() {
 function decodeIdToken(idToken) {
   if (!idToken) return {};
   try {
-    const payload = JSON.parse(atob(idToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-    return { email: payload.email || payload.preferred_username || '' };
+    const p = JSON.parse(atob(idToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return {
+      email: p.email || p.preferred_username || '',
+      name:  p.name  || p.given_name         || '',
+    };
   } catch {
     return {};
   }
@@ -138,12 +141,15 @@ function showAccessDenied(message) {
     </div>`;
 }
 
+let _profile = {};
+
 function showApp(profile) {
+  _profile = profile;
   document.getElementById('login-page').classList.add('hidden');
   document.getElementById('app-header').classList.remove('hidden');
   document.getElementById('sidebar').classList.add('hidden');
 
-  const email = profile?.emailId || profile?.email || '';
+  const email = profile?.email || '';
   document.getElementById('user-label').textContent = email;
 
   showProjectPicker();
@@ -414,33 +420,85 @@ function renderProjectView(project) {
 }
 
 function renderSidebar(activeTab) {
-  const sidebar = document.getElementById('sidebar');
+  const sidebar  = document.getElementById('sidebar');
   sidebar.classList.remove('hidden');
 
-  const navBtn = (tab, label) => `
-    <button
-      onclick="showTab('${tab}')"
-      class="w-full text-left px-3 py-2 rounded text-sm transition-colors
-             ${activeTab === tab
-               ? 'bg-ads-gray text-ads-blue font-medium'
-               : 'text-ads-muted hover:bg-ads-gray'}"
-    >${label}</button>`;
+  const hubName  = _hubs[_hubIdx]?.attributes?.name || 'BIM Engine';
+  const projName = _currentProject?.attributes?.name || 'Projekt';
+  const email    = _profile?.email || '';
+  const name     = _profile?.name  || email.split('@')[0] || '?';
+  const initials = name.split(' ').map(p => p[0]).join('').slice(0, 2).toUpperCase() || '?';
+
+  const ICONS = {
+    grid:   `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="7" height="7" rx="1"/><rect x="11" y="2" width="7" height="7" rx="1"/><rect x="2" y="11" width="7" height="7" rx="1"/><rect x="11" y="11" width="7" height="7" rx="1"/></svg>`,
+    folder: `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2 7a2 2 0 0 1 2-2h3.17a2 2 0 0 1 1.42.59l.82.82A2 2 0 0 0 10.83 7H16a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7z"/></svg>`,
+    clock:  `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="8"/><path stroke-linecap="round" stroke-linejoin="round" d="M10 6v4l2.5 2.5"/></svg>`,
+    cube:   `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M10 2l7 3.5v9L10 18l-7-3.5v-9L10 2z"/><path stroke-linecap="round" stroke-linejoin="round" d="M10 2v16M3 5.5l7 3.5 7-3.5"/></svg>`,
+    layers: `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2 7l8-4 8 4-8 4-8-4z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2 11l8 4 8-4"/><path stroke-linecap="round" stroke-linejoin="round" d="M2 15l8 4 8-4"/></svg>`,
+  };
+
+  const navItem = (tab, label, icon) => {
+    const active = activeTab === tab;
+    return `
+      <button onclick="showTab('${tab}')"
+              class="w-full flex items-center gap-2.5 px-2.5 py-2 rounded text-sm transition-colors
+                     ${active
+                       ? 'border border-ads-border bg-white shadow-sm text-ads-text font-medium'
+                       : 'border border-transparent text-ads-muted hover:bg-ads-gray'}">
+        <span class="${active ? 'text-ads-blue' : ''}">${icon}</span>
+        ${label}
+      </button>`;
+  };
 
   sidebar.innerHTML = `
-    <button
-      onclick="showProjectPicker()"
-      class="w-full text-left px-3 py-2 rounded text-sm text-ads-muted hover:bg-ads-gray
-             transition-colors flex items-center gap-1.5 mb-1"
-    >← Projekt</button>
-    <div class="border-t border-ads-border my-1.5 mx-1"></div>
-    ${navBtn('overview',       'Översikt')}
-    ${navBtn('modellkontroll', 'Modellkontroll')}`;
+    <div class="px-4 pt-3 pb-3 border-b border-dashed border-ads-border shrink-0">
+      <p class="text-[10px] font-semibold uppercase tracking-widest text-orange-400 mb-0.5">${hubName}</p>
+      <div class="flex items-center justify-between gap-2">
+        <p class="text-sm font-semibold text-be-charcoal truncate">${projName}</p>
+        <button onclick="showProjectPicker()" title="Byt projekt"
+                class="shrink-0 text-ads-muted hover:text-ads-text transition-colors">
+          <svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 4l-3 4 3 4M15 4l3 4-3 4M3 8h14"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 12h14"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="flex-1 overflow-auto px-2 pt-3 pb-2">
+      <p class="text-[10px] uppercase tracking-widest text-ads-muted px-2.5 mb-1.5">Verktyg</p>
+      ${navItem('overview',        'Översikt',        ICONS.grid)}
+      ${navItem('data-management', 'Data Management', ICONS.folder)}
+      ${navItem('issues',          'Issues',          ICONS.clock)}
+      ${navItem('modelldata',      'Modelldata',      ICONS.cube)}
+      ${navItem('assets',          'Assets',          ICONS.layers)}
+    </div>
+
+    <div class="border-t border-ads-border px-3 py-2.5 flex items-center gap-2.5 shrink-0">
+      <div class="w-7 h-7 rounded-full bg-be-charcoal text-white flex items-center justify-center
+                  text-xs font-bold shrink-0">${initials}</div>
+      <div class="min-w-0">
+        <p class="text-xs font-medium text-ads-text truncate">${name}</p>
+        <p class="text-[10px] text-ads-muted truncate">${email}</p>
+      </div>
+    </div>`;
 }
 
 function showTab(tab) {
   renderSidebar(tab);
-  if (tab === 'overview')       renderOverview();
-  if (tab === 'modellkontroll') renderModellkontroll();
+  if (tab === 'overview')        renderOverview();
+  if (tab === 'modelldata')      renderModelldata();
+  if (tab === 'data-management') renderPlaceholder('Data Management');
+  if (tab === 'issues')          renderPlaceholder('Issues');
+  if (tab === 'assets')          renderPlaceholder('Assets');
+}
+
+function renderPlaceholder(label) {
+  document.getElementById('main-content').innerHTML = `
+    <div class="p-8">
+      <h2 class="text-lg font-semibold text-ads-text mb-1">${label}</h2>
+      <p class="text-ads-muted text-sm">Kommer snart.</p>
+    </div>`;
 }
 
 function renderOverview() {
@@ -452,7 +510,7 @@ function renderOverview() {
     </div>`;
 }
 
-// ── Modellkontroll ─────────────────────────────────────────────────────────────
+// ── Modelldata ─────────────────────────────────────────────────────────────────
 
 const EXT_BADGE = {
   rvt: 'bg-blue-50 text-blue-600',
@@ -622,7 +680,7 @@ async function loadTopFolders() {
   refreshFileBrowser();
 }
 
-function renderModellkontroll() {
+function renderModelldata() {
   document.getElementById('main-content').innerHTML = `
     <div class="max-w-4xl mx-auto px-6 py-8">
       <div class="mb-5">
