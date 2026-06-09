@@ -837,10 +837,18 @@ async function mkGetApsToken() {
 }
 
 async function mkDerivativeGet(path) {
-  const token = await mkGetApsToken();
-  const res   = await fetch(`https://developer.api.autodesk.com${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const token  = await mkGetApsToken();
+  const base   = 'https://developer.api.autodesk.com';
+  let res = await fetch(`${base}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+
+  // EU accounts store derivatives under /regions/eu/ — retry there on 404
+  if (res.status === 404) {
+    const euPath = path.replace('/modelderivative/v2/designdata/', '/modelderivative/v2/regions/eu/designdata/');
+    if (euPath !== path) {
+      res = await fetch(`${base}${euPath}`, { headers: { Authorization: `Bearer ${token}` } });
+    }
+  }
+
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);
   return res.json();
