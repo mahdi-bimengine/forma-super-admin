@@ -17,7 +17,12 @@ const _mk = {
   expanded:      new Set(), // expanded result indices
   running:       false,
   viewer:        null,
-  githubToken:   sessionStorage.getItem('mk_github_token') || null,
+  githubToken:    sessionStorage.getItem('mk_github_token') || null,
+  mkClientId:     sessionStorage.getItem('mk_aps_client_id') || null,
+  mkClientSecret: sessionStorage.getItem('mk_aps_client_secret') || null,
+  mkApsToken:     null,
+  mkApsTokenExp:  0,
+  _apsCredCallback: null,
 };
 
 const MK_CHECKS_PATH = 'saved-checks.json';
@@ -104,6 +109,10 @@ function mkNav(step) {
 }
 
 function mkStartCheck() {
+  if (!_mk.mkClientId || !_mk.mkClientSecret) {
+    mkShowApsCredentialsPrompt(() => mkStartCheck());
+    return;
+  }
   _mk.step    = 3;
   _mk.results = [];
   _mk.running = true;
@@ -812,6 +821,31 @@ async function mkRunCheck() {
   }
 }
 
+async function mkGetApsToken() {
+  if (_mk.mkApsToken && Date.now() < _mk.mkApsTokenExp - 60000) return _mk.mkApsToken;
+  const creds = btoa(`${_mk.mkClientId}:${_mk.mkClientSecret}`);
+  const res   = await fetch('https://developer.api.autodesk.com/authentication/v2/token', {
+    method:  'POST',
+    headers: { Authorization: `Basic ${creds}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    'grant_type=client_credentials&scope=data%3Aread',
+  });
+  if (!res.ok) throw new Error(`APS auth error ${res.status}: ${await res.text()}`);
+  const data        = await res.json();
+  _mk.mkApsToken    = data.access_token;
+  _mk.mkApsTokenExp = Date.now() + data.expires_in * 1000;
+  return _mk.mkApsToken;
+}
+
+async function mkDerivativeGet(path) {
+  const token = await mkGetApsToken();
+  const res   = await fetch(`https://developer.api.autodesk.com${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
 async function mkCheckSingleModel(file, params) {
   const result = { file, status: 'running', error: null, paramResults: [], elementCount: 0, versionUrn: null };
 
@@ -825,15 +859,18 @@ async function mkCheckSingleModel(file, params) {
     const versionUrn = tip.id;
     result.versionUrn = versionUrn;
 
-    const manifest = await getManifest(versionUrn);
+    const encoded  = toSafeBase64(versionUrn);
+    const manifest = await mkDerivativeGet(`/modelderivative/v2/designdata/${encoded}/manifest`);
     if (!manifest) { result.status = 'no-derivative'; return result; }
 
-    const metadata = await getDerivativeMetadata(versionUrn);
+    const metaRes  = await mkDerivativeGet(`/modelderivative/v2/designdata/${encoded}/metadata`);
+    const metadata = metaRes?.data?.metadata;
     if (!metadata || !metadata.length) { result.status = 'no-views'; return result; }
 
     const view = metadata.find(m => m.role === '3d') || metadata.find(m => m.role === '2d') || metadata[0];
 
-    const collection     = await getDerivativeProperties(versionUrn, view.guid);
+    const propsRes       = await mkDerivativeGet(`/modelderivative/v2/designdata/${encoded}/metadata/${view.guid}/properties`);
+    const collection     = propsRes?.data?.collection;
     result.elementCount  = collection.length;
 
     for (const param of params) {
@@ -1298,6 +1335,48 @@ async function mkCheckSavedVersions(checks, listEl) {
       }
     } catch {}
   }
+}
+
+function mkShowApsCredentialsPrompt(onConfirm) {
+  document.getElementById('mk-aps-cred-prompt')?.remove();
+  const d = document.createElement('div');
+  d.id        = 'mk-aps-cred-prompt';
+  d.className = 'fixed inset-0 bg-black/40 z-50 flex items-center justify-center';
+  d.innerHTML = `
+    <div class="bg-white rounded-lg shadow-xl p-6 w-96">
+      <h3 class="font-semibold text-ads-text mb-1">APS-credentials krävs</h3>
+      <p class="text-xs text-ads-muted mb-4">
+        Ange Client ID och Client Secret för Server-to-Server-appen med Model Derivative API-åtkomst.<br/>
+        Sparas i webbläsarsessionen och rensas när fliken stängs.
+      </p>
+      <input id="mk-aps-id-input" type="text" placeholder="Client ID"
+             class="w-full border border-ads-border rounded px-3 py-2 text-sm mb-2
+                    focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
+      <input id="mk-aps-secret-input" type="password" placeholder="Client Secret"
+             class="w-full border border-ads-border rounded px-3 py-2 text-sm mb-4
+                    focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
+      <div class="flex justify-end gap-2">
+        <button onclick="document.getElementById('mk-aps-cred-prompt').remove()"
+                class="text-sm text-ads-muted px-3 py-1.5 hover:text-ads-text">Avbryt</button>
+        <button onclick="mkConfirmApsCredentials()"
+                class="text-sm bg-ads-blue text-white px-4 py-1.5 rounded hover:bg-ads-blue-dark">Bekräfta</button>
+      </div>
+    </div>`;
+  document.body.appendChild(d);
+  _mk._apsCredCallback = onConfirm;
+  setTimeout(() => document.getElementById('mk-aps-id-input')?.focus(), 50);
+}
+
+function mkConfirmApsCredentials() {
+  const id     = document.getElementById('mk-aps-id-input')?.value?.trim();
+  const secret = document.getElementById('mk-aps-secret-input')?.value?.trim();
+  if (!id || !secret) return;
+  _mk.mkClientId     = id;
+  _mk.mkClientSecret = secret;
+  sessionStorage.setItem('mk_aps_client_id',     id);
+  sessionStorage.setItem('mk_aps_client_secret', secret);
+  document.getElementById('mk-aps-cred-prompt')?.remove();
+  if (_mk._apsCredCallback) { _mk._apsCredCallback(); _mk._apsCredCallback = null; }
 }
 
 function mkShowTokenPrompt(action, payload) {
