@@ -458,9 +458,8 @@ function renderSidebar(activeTab) {
         <p class="text-sm font-semibold text-be-charcoal truncate">${projName}</p>
         <button onclick="showProjectPicker()" title="Byt projekt"
                 class="shrink-0 text-ads-muted hover:text-ads-text transition-colors">
-          <svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5 4l-3 4 3 4M15 4l3 4-3 4M3 8h14"/>
-            <path stroke-linecap="round" stroke-linejoin="round" d="M3 12h14"/>
+          <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/>
           </svg>
         </button>
       </div>
