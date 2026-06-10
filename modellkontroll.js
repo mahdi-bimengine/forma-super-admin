@@ -481,6 +481,22 @@ function mkRenderStep2() {
     </div>`;
 }
 
+function mkFolderMightHaveFiles(folderId) {
+  if (!_mk.filter) return true;
+  const st = _mk.folderState[folderId];
+  if (!st?.loaded) return true; // unloaded — can't rule out matching files
+  for (const item of st.items || []) {
+    if (item.type === 'items') {
+      const name = item.attributes.displayName || item.attributes.name || '';
+      const ext  = (name.split('.').pop() || '').toLowerCase();
+      if (ext === _mk.filter) return true;
+    } else if (item.type === 'folders') {
+      if (mkFolderMightHaveFiles(item.id)) return true;
+    }
+  }
+  return false;
+}
+
 function mkGetFolderFiles(folderId) {
   const st = _mk.folderState[folderId];
   if (!st?.loaded || !st.items) return [];
@@ -575,6 +591,7 @@ function mkRenderTreeItems(items, depth) {
     if (item.attributes?.hidden) return '';
 
     if (item.type === 'folders') {
+      if (!mkFolderMightHaveFiles(item.id)) return '';
       const st      = _mk.folderState[item.id] || {};
       const exp     = st.expanded || false;
       const loading = st.loading  || false;
