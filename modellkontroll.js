@@ -480,6 +480,70 @@ function mkRenderStep2() {
     </div>`;
 }
 
+function mkGetFolderFiles(folderId) {
+  const st = _mk.folderState[folderId];
+  if (!st?.loaded || !st.items) return [];
+  const files = [];
+  for (const item of st.items) {
+    if (item.type === 'items') {
+      const name = item.attributes.displayName || item.attributes.name || '';
+      const ext  = (name.split('.').pop() || '').toLowerCase();
+      if (['rvt','ifc','dwg','nwd'].includes(ext) && (!_mk.filter || ext === _mk.filter)) files.push(item);
+    } else if (item.type === 'folders') {
+      files.push(...mkGetFolderFiles(item.id));
+    }
+  }
+  return files;
+}
+
+function mkFolderSelectionState(folderId) {
+  const files = mkGetFolderFiles(folderId);
+  if (!files.length) return 'none';
+  const n = files.filter(f => _mk.selectedFiles.some(s => s.itemId === f.id)).length;
+  if (n === 0) return 'none';
+  if (n === files.length) return 'all';
+  return 'some';
+}
+
+async function mkToggleFolderSelection(idx) {
+  const id = mkFidLookup(idx);
+  const st = _mk.folderState[id] || {};
+
+  if (!st.loaded && !st.loading) {
+    _mk.folderState[id] = { ...st, expanded: true, loading: true };
+    mkRenderFileBrowser();
+    try {
+      const contents = await getFolderContents(_currentProject.id, id);
+      contents.forEach(item => { _mk.itemsById[item.id] = item; });
+      _mk.folderState[id] = { items: contents, expanded: true, loaded: true, loading: false };
+    } catch {
+      _mk.folderState[id] = { ...st, expanded: false, loaded: false, loading: false };
+      mkRenderFileBrowser();
+      return;
+    }
+  }
+
+  const files = mkGetFolderFiles(id);
+  const state = mkFolderSelectionState(id);
+
+  if (state === 'all') {
+    const toRemove = new Set(files.map(f => f.id));
+    _mk.selectedFiles = _mk.selectedFiles.filter(s => !toRemove.has(s.itemId));
+  } else {
+    const already = new Set(_mk.selectedFiles.map(s => s.itemId));
+    for (const f of files) {
+      if (!already.has(f.id)) {
+        const name = f.attributes.displayName || f.attributes.name || '';
+        const ext  = (name.split('.').pop() || '').toLowerCase();
+        _mk.selectedFiles.push({ itemId: f.id, name, ext, projectId: _currentProject.id, source: 'dm' });
+      }
+    }
+  }
+
+  mkRenderFileBrowser();
+  mkUpdateSelectedPanel();
+}
+
 function mkRenderFileBrowser() {
   const el = document.getElementById('mk-file-browser');
   if (!el) return;
@@ -515,6 +579,12 @@ function mkRenderTreeItems(items, depth) {
       const loading = st.loading  || false;
       const name    = item.attributes.displayName || item.attributes.name || '';
       const i       = mkFid(item.id);
+      const sel     = mkFolderSelectionState(item.id);
+      const chk     = sel === 'all'
+        ? `<svg class="w-3.5 h-3.5 shrink-0 text-ads-blue" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="2" fill="currentColor"/><path stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 8l3 3 5-5"/></svg>`
+        : sel === 'some'
+        ? `<svg class="w-3.5 h-3.5 shrink-0 text-ads-blue" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><line x1="4" y1="8" x2="12" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`
+        : `<svg class="w-3.5 h-3.5 shrink-0 text-ads-muted" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>`;
       return `
         <div onclick="mkToggleFolder(${i})"
              class="flex items-center gap-2 py-1.5 pr-4 rounded hover:bg-ads-gray cursor-pointer select-none"
@@ -523,6 +593,10 @@ function mkRenderTreeItems(items, depth) {
                fill="none" viewBox="0 0 20 20">
             <path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M7 5l6 5-6 5"/>
           </svg>
+          <span onclick="event.stopPropagation(); mkToggleFolderSelection(${i})"
+                class="flex items-center justify-center p-0.5 rounded hover:bg-ads-border">
+            ${chk}
+          </span>
           <svg class="w-4 h-4 shrink-0 text-amber-400" viewBox="0 0 20 15" fill="currentColor">
             <path d="M0 2.5A1.5 1.5 0 0 1 1.5 1h4.764a1.5 1.5 0 0 1 1.06.44l.94.94A1.5 1.5 0 0 0 9.322 3H18.5A1.5 1.5 0 0 1 20 4.5v8A1.5 1.5 0 0 1 18.5 14H1.5A1.5 1.5 0 0 1 0 12.5v-10z"/>
           </svg>
