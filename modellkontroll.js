@@ -219,7 +219,8 @@ function mkRenderStep1() {
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
           </svg>
           <p class="text-sm text-ads-muted mb-1">Dra och släpp CSV eller XLSX-fil hit</p>
-          <p class="text-xs text-ads-muted mb-3">Kolumner: Parameternamn, Värdetyp, Kommentar, Instans/Typ/Projekt</p>
+          <p class="text-xs text-ads-muted mb-1">Referensdokument ska ha formaterade kolumner enligt:</p>
+          <p class="text-xs text-ads-muted mb-3 font-medium">Parameternamn | Värdetyp | Kommentar | Nivå (Instans/Typ/Projekt)</p>
           <button onclick="document.getElementById('mk-ref-input').click()"
                   class="text-sm bg-ads-blue text-white px-4 py-1.5 rounded hover:bg-ads-blue-dark transition-colors">
             Välj fil
