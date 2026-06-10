@@ -15,6 +15,7 @@ const _mk = {
   mcExpanded:    {},        // modelSetId → bool
   results:       [],        // per-model check results
   expanded:      new Set(), // expanded result indices
+  paramSearch:   '',        // Step 1 parameter search
   running:       false,
   viewer:        null,
   githubToken:    sessionStorage.getItem('mk_github_token') || null,
@@ -95,6 +96,7 @@ function mkReset() {
   _mk.mcExpanded    = {};
   _mk.results       = [];
   _mk.expanded      = new Set();
+  _mk.paramSearch   = '';
   _mk.running       = false;
   if (_mk.viewer) { try { _mk.viewer.finish(); } catch {} _mk.viewer = null; }
 }
@@ -254,10 +256,23 @@ function mkRenderStep1() {
 }
 
 function mkRenderParamTable() {
-  const all     = _mk.refParams.every(p => p.selected);
-  const partial = !all && _mk.refParams.some(p => p.selected);
+  const q        = _mk.paramSearch.trim().toLowerCase();
+  const filtered = q ? _mk.refParams.filter(p => p.name.toLowerCase().includes(q)) : _mk.refParams;
+  const all      = filtered.length > 0 && filtered.every(p => p.selected);
   return `
     <div class="bg-white border border-ads-border rounded-lg overflow-hidden">
+      <div class="px-3 pt-3 pb-2 border-b border-ads-border">
+        <div class="relative">
+          <svg class="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-ads-muted pointer-events-none"
+               fill="none" viewBox="0 0 20 20" stroke="currentColor" stroke-width="2">
+            <circle cx="9" cy="9" r="5"/><path stroke-linecap="round" d="M16 16l-2-2"/>
+          </svg>
+          <input type="search" value="${_mk.paramSearch}" placeholder="Sök parameter…"
+                 oninput="mkSetParamSearch(this.value)"
+                 class="w-full pl-7 pr-3 py-1.5 text-xs border border-ads-border rounded
+                        focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
+        </div>
+      </div>
       <table class="w-full text-sm">
         <thead class="bg-ads-gray">
           <tr>
@@ -272,16 +287,21 @@ function mkRenderParamTable() {
           </tr>
         </thead>
         <tbody>
-          ${_mk.refParams.map((p, i) => `
-            <tr class="border-t border-ads-border hover:bg-ads-gray/40 ${p.selected ? '' : 'opacity-50'}">
-              <td class="py-2 px-3">
-                <input type="checkbox" ${p.selected ? 'checked' : ''} onchange="mkToggleParam(${i})" class="accent-ads-blue" />
-              </td>
-              <td class="py-2 px-3 font-medium text-ads-text">${p.name}</td>
-              <td class="py-2 px-3 text-ads-muted">${p.valueType || '—'}</td>
-              <td class="py-2 px-3 text-ads-muted">${p.paramType || '—'}</td>
-              <td class="py-2 px-3 text-ads-muted text-xs">${p.comment || ''}</td>
-            </tr>`).join('')}
+          ${filtered.length === 0
+            ? `<tr><td colspan="5" class="py-6 px-3 text-center text-xs text-ads-muted italic">Inga parametrar matchar sökningen.</td></tr>`
+            : filtered.map(p => {
+                const actualIdx = _mk.refParams.indexOf(p);
+                return `
+                  <tr class="border-t border-ads-border hover:bg-ads-gray/40 ${p.selected ? '' : 'opacity-50'}">
+                    <td class="py-2 px-3">
+                      <input type="checkbox" ${p.selected ? 'checked' : ''} onchange="mkToggleParam(${actualIdx})" class="accent-ads-blue" />
+                    </td>
+                    <td class="py-2 px-3 font-medium text-ads-text">${p.name}</td>
+                    <td class="py-2 px-3 text-ads-muted">${p.valueType || '—'}</td>
+                    <td class="py-2 px-3 text-ads-muted">${p.paramType || '—'}</td>
+                    <td class="py-2 px-3 text-ads-muted text-xs">${p.comment || ''}</td>
+                  </tr>`;
+              }).join('')}
         </tbody>
       </table>
     </div>`;
@@ -294,7 +314,15 @@ function mkToggleParam(i) {
 }
 
 function mkToggleAllParams(checked) {
-  _mk.refParams.forEach(p => { p.selected = checked; });
+  const q = _mk.paramSearch.trim().toLowerCase();
+  const targets = q ? _mk.refParams.filter(p => p.name.toLowerCase().includes(q)) : _mk.refParams;
+  targets.forEach(p => { p.selected = checked; });
+  const content = document.getElementById('mk-step-content');
+  if (content) content.innerHTML = mkRenderStep1();
+}
+
+function mkSetParamSearch(q) {
+  _mk.paramSearch = q;
   const content = document.getElementById('mk-step-content');
   if (content) content.innerHTML = mkRenderStep1();
 }
@@ -582,7 +610,14 @@ function mkRenderFileBrowser() {
     el.innerHTML = `<p class="text-ads-muted text-sm px-4 py-6">Inga mappar hittades.</p>`;
     return;
   }
-  el.innerHTML = mkRenderTreeItems(st.items, 0);
+  const treeHtml = mkRenderTreeItems(st.items, 0);
+  if (!treeHtml.trim()) {
+    el.innerHTML = _mk.filter
+      ? `<p class="text-sm text-ads-muted px-4 py-6 italic">Expandera mappar för att se ${_mk.filter.toUpperCase()}-filer, eller välj ett annat filter.</p>`
+      : `<p class="text-sm text-ads-muted px-4 py-6">Inga filer hittades.</p>`;
+  } else {
+    el.innerHTML = treeHtml;
+  }
 }
 
 function mkRenderTreeItems(items, depth) {
@@ -913,6 +948,30 @@ async function mkRunCheck() {
   }
 }
 
+async function mkRerunModel(i) {
+  const file = _mk.results[i]?.file;
+  if (!file) return;
+  if (!_mk.mkClientId || !_mk.mkClientSecret) {
+    mkShowApsCredentialsPrompt(() => mkRerunModel(i));
+    return;
+  }
+
+  _mk.results[i] = { file, status: 'rerunning', error: null, paramResults: [], elementCount: 0, versionUrn: null };
+  _mk.expanded.delete(i);
+  const el = document.getElementById('mk-results');
+  if (el) el.innerHTML = _mk.results.map((r, j) => mkResultCard(r, j)).join('');
+
+  const params = _mk.refParams.filter(p => p.selected);
+  const result = await mkCheckSingleModel(file, params);
+  _mk.results[i] = result;
+
+  const el2 = document.getElementById('mk-results');
+  if (el2) el2.innerHTML = _mk.results.map((r, j) => mkResultCard(r, j)).join('');
+
+  const stripEl = document.getElementById('mk-summary-strip');
+  if (stripEl) stripEl.outerHTML = mkRenderSummaryStrip();
+}
+
 async function mkGetApsToken() {
   if (_mk.mkApsToken && Date.now() < _mk.mkApsTokenExp - 60000) return _mk.mkApsToken;
   const creds = btoa(`${_mk.mkClientId}:${_mk.mkClientSecret}`);
@@ -1029,6 +1088,46 @@ function mkCheckParam(param, collection) {
 
 // ── Step 3: Results render ────────────────────────────────────────────────────
 
+function mkRenderSummaryStrip() {
+  const done = _mk.results.filter(r => r.status === 'done');
+  if (!done.length) return '';
+
+  let green = 0, yellow = 0, orange = 0, grey = 0;
+  for (const r of done) {
+    for (const p of r.paramResults) {
+      if (p.level === 'green')        green++;
+      else if (p.level === 'yellow')  yellow++;
+      else if (p.level === 'orange')  orange++;
+      else                            grey++;
+    }
+  }
+  const total = green + yellow + orange + grey;
+  if (!total) return '';
+
+  const pct = n => Math.max(1, Math.round((n / total) * 100));
+  const segments = [
+    { count: green,  cls: 'bg-green-500',  dot: 'bg-green-500',  label: 'OK' },
+    { count: yellow, cls: 'bg-yellow-400', dot: 'bg-yellow-400', label: 'Typfel' },
+    { count: orange, cls: 'bg-orange-400', dot: 'bg-orange-400', label: 'Saknar värde' },
+    { count: grey,   cls: 'bg-gray-300',   dot: 'bg-gray-300',   label: 'Saknar param' },
+  ].filter(s => s.count > 0);
+
+  return `
+    <div id="mk-summary-strip" class="bg-white border border-ads-border rounded-lg p-4 mb-4">
+      <p class="text-xs font-semibold text-ads-muted uppercase tracking-wide mb-2">Parameterstatus totalt (${total} kontroller)</p>
+      <div class="flex rounded overflow-hidden h-3 mb-3">
+        ${segments.map(s => `<div class="${s.cls} h-full" style="width:${pct(s.count)}%" title="${s.count} ${s.label}"></div>`).join('')}
+      </div>
+      <div class="flex gap-4 flex-wrap">
+        ${segments.map(s => `
+          <div class="flex items-center gap-1.5">
+            <span class="w-2.5 h-2.5 rounded-full ${s.dot} shrink-0"></span>
+            <span class="text-xs text-ads-muted">${s.label} <span class="font-semibold text-ads-text">${s.count}</span></span>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
 function mkRenderStep3() {
   if (_mk.running) {
     const cur = _mk.selectedFiles[_mk.results.length];
@@ -1071,6 +1170,13 @@ function mkRenderStep3() {
                   class="inline-flex items-center gap-2 text-sm border border-ads-border bg-white text-ads-muted rounded px-3 py-1.5 hover:text-ads-text transition-colors">
             <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"/></svg> Ändra urval
           </button>
+          <button onclick="mkExportReport()"
+                  class="inline-flex items-center gap-2 text-sm border border-ads-border bg-white text-ads-muted rounded px-3 py-1.5 hover:text-ads-text transition-colors">
+            <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v4.5a.75.75 0 0 1-.75.75H5.25a.75.75 0 0 1-.75-.75v-4.5M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5"/>
+            </svg>
+            Exportera rapport
+          </button>
           <button onclick="mkShowSaveDialog()"
                   class="text-sm bg-ads-blue text-white px-3 py-1.5 rounded hover:bg-ads-blue-dark transition-colors flex items-center gap-1.5">
             <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 20 20" stroke="currentColor" stroke-width="1.5">
@@ -1081,6 +1187,7 @@ function mkRenderStep3() {
           </button>
         </div>
       </div>
+      ${mkRenderSummaryStrip()}
       <div id="mk-results">${_mk.results.map((r, i) => mkResultCard(r, i)).join('')}</div>
     </div>`;
 }
@@ -1089,11 +1196,29 @@ function mkResultCard(result, i) {
   const level = result.status === 'done' ? mkOverallLevel(result.paramResults) : 'grey';
   const borderCls = { green: 'border-green-200', yellow: 'border-yellow-200', orange: 'border-orange-200', grey: 'border-ads-border' };
 
+  const rerunBtn = `<button onclick="mkRerunModel(${i})" class="text-xs text-ads-blue hover:underline inline-flex items-center gap-1">
+    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+    Kör om
+  </button>`;
+
+  if (result.status === 'rerunning') {
+    return `<div class="mb-3 p-3.5 border border-ads-border rounded-lg flex items-center gap-3">
+      <svg class="animate-spin w-4 h-4 text-ads-blue shrink-0" viewBox="0 0 24 24" fill="none">
+        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" opacity=".25"/>
+        <path stroke="currentColor" stroke-width="3" stroke-linecap="round" d="M22 12a10 10 0 0 0-10-10" opacity=".75"/>
+      </svg>
+      <span class="text-sm text-ads-text">Kontrollerar ${result.file.name}…</span>
+    </div>`;
+  }
+
   if (result.status === 'error') {
     return `<div class="mb-3 p-4 border border-red-200 bg-red-50 rounded-lg">
       <div class="flex items-center justify-between">
         <span class="font-medium text-sm text-ads-text">${result.file.name}</span>
-        <span class="text-xs text-red-600 font-medium">Fel</span>
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-red-600 font-medium">Fel</span>
+          ${rerunBtn}
+        </div>
       </div>
       <p class="text-xs text-red-600 mt-1">${result.error}</p>
     </div>`;
@@ -1101,11 +1226,14 @@ function mkResultCard(result, i) {
 
   if (result.status === 'no-derivative') {
     return `<div class="mb-3 p-4 border border-amber-200 bg-amber-50 rounded-lg">
-      <div class="flex items-center gap-2">
-        <svg class="w-4 h-4 text-amber-500 shrink-0" fill="none" viewBox="0 0 20 20" stroke="currentColor" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M8.485 3.495L2.107 14a1 1 0 0 0 .893 1.5h13.8a1 1 0 0 0 .893-1.5L11.515 3.495a1 1 0 0 0-1.73 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M10 8v3M10 14h.01"/>
-        </svg>
-        <span class="font-medium text-sm text-ads-text">${result.file.name}</span>
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <svg class="w-4 h-4 text-amber-500 shrink-0" fill="none" viewBox="0 0 20 20" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8.485 3.495L2.107 14a1 1 0 0 0 .893 1.5h13.8a1 1 0 0 0 .893-1.5L11.515 3.495a1 1 0 0 0-1.73 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M10 8v3M10 14h.01"/>
+          </svg>
+          <span class="font-medium text-sm text-ads-text">${result.file.name}</span>
+        </div>
+        ${rerunBtn}
       </div>
       <p class="text-xs text-amber-700 mt-1 ml-6">Ingen derivat hittad. Öppna modellen i ACC-visaren minst en gång för att aktivera parameterläsning.</p>
     </div>`;
@@ -1113,7 +1241,10 @@ function mkResultCard(result, i) {
 
   if (result.status === 'no-views') {
     return `<div class="mb-3 p-4 border border-ads-border rounded-lg">
-      <span class="font-medium text-sm text-ads-text">${result.file.name}</span>
+      <div class="flex items-center justify-between">
+        <span class="font-medium text-sm text-ads-text">${result.file.name}</span>
+        ${rerunBtn}
+      </div>
       <p class="text-xs text-ads-muted mt-1">Ingen vy hittades i derivaten.</p>
     </div>`;
   }
@@ -1133,6 +1264,12 @@ function mkResultCard(result, i) {
         <div class="flex items-center gap-2 shrink-0 ml-2">
           <span class="text-xs text-ads-muted">${okCount}/${result.paramResults.length} OK</span>
           <span class="text-xs text-ads-muted">${result.elementCount} elem.</span>
+          <button onclick="event.stopPropagation(); mkRerunModel(${i})"
+                  class="text-ads-muted hover:text-ads-blue transition-colors" title="Kör om">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
+            </svg>
+          </button>
           <svg class="w-4 h-4 text-ads-muted transition-transform ${expanded ? 'rotate-180' : ''}"
                fill="none" viewBox="0 0 20 20">
             <path stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M5 8l5 5 5-5"/>
