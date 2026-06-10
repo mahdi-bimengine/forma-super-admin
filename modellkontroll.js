@@ -245,8 +245,8 @@ function mkRenderStep1() {
       ${hasParams && _mk.refParams.some(p => p.selected) ? `
         <div class="flex justify-end mt-4">
           <button onclick="mkNav(2)"
-                  class="bg-ads-blue text-white text-sm px-5 py-2 rounded hover:bg-ads-blue-dark transition-colors">
-            Nästa: Välj modeller →
+                  class="inline-flex items-center gap-2 bg-ads-blue text-white text-sm px-5 py-2 rounded hover:bg-ads-blue-dark transition-colors">
+            Nästa: Välj modeller <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/></svg>
           </button>
         </div>` : ''}
     </div>`;
@@ -467,13 +467,13 @@ function mkRenderStep2() {
 
         <div class="flex flex-col gap-2" id="mk-step2-actions">
           <button onclick="mkNav(1)"
-                  class="w-full text-sm border border-ads-border bg-white text-ads-muted rounded py-1.5 hover:text-ads-text transition-colors">
-            ← Tillbaka
+                  class="inline-flex items-center justify-center gap-2 w-full text-sm border border-ads-border bg-white text-ads-muted rounded py-1.5 hover:text-ads-text transition-colors">
+            <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"/></svg> Tillbaka
           </button>
           ${_mk.selectedFiles.length > 0 ? `
             <button onclick="mkStartCheck()"
-                    class="w-full text-sm bg-ads-blue text-white rounded py-1.5 hover:bg-ads-blue-dark transition-colors">
-              Kör kontroll →
+                    class="inline-flex items-center justify-center gap-2 w-full text-sm bg-ads-blue text-white rounded py-1.5 hover:bg-ads-blue-dark transition-colors">
+              Kör kontroll <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/></svg>
             </button>` : ''}
         </div>
       </div>
@@ -717,13 +717,13 @@ function mkUpdateSelectedPanel() {
   if (actEl) {
     actEl.innerHTML = `
       <button onclick="mkNav(1)"
-              class="w-full text-sm border border-ads-border bg-white text-ads-muted rounded py-1.5 hover:text-ads-text transition-colors">
-        ← Tillbaka
+              class="inline-flex items-center justify-center gap-2 w-full text-sm border border-ads-border bg-white text-ads-muted rounded py-1.5 hover:text-ads-text transition-colors">
+        <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"/></svg> Tillbaka
       </button>
       ${_mk.selectedFiles.length > 0 ? `
         <button onclick="mkStartCheck()"
-                class="w-full text-sm bg-ads-blue text-white rounded py-1.5 hover:bg-ads-blue-dark transition-colors">
-          Kör kontroll →
+                class="inline-flex items-center justify-center gap-2 w-full text-sm bg-ads-blue text-white rounded py-1.5 hover:bg-ads-blue-dark transition-colors">
+          Kör kontroll <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/></svg>
         </button>` : ''}`;
   }
 }
@@ -1050,8 +1050,8 @@ function mkRenderStep3() {
         </div>
         <div class="ml-auto flex gap-2 flex-wrap justify-end">
           <button onclick="mkNav(2)"
-                  class="text-sm border border-ads-border bg-white text-ads-muted rounded px-3 py-1.5 hover:text-ads-text transition-colors">
-            ← Ändra urval
+                  class="inline-flex items-center gap-2 text-sm border border-ads-border bg-white text-ads-muted rounded px-3 py-1.5 hover:text-ads-text transition-colors">
+            <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"/></svg> Ändra urval
           </button>
           <button onclick="mkShowSaveDialog()"
                   class="text-sm bg-ads-blue text-white px-3 py-1.5 rounded hover:bg-ads-blue-dark transition-colors flex items-center gap-1.5">
