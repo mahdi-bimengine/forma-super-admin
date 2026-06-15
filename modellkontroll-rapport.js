@@ -37,6 +37,8 @@ const MK_RAPPORT_EXT = {
   nwd: { bg: '#efe9f8', fg: '#6b4ba8' },
 };
 
+const MK_MATRIX_CHUNK = 8; // max models per matrix page
+
 // ── Hjälpare ──────────────────────────────────────────────────────────────────
 
 function mkRapEsc(s) {
@@ -46,6 +48,10 @@ function mkRapEsc(s) {
 
 function mkRapFmt(n) { return n == null ? '–' : Number(n).toLocaleString('sv-SE'); }
 function mkRapPct(a, b) { return b ? Math.round((a / b) * 100) : 0; }
+function mkRapTruncName(s, max) {
+  const n = s.replace(/\.(rvt|ifc|dwg|nwd)$/i, '');
+  return n.length > max ? n.slice(0, max - 1) + '…' : n;
+}
 
 function mkRapDot(level, size = 8) {
   return `<span style="display:inline-block;width:${size}px;height:${size}px;border-radius:${size}px;background:${MK_RAPPORT_LEVELS[level].dot};flex:0 0 auto"></span>`;
@@ -135,6 +141,16 @@ function mkCollectReportData() {
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
 
+  // Split the parameter × model matrix into pages of at most MK_MATRIX_CHUNK models
+  const matrixChunks = [];
+  for (let i = 0; i < models.length; i += MK_MATRIX_CHUNK) {
+    matrixChunks.push(models.slice(i, i + MK_MATRIX_CHUNK));
+  }
+  if (!matrixChunks.length) matrixChunks.push([]);
+
+  // Pages 1–3 fixed + one page per matrix chunk + page for kravställda parametrar
+  const totalPages = 3 + matrixChunks.length + 1;
+
   return {
     meta: {
       project: _currentProject?.attributes?.name || _currentProject?.name || 'Okänt projekt',
@@ -146,6 +162,7 @@ function mkCollectReportData() {
       logoUrl: new URL('logo.png', location.href).href,
     },
     params: perParam, models, skipped, totals, totalChecks,
+    matrixChunks, totalPages,
     passRate: mkRapPct(totals.green, totalChecks),
     fullyOk:  models.filter((m) => m.overall === 'green').length,
   };
@@ -274,7 +291,7 @@ function mkRapPage1(d) {
         </div>
         <div style="display:flex;gap:14px;margin-top:16px">${tiles}</div>
       </div>
-      ${mkRapFooter(meta, 1, 5)}
+      ${mkRapFooter(meta, 1, d.totalPages)}
     </div>`;
 }
 
@@ -324,7 +341,7 @@ function mkRapPage2(d) {
         </div>
         ${mkRapLegendCards()}
       </div>
-      ${mkRapFooter(meta, 2, 5)}
+      ${mkRapFooter(meta, 2, d.totalPages)}
     </div>`;
 }
 
@@ -381,25 +398,33 @@ function mkRapPage3(d) {
         </table>
         ${skippedBlock}
       </div>
-      ${mkRapFooter(meta, 3, 5)}
+      ${mkRapFooter(meta, 3, d.totalPages)}
     </div>`;
 }
 
-function mkRapPage4(d) {
-  const { meta, models, params } = d;
-  const colW = 30, gap = 6, labelW = 234;
+function mkRapPage4(d, chunkModels, pageNum) {
+  const { meta, params } = d;
+  const colW = 36, gap = 4, labelW = 234, summaryW = 88;
+  const isLastChunk = chunkModels[chunkModels.length - 1] === d.models[d.models.length - 1];
+  const chunkStart  = d.models.indexOf(chunkModels[0]) + 1;
+  const chunkEnd    = d.models.indexOf(chunkModels[chunkModels.length - 1]) + 1;
+  const rangeNote   = d.models.length > MK_MATRIX_CHUNK
+    ? ` — modeller ${chunkStart}–${chunkEnd} av ${d.models.length}`
+    : '';
 
-  const headerCells = models.map((m) => `
+  const headerCells = chunkModels.map((m) => `
     <div style="width:${colW}px;display:flex;justify-content:center;flex:0 0 auto">
-      <div style="transform:rotate(-90deg);white-space:nowrap;font-size:10.5px;font-weight:600;color:#2D2926;width:96px;text-align:left">${mkRapEsc(m.name.replace(/\.(rvt|ifc|dwg|nwd)$/i, ''))}</div>
+      <div style="transform:rotate(-90deg);white-space:nowrap;font-size:10px;font-weight:600;color:#2D2926;
+                  width:116px;text-align:left;overflow:hidden;text-overflow:ellipsis">${mkRapEsc(mkRapTruncName(m.name, 22))}</div>
     </div>`).join('');
 
   const cell = (level) => {
-    const L = MK_RAPPORT_LEVELS[level];
-    const filled = level !== 'grey';
-    const glyph = level === 'green' ? '✓' : level === 'yellow' ? '!' : level === 'orange' ? '–' : '';
+    const bg     = level === 'grey'   ? '#eef0f2' : MK_RAPPORT_LEVELS[level].dot;
+    const border = level === 'grey'   ? '1.5px dashed #c5cdd6' : 'none';
+    const color  = level === 'grey'   ? '#9aa3ad' : '#fff';
+    const glyph  = level === 'green'  ? '✓' : level === 'yellow' ? '!' : level === 'orange' ? '–' : '';
     return `<div style="width:${colW}px;height:26px;border-radius:5px;display:flex;align-items:center;justify-content:center;
-      background:${filled ? L.dot : '#fff'};border:${filled ? 'none' : '1.5px dashed #d3d8dd'};color:#fff;font-size:13px;font-weight:700;line-height:1">${glyph}</div>`;
+      background:${bg};border:${border};color:${color};font-size:13px;font-weight:700;line-height:1">${glyph}</div>`;
   };
 
   const rows = params.map((p, i) => `
@@ -408,22 +433,24 @@ function mkRapPage4(d) {
         <div style="font-size:11.5px;font-weight:600;color:#2D2926;font-family:ui-monospace,Menlo,monospace">${mkRapEsc(p.name)}</div>
         <div style="font-size:10px;color:#7c7b77;margin-top:1px">${mkRapEsc(p.valueType || 'text')}${p.paramType ? ' · ' + mkRapEsc(p.paramType) : ''}</div>
       </div>
-      ${models.map((m) => `<div style="width:${colW}px;display:flex;justify-content:center;flex:0 0 auto">${cell(m.cells[i].level)}</div>`).join('')}
-      <div style="flex:1;display:flex;align-items:center;justify-content:flex-end;gap:8px">
-        <div style="width:48px">${mkRapStackedBar(p.counts, models.length, 7, 4)}</div>
-        <span style="font-size:11.5px;font-weight:700;color:${p.modelsOk === models.length ? '#1f9d57' : '#2D2926'};width:30px;text-align:right">${p.modelsOk}/${models.length}</span>
+      ${chunkModels.map((m) => `<div style="width:${colW}px;display:flex;justify-content:center;flex:0 0 auto">${cell(m.cells[i].level)}</div>`).join('')}
+      <div style="width:1px;background:#e3e3e1;align-self:stretch;margin:0 6px;flex:0 0 auto"></div>
+      <div style="width:${summaryW}px;display:flex;align-items:center;gap:6px;flex:0 0 auto">
+        <div style="flex:1">${mkRapStackedBar(p.counts, d.models.length, 7, 4)}</div>
+        <span style="font-size:11px;font-weight:600;color:${p.modelsOk === d.models.length ? '#1f9d57' : '#2D2926'};width:30px;text-align:right;flex:0 0 auto">${p.modelsOk}/${d.models.length}</span>
       </div>
     </div>`).join('');
 
   const footRow = `
     <div style="display:flex;align-items:center;gap:${gap}px;padding-top:10px;margin-top:4px;border-top:2px solid #2D2926">
-      <div style="width:${labelW}px;font-size:10.5px;font-weight:700;letter-spacing:.05em;color:#2D2926;text-transform:uppercase;flex:0 0 auto">Godkända / modell</div>
-      ${models.map((m) => `<div style="width:${colW}px;text-align:center;font-size:10.5px;font-weight:700;flex:0 0 auto;color:${m.okCount === params.length ? '#1f9d57' : '#2D2926'}">${m.okCount}</div>`).join('')}
-      <div style="flex:1"></div>
+      <div style="width:${labelW}px;font-size:10px;font-weight:700;letter-spacing:.05em;color:#2D2926;text-transform:uppercase;flex:0 0 auto">Godkända / modell</div>
+      ${chunkModels.map((m) => `<div style="width:${colW}px;text-align:center;font-size:10.5px;font-weight:700;flex:0 0 auto;color:${m.okCount === params.length ? '#1f9d57' : '#2D2926'}">${m.okCount}</div>`).join('')}
+      <div style="width:1px;margin:0 6px;flex:0 0 auto"></div>
+      <div style="width:${summaryW}px;flex:0 0 auto"></div>
     </div>`;
 
-  const legend = `
-    <div style="margin-top:24px;display:flex;gap:22px;flex-wrap:wrap;border:1px solid #e3e3e1;border-radius:10px;padding:14px 18px">
+  const legend = isLastChunk ? `
+    <div style="margin-top:24px;display:flex;gap:18px;flex-wrap:wrap;border:1px solid #e3e3e1;border-radius:10px;padding:14px 18px">
       ${MK_RAPPORT_ORDER.map((k) => `
         <div style="display:flex;align-items:center;gap:9px">
           ${cell(k)}
@@ -432,23 +459,25 @@ function mkRapPage4(d) {
             <div style="font-size:10px;color:#7c7b77">${MK_RAPPORT_LEVEL_DESC[k]}</div>
           </div>
         </div>`).join('')}
-    </div>`;
+    </div>` : '';
 
   return `
     <div class="mkr-page">
       <div class="mkr-body">
         ${mkRapSlimHeader(meta, 'Parameter × modell')}
         ${mkRapSectionHead('Detaljerad matris', 'Parameter × modell',
-          'Status för varje kravställd parameter i respektive modell.')}
-        <div style="display:flex;align-items:flex-end;gap:${gap}px;padding-left:${labelW}px;height:96px;margin-bottom:4px">
+          `Status för varje kravställd parameter i respektive modell${mkRapEsc(rangeNote)}.`)}
+        <div style="display:flex;align-items:flex-end;gap:${gap}px;padding-left:${labelW}px;height:120px;margin-bottom:4px">
           ${headerCells}
-          <div style="flex:1;text-align:right;font-size:9.5px;font-weight:700;letter-spacing:.06em;color:#7c7b77;text-transform:uppercase;padding-bottom:2px">Modeller OK</div>
+          <div style="width:1px;margin:0 6px;flex:0 0 auto"></div>
+          <div style="width:${summaryW}px;text-align:right;font-size:9.5px;font-weight:700;letter-spacing:.06em;
+                      color:#7c7b77;text-transform:uppercase;padding-bottom:2px;flex:0 0 auto">Modeller OK</div>
         </div>
         ${rows}
         ${footRow}
         ${legend}
       </div>
-      ${mkRapFooter(meta, 4, 5)}
+      ${mkRapFooter(meta, pageNum, d.totalPages)}
     </div>`;
 }
 
@@ -494,7 +523,7 @@ function mkRapPage5(d) {
           </div>
         </div>
       </div>
-      ${mkRapFooter(meta, 5, 5)}
+      ${mkRapFooter(meta, d.totalPages, d.totalPages)}
     </div>`;
 }
 
@@ -549,7 +578,7 @@ function mkBuildReportHtml(d) {
 ${mkRapPage1(d)}
 ${mkRapPage2(d)}
 ${mkRapPage3(d)}
-${mkRapPage4(d)}
+${d.matrixChunks.map((chunk, ci) => mkRapPage4(d, chunk, 4 + ci)).join('')}
 ${mkRapPage5(d)}
 </body>
 </html>`;
