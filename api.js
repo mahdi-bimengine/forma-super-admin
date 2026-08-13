@@ -43,6 +43,22 @@ async function getItemTip(projectId, itemId) {
   return res.data;
 }
 
+// Signed download links for the file behind an item's tip version.
+// Large objects come back as several parts, so this always returns an array.
+async function getItemDownload(projectId, itemId) {
+  const tip       = await getItemTip(projectId, itemId);
+  const storageId = tip?.relationships?.storage?.data?.id;
+  if (!storageId) throw new Error('Filen har ingen lagringsplats i ACC.');
+
+  const m = storageId.match(/^urn:adsk\.objects:os\.object:([^/]+)\/(.+)$/);
+  if (!m) throw new Error(`Okänt lagrings-id: ${storageId}`);
+
+  const res = await apsGet(
+    `/oss/v2/buckets/${m[1]}/objects/${encodeURIComponent(m[2])}/signeds3download`
+  );
+  return { urls: res.urls || (res.url ? [res.url] : []), size: res.size };
+}
+
 // ── Model Derivative ──────────────────────────────────────────────────────────
 
 async function getManifest(urn) {
