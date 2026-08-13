@@ -169,13 +169,40 @@ function grVyAvvikelser() {
 
 function grVyForteckning() {
   const f = _gr.resultat.forteckning;
-  if (!f.harForteckning) return '';
+  if (!f.harForteckning && !f.angiven) return '';
+
+  const angiven = f.angiven ? `
+    <div class="border border-ads-border rounded-lg p-3 mb-4">
+      <p class="text-sm text-ads-text mb-2">
+        Jämfört mot <span class="font-medium">${grEsc(_gr.forteckning?.namn || 'uppladdad förteckning')}</span>,
+        ${f.angiven.antal} ritningsnummer.
+      </p>
+      <div class="grid grid-cols-2 gap-4 text-xs">
+        <div>
+          <p class="font-medium text-ads-text mb-1">Saknas i paketet (${f.angiven.saknas.length})</p>
+          <p class="text-ads-muted max-h-32 overflow-auto">${f.angiven.saknas.length ? f.angiven.saknas.map(grEsc).join('<br>') : 'inga'}</p>
+        </div>
+        <div>
+          <p class="font-medium text-ads-text mb-1">Utanför förteckningen (${f.angiven.extra.length})</p>
+          <p class="text-ads-muted max-h-32 overflow-auto">${f.angiven.extra.length ? f.angiven.extra.map(grEsc).join('<br>') : 'inga'}</p>
+        </div>
+      </div>
+    </div>` : '';
+
+  if (!f.harForteckning) {
+    return `
+      <div class="bg-white border border-ads-border rounded-lg p-4 mb-5">
+        <h3 class="text-sm font-semibold text-ads-text mb-3">Handlingsförteckning</h3>
+        ${angiven}
+      </div>`;
+  }
 
   return `
     <div class="bg-white border border-ads-border rounded-lg p-4 mb-5">
       <h3 class="text-sm font-semibold text-ads-text mb-1">Handlingsförteckning</h3>
+      ${angiven}
       <p class="text-sm text-ads-muted mb-3">
-        Bladen redovisar tillsammans ${f.listade.length} ritningsnummer.
+        ${f.angiven ? 'Förteckningen som står tryckt på bladen: ' : ''}Bladen redovisar tillsammans ${f.listade.length} ritningsnummer.
         Paketet innehåller ${_gr.resultat.statistik.antalLasta} blad.
       </p>
       <div class="grid grid-cols-2 gap-4 text-xs">
@@ -467,9 +494,18 @@ ${avvikelser.length === 0
       <h3><span class="punkt">${id}</span> ${grEsc(_gr.punkter.find(p => p.id === id)?.text || '')} (${lista.length})</h3>
       ${avvikelseTabell(lista)}`).join('')}
 
-${forteckning.harForteckning ? `
+${forteckning.harForteckning || forteckning.angiven ? `
 <h2>Handlingsförteckning</h2>
-<p>Bladen redovisar tillsammans <b>${forteckning.listade.length}</b> ritningsnummer. Paketet innehåller <b>${statistik.antalLasta}</b> blad.</p>
+${forteckning.angiven ? `
+<p>Jämfört mot <b>${grEsc(_gr.forteckning?.namn || 'uppladdad förteckning')}</b>, ${forteckning.angiven.antal} ritningsnummer.</p>
+<table>
+  <tr><th>Saknas i paketet (${forteckning.angiven.saknas.length})</th>
+      <th>Utanför förteckningen (${forteckning.angiven.extra.length})</th></tr>
+  <tr><td>${forteckning.angiven.saknas.map(grEsc).join('<br>') || 'inga'}</td>
+      <td>${forteckning.angiven.extra.map(grEsc).join('<br>') || 'inga'}</td></tr>
+</table>` : ''}
+${forteckning.harForteckning ? `
+<p>${forteckning.angiven ? 'Förteckningen som står tryckt på bladen: ' : ''}Bladen redovisar tillsammans <b>${forteckning.listade.length}</b> ritningsnummer. Paketet innehåller <b>${statistik.antalLasta}</b> blad.</p>` : ''}
 <table>
   <tr><th>Listade på bladen men saknas i paketet (${forteckning.saknas.length})</th>
       <th>Finns i paketet men saknas i förteckningen (${forteckning.extra.length})</th></tr>

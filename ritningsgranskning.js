@@ -73,7 +73,9 @@ const _gr = {
   laserZip:     false,
   senasteHoppade: '',       // filer som hoppades över vid uppladdning
   punkter:      GR_PUNKTER.map(p => ({ ...p, aktiv: true })),
-  forteckning:  null,       // {namn, nummer[]} från uppladdad handlingsförteckning
+  forteckning:  null,       // {namn, nummer[], antalSnuttar, strategi} från uppladdad förteckning
+  laserForteckning: false,
+  forteckningsfel:  null,
   blad:         [],         // utläst bladdata
   nummerRegex:  null,       // namnmönstret som härleddes ur filnamnen
   resultat:     null,       // {avvikelser, grupper, forteckning, statistik}
@@ -116,6 +118,8 @@ function grReset() {
   _gr.senasteHoppade = '';
   _gr.punkter     = GR_PUNKTER.map(p => ({ ...p, aktiv: true }));
   _gr.forteckning = null;
+  _gr.laserForteckning = false;
+  _gr.forteckningsfel  = null;
   _gr.blad        = [];
   _gr.nummerRegex = null;
   _gr.resultat    = null;
@@ -732,6 +736,8 @@ function grRenderSteg2() {
   };
 
   return `
+    ${grRenderForteckningsval()}
+
     <div class="bg-white border border-ads-border rounded-lg p-6">
       <div class="flex items-start justify-between gap-4 mb-4">
         <div>
@@ -775,6 +781,118 @@ function grRenderSteg2() {
         </button>
       </div>
     </div>`;
+}
+
+// ── Handlingsförteckning som egen fil ─────────────────────────────────────────
+
+function grRenderForteckningsval() {
+  return `
+    <div class="bg-white border border-ads-border rounded-lg p-6 mb-5">
+      <h3 class="text-sm font-semibold text-ads-text mb-1">Handlingsförteckning <span class="font-normal text-ads-muted">(valfritt)</span></h3>
+      <p class="text-ads-muted text-sm mb-4">
+        Utan förteckning jämförs paketet mot de ritningsnummer som står tryckta på bladen.
+        Laddar du upp den riktiga förteckningen jämförs paketet mot den i stället, och punkt D2
+        blir skarp: saknade ritningar blir fel, ritningar utanför förteckningen blir varningar.
+      </p>
+      <div id="gr-forteckning">${grForteckningsvy()}</div>
+    </div>`;
+}
+
+function grForteckningsvy() {
+  if (_gr.laserForteckning) return grSpinner('Läser förteckningen…');
+
+  if (_gr.forteckningsfel) {
+    return `
+      <div class="border border-red-200 bg-red-50 rounded-lg px-4 py-3 flex items-start gap-2">
+        <span class="text-sm text-red-700 flex-1">${grEsc(_gr.forteckningsfel)}</span>
+        <button onclick="grTaBortForteckning()" class="shrink-0 text-xs text-red-700 hover:underline">Försök igen</button>
+      </div>`;
+  }
+
+  const f = _gr.forteckning;
+  if (!f) {
+    return `
+      <div ondragover="event.preventDefault(); this.classList.add('border-ads-blue','bg-blue-50')"
+           ondragleave="this.classList.remove('border-ads-blue','bg-blue-50')"
+           ondrop="grSlappForteckning(event, this)"
+           onclick="document.getElementById('gr-forteckningsinput').click()"
+           class="border-2 border-dashed border-ads-border rounded-lg py-7 px-4 flex flex-col items-center gap-1.5
+                  text-center cursor-pointer hover:border-ads-blue transition-colors">
+        <svg class="w-7 h-7 text-ads-border" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M14 3v5h5M9 12h6M9 15h6"/>
+        </svg>
+        <p class="text-sm text-ads-text font-medium">Släpp handlingsförteckningen här</p>
+        <p class="text-xs text-ads-muted">Excel, CSV, textfil eller PDF. Ritningsnumren plockas ut automatiskt.</p>
+      </div>
+      <input id="gr-forteckningsinput" type="file" accept=".xlsx,.xlsm,.xlsb,.xls,.csv,.txt,.pdf" class="hidden"
+             onchange="grValjForteckning(this.files); this.value = ''" />`;
+  }
+
+  const traff = f.nummer.length;
+  return `
+    <div class="border border-ads-border rounded-lg px-4 py-3">
+      <div class="flex items-center gap-2">
+        <svg class="w-4 h-4 shrink-0 ${traff ? 'text-green-600' : 'text-amber-500'}" fill="none" viewBox="0 0 20 20" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 4a1 1 0 0 1 1-1h6l3 3v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8 10h4M8 13h4"/>
+        </svg>
+        <span class="text-sm text-ads-text truncate flex-1">${grEsc(f.namn)}</span>
+        <span class="text-xs ${traff ? 'text-ads-muted' : 'text-amber-600'} shrink-0">
+          ${traff ? `${traff} ritningsnummer` : 'inga ritningsnummer hittade'}
+        </span>
+        <button onclick="grTaBortForteckning()" class="shrink-0 text-ads-muted hover:text-red-500 transition-colors" title="Ta bort">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 20 20"><path stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M4 4l12 12M16 4L4 16"/></svg>
+        </button>
+      </div>
+      <p class="text-xs text-ads-muted mt-2">
+        ${traff
+          ? `Utplockade med ${grEsc(f.strategi)}, ur ${f.antalSnuttar} lästa textbitar.
+             Exempel: ${f.nummer.slice(0, 3).map(grEsc).join(', ')}${traff > 3 ? ' ...' : ''}`
+          : `${f.antalSnuttar} textbitar lästes, men inget som liknar ett ritningsnummer.
+             Kontrollera att filen innehåller numren som text och inte som bild.`}
+      </p>
+    </div>`;
+}
+
+function grSlappForteckning(event, zon) {
+  event.preventDefault();
+  zon.classList.remove('border-ads-blue', 'bg-blue-50');
+  grValjForteckning(event.dataTransfer.files);
+}
+
+async function grValjForteckning(fileList) {
+  const fil = [...fileList][0];
+  if (!fil) return;
+
+  _gr.laserForteckning = true;
+  _gr.forteckningsfel  = null;
+  grUppdateraForteckning();
+
+  try {
+    const filer   = _gr.kalla === 'dm' ? _gr.valdaFiler : _gr.egnaFiler;
+    const monster = grHarledNummermonster(filer.map(f => f.namn.replace(/\.pdf$/i, '')));
+    _gr.forteckning = await grLasForteckning(fil, monster);
+    _gr.resultat    = null; // förteckningen påverkar D2, gammalt resultat gäller inte
+  } catch (fel) {
+    _gr.forteckning     = null;
+    _gr.forteckningsfel = `${fil.name} gick inte att läsa: ${fel.message || fel}`;
+  }
+
+  _gr.laserForteckning = false;
+  grUppdateraForteckning();
+}
+
+function grTaBortForteckning() {
+  _gr.forteckning     = null;
+  _gr.forteckningsfel = null;
+  _gr.resultat        = null;
+  grUppdateraForteckning();
+}
+
+function grUppdateraForteckning() {
+  const el = document.getElementById('gr-forteckning');
+  if (el) el.innerHTML = grForteckningsvy();
 }
 
 function grTogglePunkt(id) {

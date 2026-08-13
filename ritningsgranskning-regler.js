@@ -218,12 +218,18 @@ function grKorKontroller(blad, nummerRegex, val = {}) {
   const saknas   = [...listade].filter(n => !ipaketet.has(n)).sort();
   const extra    = listade.size ? [...ipaketet].filter(n => !listade.has(n)).sort() : [];
 
+  let angiven = null;
   if (val.forteckning?.length) {
     const forvantade = new Set(val.forteckning);
-    for (const n of [...forvantade].filter(x => !ipaketet.has(x)).sort()) {
+    angiven = {
+      antal:  forvantade.size,
+      saknas: [...forvantade].filter(x => !ipaketet.has(x)).sort(),
+      extra:  [...ipaketet].filter(x => !forvantade.has(x)).sort(),
+    };
+    for (const n of angiven.saknas) {
       grAvvikelse(avvikelser, 'fel', 'D2', 'Ritning saknas i paketet enligt angiven förteckning', n);
     }
-    for (const n of [...ipaketet].filter(x => !forvantade.has(x)).sort()) {
+    for (const n of angiven.extra) {
       grAvvikelse(avvikelser, 'varning', 'D2', 'Ritning i paketet saknas i angiven förteckning', n);
     }
   }
@@ -443,7 +449,7 @@ function grKorKontroller(blad, nummerRegex, val = {}) {
       mallHarledd: !!g.ruta,
       antalFalt: new Set(g.gruppblad.flatMap(b => b.falt.filter(f => f.varde).map(f => f.etikett))).size,
     })),
-    forteckning: { listade: [...listade].sort(), saknas, extra, harForteckning: listade.size > 0 },
+    forteckning: { listade: [...listade].sort(), saknas, extra, harForteckning: listade.size > 0, angiven },
     statistik: {
       antalPdf: blad.length,
       antalLasta: riktiga.length,

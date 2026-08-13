@@ -291,6 +291,76 @@ async function grLasBlad(buffert, filnamn, nummerRegex) {
   }
 }
 
+// ── Handlingsförteckning som egen fil ─────────────────────────────────────────
+
+/** Alla textsnuttar ur en fil, oavsett om den är txt, csv, xlsx eller pdf. */
+async function grTextsnuttarUrFil(fil) {
+  const namn = fil.name.toLowerCase();
+
+  if (/\.(xlsx|xlsm|xlsb|xls)$/.test(namn)) {
+    if (typeof XLSX === 'undefined') throw new Error('Kan inte läsa Excel-filer här.');
+    const bok = XLSX.read(new Uint8Array(await fil.arrayBuffer()), { type: 'array' });
+    const ut = [];
+    for (const bladnamn of bok.SheetNames) {
+      const rader = XLSX.utils.sheet_to_json(bok.Sheets[bladnamn], { header: 1, blankrows: false });
+      for (const rad of rader) for (const cell of rad) if (cell != null) ut.push(String(cell));
+    }
+    return ut;
+  }
+
+  if (/\.pdf$/.test(namn)) {
+    const { lib, standardFontDataUrl } = await grPdfjs();
+    const dok = await lib.getDocument({
+      data: new Uint8Array(await fil.arrayBuffer()),
+      standardFontDataUrl, useSystemFonts: true, verbosity: 0, isEvalSupported: false,
+    }).promise;
+    try {
+      const ut = [];
+      const sidor = Math.min(dok.numPages, 50);
+      for (let i = 1; i <= sidor; i++) {
+        const sida = await dok.getPage(i);
+        for (const t of grLasTexter(sida.view, await sida.getTextContent())) ut.push(t.s);
+      }
+      return ut;
+    } finally {
+      await dok.destroy();
+    }
+  }
+
+  // txt, csv och allt annat som går att läsa som text
+  return (await fil.text()).split(/[\r\n\t;,"|]+/);
+}
+
+// Tre eller fler segment skilda med bindestreck täcker de flesta namnstandarder
+const GR_GENERISKT_NUMMER = /^[A-ZÅÄÖ0-9]{1,12}(-[A-ZÅÄÖ0-9]{1,12}){2,}$/;
+
+/**
+ * Plockar ut ritningsnummer ur en handlingsförteckning. I första hand de som
+ * följer paketets eget namnmönster. Hittas inga tas allt som ser ut som ett
+ * ritningsnummer, så att en förteckning som spänner över flera discipliner
+ * också går att använda mot ett paket från en av dem.
+ */
+async function grLasForteckning(fil, nummerRegex) {
+  const snuttar = (await grTextsnuttarUrFil(fil))
+    .map(s => String(s).trim().replace(/\.pdf$/i, ''))
+    .filter(Boolean);
+
+  let nummer   = [...new Set(snuttar.filter(s => nummerRegex.test(s)))];
+  let strategi = 'paketets namnmönster';
+
+  if (!nummer.length) {
+    nummer   = [...new Set(snuttar.filter(s => GR_GENERISKT_NUMMER.test(s)))];
+    strategi = 'generell ritningsnummerform';
+  }
+
+  return {
+    namn: fil.name,
+    nummer: nummer.sort(),
+    antalSnuttar: snuttar.length,
+    strategi: nummer.length ? strategi : 'inget hittat',
+  };
+}
+
 // ── Hämta bytes ───────────────────────────────────────────────────────────────
 
 /** Laddar ner en ritning från ACC via signerad länk. */

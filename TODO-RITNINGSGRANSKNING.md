@@ -19,8 +19,21 @@ Utöver det: `getItemDownload` i `api.js`, fyra rader i `app.js` och fyra
 script-taggar i `index.html`.
 
 Steg 1 väljer ritningar, från projektets Data Management filtrerat på PDF eller
-genom att släppa en zip. Steg 2 låter dig kryssa av kontrollpunkter. Steg 3 kör
-granskningen och visar resultatet.
+genom att släppa en zip. Steg 2 låter dig kryssa av kontrollpunkter och lägga
+till en handlingsförteckning. Steg 3 kör granskningen och visar resultatet.
+
+## Handlingsförteckning
+
+Utan uppladdad förteckning jämförs paketet mot de ritningsnummer som står
+tryckta på bladen. Laddar du upp den riktiga förteckningen jämförs paketet mot
+den i stället: saknade ritningar blir fel, ritningar utanför förteckningen blir
+varningar.
+
+Förteckningen får vara Excel, CSV, textfil eller PDF. Numren plockas ut genom
+att först pröva paketets eget namnmönster mot varje textbit i filen. Hittas
+inget tas allt som har tre eller fler bindestrecksskilda segment, så att en
+förteckning som spänner över flera discipliner går att använda mot ett paket
+från en av dem. Vilken väg som användes visas i gränssnittet.
 
 ## Hur reglerna vet vad som är rätt
 
@@ -44,6 +57,8 @@ Mot Granskning nr 133, 113 blad i två formatgrupper:
 * Trasig PDF ger en anmärkning i stället för att välta granskningen
 * Kryssa av en kontrollpunkt och kör om tar 25 ms, bladen läses inte om
 * CSV och utskriftsrapport innehåller rätt data
+* Handlingsförteckning i txt, csv, xlsx och pdf. En lista med två påhittade
+  nummer och två utelämnade ritningar gav precis två fel och två varningar
 
 ## Kvar att göra
 
@@ -56,7 +71,7 @@ Mot Granskning nr 133, 113 blad i två formatgrupper:
    kontroller via GitHub-PAT. Ritningsgranskningen exporterar i stället rapport
    och CSV. Vill du ha historik är det samma mönster att lägga till.
 
-3. **Handlingsförteckning som egen fil.** Idag jämförs paketet mot de
-   ritningsnummer som står på bladen. Att kunna ladda upp den riktiga
-   förteckningen skulle göra D2 skarpare. Fältet finns i `_gr.forteckning`,
-   det saknas bara ett filval i steg 2.
+3. **Namnmönstret klarar bara versaler.** `grHarledNummermonster` bygger
+   teckenklasser av A till Ö och siffror. Ett projekt med gemener i filnamnen
+   skulle få D1 att flagga varenda ritning. Ingen brådska, men värt att veta
+   innan verktyget möter ett paket från någon annan.
