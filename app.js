@@ -2,7 +2,9 @@ const CLIENT_ID     = 'F2lSjFPEgbJyvjCS9xFOwel7EFEbs98ayGAjnnc6lVOVvmtO';
 const REDIRECT_URI  = 'https://mahdi-bimengine.github.io/forma-super-admin/';
 const APS_AUTH_URL  = 'https://developer.api.autodesk.com/authentication/v2/authorize';
 const APS_TOKEN_URL = 'https://developer.api.autodesk.com/authentication/v2/token';
-const SCOPES        = 'openid data:read user-profile:read';
+// data:write och data:create behövs för att Veckokontroll ska kunna spara sin
+// logg i projektet och skapa issues. Ändras listan måste alla logga in på nytt.
+const SCOPES        = 'openid data:read data:write data:create user-profile:read';
 
 // ── Project picker state ───────────────────────────────────────────────────────
 

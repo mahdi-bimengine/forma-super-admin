@@ -3,22 +3,33 @@
 // veckan, har nya modeller tillkommit, ligger Model Coordination i fas med
 // senaste versionerna, och finns baspunkten på rätt plats.
 //
-// Del 1 av 5: flikens skal, projektinställningar och lagring i repot.
+// Del 1 av 5: flikens skal, projektinställningar och lagring i ACC-projektet.
 
 // ── Konstanter ────────────────────────────────────────────────────────────────
 
 const VK_FILTYPER = ['rvt', 'ifc', 'nwc', 'nwd', 'dwg'];
 
+// Inställningar och veckologg ligger i projektet självt, i en egen mapp under
+// Project Files. Fast namn, så att vem som helst i projektet hittar dem utan
+// att först behöva veta var någon annan lade filen.
+const VK_MAPPNAMN = 'Veckokontroll';
+const VK_INST_FIL = 'veckokontroll-installningar.json';
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 const _vk = {
   vy:            'kor',     // 'kor' | 'installningar'
-  laddar:        true,      // hämtar inställningar från repot
+  laddar:        true,      // letar upp och läser inställningarna i projektet
   fel:           null,
   installningar: null,      // sparade inställningar för aktivt projekt
-  sha:           null,      // GitHub-sha för inställningsfilen
   utkast:        null,      // inställningar som redigeras just nu
-  githubToken:   sessionStorage.getItem('mk_github_token') || null,
+
+  // Var i ACC filerna ligger
+  lagring: {
+    rotMapp: null,          // {id, namn} mappen Project Files
+    mappId:  null,          // mappen Veckokontroll, null om den inte finns än
+    itemId:  null,          // inställningsfilen, null om den inte finns än
+  },
 
   // Mappväljaren
   folderState:   {},        // folderId → {items, expanded, loaded, loading}
@@ -45,13 +56,9 @@ function vkFid(id) {
 
 function vkFidLookup(i) { return _vk.fids[i]; }
 
-function vkProjektNyckel() {
-  const id = _currentProject?.id || '';
-  return id.startsWith('b.') ? id.slice(2) : id;
-}
-
-function vkInstallningsSokvag() {
-  return `veckokontroll/${vkProjektNyckel()}/installningar.json`;
+function vkLagringsSokvag() {
+  const rot = _vk.lagring.rotMapp?.namn || 'Project Files';
+  return `${rot} / ${VK_MAPPNAMN} / ${VK_INST_FIL}`;
 }
 
 function vkNyaInstallningar() {
@@ -82,8 +89,8 @@ function vkReset() {
   _vk.laddar        = true;
   _vk.fel           = null;
   _vk.installningar = null;
-  _vk.sha           = null;
   _vk.utkast        = null;
+  _vk.lagring       = { rotMapp: null, mappId: null, itemId: null };
   _vk.folderState   = {};
   _vk.folderPath    = {};
   _vk.itemsById     = {};
@@ -92,21 +99,45 @@ function vkReset() {
   _vk.modellSetFel  = null;
 }
 
-// ── Lagring i repot ───────────────────────────────────────────────────────────
+// ── Lagring i projektet ───────────────────────────────────────────────────────
+
+// Letar upp mappen Project Files, mappen Veckokontroll i den, och
+// inställningsfilen. Ingenting skapas här, bara letas.
+async function vkHittaLagring() {
+  const hub      = _hubs[_hubIdx];
+  const toppar   = await getTopFolders(hub.id, _currentProject.id);
+  const namnAv   = f => f?.attributes?.displayName || f?.attributes?.name || '';
+
+  // Project Files heter så i API:t, men namnet kan vara översatt i gränssnittet.
+  const rot = toppar.find(f => /^project files$/i.test(namnAv(f)) || /^projektfiler$/i.test(namnAv(f)))
+           || toppar.find(f => !/^(plans|ritningar)$/i.test(namnAv(f)))
+           || toppar[0];
+  if (!rot) throw new Error('Hittade inga mappar i projektet. Har du behörighet till Docs?');
+
+  _vk.lagring.rotMapp = { id: rot.id, namn: namnAv(rot) };
+  _vk.lagring.mappId  = null;
+  _vk.lagring.itemId  = null;
+
+  const iRoten = await getFolderContents(_currentProject.id, rot.id);
+  const mapp   = iRoten.find(f => f.type === 'folders' && namnAv(f).toLowerCase() === VK_MAPPNAMN.toLowerCase());
+  if (!mapp) return;
+
+  _vk.lagring.mappId = mapp.id;
+
+  const iMappen = await getFolderContents(_currentProject.id, mapp.id);
+  const fil     = iMappen.find(f => f.type === 'items' && namnAv(f).toLowerCase() === VK_INST_FIL.toLowerCase());
+  if (fil) _vk.lagring.itemId = fil.id;
+}
 
 async function vkLaddaInstallningar() {
   _vk.laddar = true;
   _vk.fel    = null;
   renderVeckokontroll();
   try {
-    const fil = await githubGetFile(_vk.githubToken, vkInstallningsSokvag());
-    if (fil) {
-      _vk.installningar = JSON.parse(vkAvkodaGithub(fil.content));
-      _vk.sha           = fil.sha;
-    } else {
-      _vk.installningar = null;
-      _vk.sha           = null;
-    }
+    await vkHittaLagring();
+    _vk.installningar = _vk.lagring.itemId
+      ? JSON.parse(await readTextFile(_currentProject.id, _vk.lagring.itemId))
+      : null;
   } catch (err) {
     _vk.fel = err.message;
   }
@@ -114,14 +145,7 @@ async function vkLaddaInstallningar() {
   renderVeckokontroll();
 }
 
-function vkAvkodaGithub(base64) {
-  const rent = String(base64).replace(/\s/g, '');
-  return decodeURIComponent(escape(atob(rent)));
-}
-
 async function vkSparaInstallningar() {
-  if (!_vk.githubToken) { vkVisaTokenRuta('spara'); return; }
-
   vkHarvestaUtkast();
   const fel = vkValideraUtkast();
   if (fel) { vkToast(fel, 'red'); return; }
@@ -130,28 +154,50 @@ async function vkSparaInstallningar() {
   utkast.andrad = { tid: new Date().toISOString(), av: _profile?.email || '' };
 
   const knapp = document.getElementById('vk-spara-btn');
-  if (knapp) { knapp.disabled = true; knapp.textContent = 'Sparar…'; }
+  const sattKnapp = (text, av) => {
+    if (!knapp) return;
+    knapp.disabled = av;
+    knapp.textContent = text;
+  };
+  sattKnapp('Sparar…', true);
 
   try {
-    // Läs om sha:t precis före skrivning, annars krockar två flikar med varandra.
-    const fore = await githubGetFile(_vk.githubToken, vkInstallningsSokvag());
-    const svar = await githubPutFile(
-      _vk.githubToken,
-      vkInstallningsSokvag(),
+    if (!_vk.lagring.rotMapp) await vkHittaLagring();
+
+    if (!_vk.lagring.mappId) {
+      sattKnapp(`Skapar mappen ${VK_MAPPNAMN}…`, true);
+      _vk.lagring.mappId = await createFolder(_currentProject.id, _vk.lagring.rotMapp.id, VK_MAPPNAMN);
+    }
+
+    sattKnapp('Sparar…', true);
+    _vk.lagring.itemId = await writeTextFile(
+      _currentProject.id,
+      _vk.lagring.mappId,
+      VK_INST_FIL,
       JSON.stringify(utkast, null, 2),
-      fore?.sha,
-      `Veckokontroll: inställningar för ${utkast.projekt.namn || vkProjektNyckel()}`
+      _vk.lagring.itemId
     );
+
     _vk.installningar = utkast;
-    _vk.sha           = svar?.content?.sha || null;
     _vk.utkast        = null;
     _vk.vy            = 'kor';
     renderVeckokontroll();
-    vkToast('Inställningarna är sparade.');
+    vkToast(`Sparat i projektet: ${vkLagringsSokvag()}`);
   } catch (err) {
-    if (knapp) { knapp.disabled = false; knapp.textContent = 'Spara inställningar'; }
-    vkToast(`Kunde inte spara: ${err.message}`, 'red');
+    sattKnapp('Spara inställningar', false);
+    vkToast(`Kunde inte spara: ${vkFelText(err)}`, 'red');
   }
+}
+
+// APS svarar med hela felkroppen. Plocka fram det som betyder något för den
+// som står vid skärmen.
+function vkFelText(err) {
+  const text = String(err?.message || err);
+  if (/\b(401|403)\b/.test(text))
+    return 'du saknar behörighet att skapa filer i projektets mappar, eller behöver logga in på nytt';
+  if (/\b409\b/.test(text))
+    return 'filen håller på att uppdateras av någon annan, försök igen om en stund';
+  return text.length > 200 ? text.slice(0, 200) + '…' : text;
 }
 
 function vkValideraUtkast() {
@@ -449,13 +495,20 @@ function vkRenderInstallningar() {
         </div>
       `)}
 
-      <div class="flex items-center justify-end gap-2 pb-2">
+      <div class="flex items-center justify-between gap-4 pb-2">
+        <p class="text-[11px] text-ads-muted">
+          Sparas i projektet som
+          <code class="bg-white border border-ads-border rounded px-1 py-0.5">${vkEsc(vkLagringsSokvag())}</code>,
+          ${_vk.lagring.mappId ? 'i den mapp som redan finns.' : `mappen ${VK_MAPPNAMN} skapas första gången.`}
+        </p>
+        <div class="flex items-center gap-2 shrink-0">
         <button onclick="vkAvbrytInstallningar()"
                 class="text-sm text-ads-muted px-3 py-2 hover:text-ads-text">Avbryt</button>
         <button id="vk-spara-btn" onclick="vkSparaInstallningar()"
                 class="bg-ads-blue text-white text-sm font-medium rounded px-4 py-2 hover:bg-ads-blue-dark transition-colors">
           Spara inställningar
         </button>
+        </div>
       </div>
     </div>`;
 }
@@ -785,45 +838,6 @@ function vkToggleBaspunkt(pa) {
   _vk.utkast.baspunkt.aktiv = pa;
   const falt = document.getElementById('vk-bp-falt');
   if (falt) falt.className = pa ? '' : 'opacity-40 pointer-events-none';
-}
-
-// ── GitHub-token ──────────────────────────────────────────────────────────────
-
-function vkVisaTokenRuta(atgard) {
-  document.getElementById('vk-token-ruta')?.remove();
-  const d = document.createElement('div');
-  d.id = 'vk-token-ruta';
-  d.className = 'fixed inset-0 bg-black/40 z-50 flex items-center justify-center';
-  d.innerHTML = `
-    <div class="bg-white rounded-lg shadow-xl p-6 w-96">
-      <h3 class="font-semibold text-ads-text mb-1">GitHub-token krävs</h3>
-      <p class="text-xs text-ads-muted mb-4">
-        Inställningarna sparas som <code class="bg-ads-gray px-1 py-0.5 rounded">${vkEsc(vkInstallningsSokvag())}</code> i repot.<br/>
-        Använd ett <strong>Fine-grained personal access token</strong> med
-        <code class="bg-ads-gray px-1 py-0.5 rounded">Contents: Read and write</code> för
-        <code class="bg-ads-gray px-1 py-0.5 rounded">forma-super-admin</code>.
-      </p>
-      <input id="vk-token-input" type="password" placeholder="github_pat_…"
-             class="w-full border border-ads-border rounded px-3 py-2 text-sm mb-4
-                    focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
-      <div class="flex justify-end gap-2">
-        <button onclick="document.getElementById('vk-token-ruta').remove()"
-                class="text-sm text-ads-muted px-3 py-1.5 hover:text-ads-text">Avbryt</button>
-        <button onclick="vkBekraftaToken('${atgard}')"
-                class="text-sm bg-ads-blue text-white px-4 py-1.5 rounded hover:bg-ads-blue-dark">Bekräfta</button>
-      </div>
-    </div>`;
-  document.body.appendChild(d);
-  setTimeout(() => document.getElementById('vk-token-input')?.focus(), 50);
-}
-
-function vkBekraftaToken(atgard) {
-  const token = document.getElementById('vk-token-input')?.value?.trim();
-  if (!token) return;
-  _vk.githubToken = token;
-  sessionStorage.setItem('mk_github_token', token);
-  document.getElementById('vk-token-ruta')?.remove();
-  if (atgard === 'spara') vkSparaInstallningar();
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────────

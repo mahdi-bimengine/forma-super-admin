@@ -59,6 +59,129 @@ async function getItemDownload(projectId, itemId) {
   return { urls: res.urls || (res.url ? [res.url] : []), size: res.size };
 }
 
+// ── Skriva filer till ACC ─────────────────────────────────────────────────────
+// Uppladdning i ACC sker i fem steg: skapa en lagringsplats, hämta en signerad
+// S3-adress, lägga upp innehållet där, kvittera uppladdningen och till sist
+// koppla objektet till en fil (nytt item) eller till en ny version av en fil.
+
+function parseStorageId(storageId) {
+  const m = String(storageId).match(/^urn:adsk\.objects:os\.object:([^/]+)\/(.+)$/);
+  if (!m) throw new Error(`Okänt lagrings-id: ${storageId}`);
+  return { bucket: m[1], key: m[2] };
+}
+
+// ACC- och BIM 360-projekt (id inleds med b.) har egna typnamn för filer och
+// mappar. Övriga hubbar använder autodesk.core.
+function accExtType(projectId, kind) {
+  const bim = String(projectId).startsWith('b.');
+  return `${kind}:autodesk.${bim ? 'bim360' : 'core'}:${kind === 'folders' ? 'Folder' : 'File'}`;
+}
+
+async function createStorage(projectId, folderId, fileName) {
+  const res = await apsPostJsonApi(`/data/v1/projects/${projectId}/storage`, {
+    jsonapi: { version: '1.0' },
+    data: {
+      type: 'objects',
+      attributes: { name: fileName },
+      relationships: { target: { data: { type: 'folders', id: folderId } } },
+    },
+  });
+  return res.data.id;
+}
+
+async function uploadToStorage(storageId, content) {
+  const { bucket, key } = parseStorageId(storageId);
+  const base = `/oss/v2/buckets/${bucket}/objects/${encodeURIComponent(key)}/signeds3upload`;
+
+  const signed = await apsGet(base);
+  const url    = signed.urls?.[0];
+  if (!url) throw new Error('APS lämnade ingen uppladdningsadress.');
+
+  // Går direkt till S3 och ska inte ha någon Authorization-header.
+  const put = await fetch(url, { method: 'PUT', body: content });
+  if (!put.ok) throw new Error(`Uppladdningen misslyckades (${put.status}).`);
+
+  return apsPost(base, { uploadKey: signed.uploadKey });
+}
+
+async function createItem(projectId, folderId, fileName, storageId) {
+  const res = await apsPostJsonApi(`/data/v1/projects/${projectId}/items`, {
+    jsonapi: { version: '1.0' },
+    data: {
+      type: 'items',
+      attributes: {
+        displayName: fileName,
+        extension:   { type: accExtType(projectId, 'items'), version: '1.0' },
+      },
+      relationships: {
+        tip:    { data: { type: 'versions', id: '1' } },
+        parent: { data: { type: 'folders',  id: folderId } },
+      },
+    },
+    included: [{
+      type: 'versions',
+      id:   '1',
+      attributes: {
+        name:      fileName,
+        extension: { type: accExtType(projectId, 'versions'), version: '1.0' },
+      },
+      relationships: { storage: { data: { type: 'objects', id: storageId } } },
+    }],
+  });
+  return res.data.id;
+}
+
+async function createVersion(projectId, itemId, fileName, storageId) {
+  const res = await apsPostJsonApi(`/data/v1/projects/${projectId}/versions`, {
+    jsonapi: { version: '1.0' },
+    data: {
+      type: 'versions',
+      attributes: {
+        name:      fileName,
+        extension: { type: accExtType(projectId, 'versions'), version: '1.0' },
+      },
+      relationships: {
+        item:    { data: { type: 'items',   id: itemId } },
+        storage: { data: { type: 'objects', id: storageId } },
+      },
+    },
+  });
+  return res.data.id;
+}
+
+async function createFolder(projectId, parentFolderId, name) {
+  const res = await apsPostJsonApi(`/data/v1/projects/${projectId}/folders`, {
+    jsonapi: { version: '1.0' },
+    data: {
+      type: 'folders',
+      attributes: {
+        name,
+        extension: { type: accExtType(projectId, 'folders'), version: '1.0' },
+      },
+      relationships: { parent: { data: { type: 'folders', id: parentFolderId } } },
+    },
+  });
+  return res.data.id;
+}
+
+// Skriver text till en fil i ACC. Finns filen redan läggs den upp som en ny
+// version, annars skapas den. Returnerar filens item-id.
+async function writeTextFile(projectId, folderId, fileName, text, existingItemId) {
+  const storageId = await createStorage(projectId, folderId, fileName);
+  await uploadToStorage(storageId, text);
+  return existingItemId
+    ? (await createVersion(projectId, existingItemId, fileName, storageId), existingItemId)
+    : createItem(projectId, folderId, fileName, storageId);
+}
+
+async function readTextFile(projectId, itemId) {
+  const { urls } = await getItemDownload(projectId, itemId);
+  if (!urls.length) throw new Error('Filen har ingen nedladdningsadress.');
+  const res = await fetch(urls[0]);
+  if (!res.ok) throw new Error(`Kunde inte hämta filen (${res.status}).`);
+  return res.text();
+}
+
 // ── Model Derivative ──────────────────────────────────────────────────────────
 
 async function getManifest(urn) {
@@ -143,6 +266,19 @@ async function apsGet(path) {
   if (!_token) throw new Error('No APS token set. Call setToken() first.');
   const res = await fetch(`${APS_BASE}${path}`, {
     headers: { Authorization: `Bearer ${_token}` }
+  });
+  if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+// Data Management kräver Content-Type application/vnd.api+json för sina
+// POST-anrop, till skillnad från OSS som vill ha vanlig application/json.
+async function apsPostJsonApi(path, body) {
+  if (!_token) throw new Error('No APS token set. Call setToken() first.');
+  const res = await fetch(`${APS_BASE}${path}`, {
+    method:  'POST',
+    headers: { Authorization: `Bearer ${_token}`, 'Content-Type': 'application/vnd.api+json' },
+    body:    JSON.stringify(body)
   });
   if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);
   return res.json();
