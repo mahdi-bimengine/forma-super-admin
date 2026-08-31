@@ -322,6 +322,25 @@ async function listModelSetItems(projectId, modelSetId, versionId) {
   return res.results || [];
 }
 
+// ── Issues ────────────────────────────────────────────────────────────────────
+// Issues-API:t vill ha projekt-id utan b.-prefix, till skillnad från Data
+// Management. En issue måste ha en subtyp, så typerna hämtas först.
+
+function issuesProjektId(projectId) {
+  return projectId.startsWith('b.') ? projectId.slice(2) : projectId;
+}
+
+async function listIssueTypes(projectId) {
+  const res = await apsGet(
+    `/construction/issues/v1/projects/${issuesProjektId(projectId)}/issue-types?include=subtypes&limit=100`
+  );
+  return res.results || [];
+}
+
+async function createIssue(projectId, payload) {
+  return apsPost(`/construction/issues/v1/projects/${issuesProjektId(projectId)}/issues`, payload);
+}
+
 // ── GitHub ────────────────────────────────────────────────────────────────────
 
 // Repot är publikt, så en läsning fungerar utan token. Token skickas när den

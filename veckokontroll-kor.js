@@ -43,6 +43,7 @@ async function vkKor() {
   _vk.kor.sparad   = false;
   _vk.kor.steg     = 'Läser veckologgen';
   _vk.bp           = { pagar: false, avbryt: false, klara: 0, totalt: 0, rader: [], steg: '' };
+  _vk.not          = { text: null, sparar: false, sparadSom: null, issue: null };
   renderVeckokontroll();
 
   const rapport = text => {
@@ -326,17 +327,26 @@ function vkRenderKorkort() {
 
 // ── Resultatet ────────────────────────────────────────────────────────────────
 
+// Ritar om resultatdelen utan att röra resten av fliken, så att sidan inte
+// hoppar när en delvy uppdateras.
+function vkRitaResultat() {
+  const el = document.getElementById('vk-resultat');
+  if (el) el.outerHTML = vkRenderResultat();
+  else renderVeckokontroll();
+}
+
 function vkRenderResultat() {
   const res = _vk.kor.resultat;
   if (!res) return '';
 
   return `
-    <div class="mt-5 space-y-5">
+    <div id="vk-resultat" class="mt-5 space-y-5">
       ${vkRenderSammanfattning(res)}
       ${vkRenderModelltabell(res)}
       ${vkRenderVyer(res)}
       ${vkRenderBaspunkt(res)}
       ${vkRenderAvvikelser(res)}
+      ${vkRenderNot(res)}
       ${vkRenderSparaKort(res)}
     </div>`;
 }

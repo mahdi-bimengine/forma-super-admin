@@ -46,6 +46,9 @@ const _vk = {
   vyerFel:       null,
   laddarVyer:    false,
 
+  // Noteringen och issuen, se veckokontroll-not.js
+  not: { text: null, sparar: false, sparadSom: null, issue: null },
+
   // Baspunktskontrollen, se veckokontroll-baspunkt.js
   bp: { pagar: false, avbryt: false, klara: 0, totalt: 0, rader: [], steg: '' },
 
@@ -150,6 +153,7 @@ function vkReset() {
   _vk.vyerFel       = null;
   _vk.laddarVyer    = false;
   _vk.bp            = { pagar: false, avbryt: false, klara: 0, totalt: 0, rader: [], steg: '' };
+  _vk.not           = { text: null, sparar: false, sparadSom: null, issue: null };
   _vk.kor           = { pagar: false, steg: '', fel: null, resultat: null,
                         logg: null, loggItemId: null, sparad: false, sparar: false };
 }
