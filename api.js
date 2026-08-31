@@ -259,41 +259,56 @@ async function getDerivativeProperties(urn, guid) {
 }
 
 // ── Model Coordination ────────────────────────────────────────────────────────
+// Adressen är /bim360/modelset/v3/containers/... även för ACC-projekt. Den
+// tidigare varianten under /construction/model-set/v3/projects/... finns inte,
+// och gav "Failed to fetch" i webbläsaren eftersom svaret kom utan CORS-huvuden.
+//
+// Container-id är projektets id utan b.-prefix. Svaren sidbryts med
+// continuationToken och listorna heter modelSets, modelSetVersions,
+// modelSetViews och modelSetViewVersions.
+
+const MC_BASE = '/bim360/modelset/v3/containers';
+
+function mcContainer(projectId) {
+  return projectId.startsWith('b.') ? projectId.slice(2) : projectId;
+}
 
 async function listModelSets(projectId) {
-  const id  = projectId.startsWith('b.') ? projectId.slice(2) : projectId;
-  const res = await apsGet(`/construction/model-set/v3/projects/${id}/model-sets`);
-  return res.results || [];
+  const set = await mcSidor(`${MC_BASE}/${mcContainer(projectId)}/modelsets`, res => res.modelSets || []);
+  // id är kvar som alias, eftersom Modellkontroll läser ms.id.
+  return set.map(s => ({ ...s, id: s.modelSetId || s.id }));
 }
 
 async function getModelSetVersions(projectId, modelSetId) {
-  const id  = projectId.startsWith('b.') ? projectId.slice(2) : projectId;
-  const res = await apsGet(`/construction/model-set/v3/projects/${id}/model-sets/${modelSetId}/versions`);
-  return res.results || [];
+  const versioner = await mcSidor(
+    `${MC_BASE}/${mcContainer(projectId)}/modelsets/${modelSetId}/versions`,
+    res => res.modelSetVersions || []
+  );
+  // Nyaste först, och id som alias för äldre anropare.
+  return versioner
+    .map(v => ({ ...v, id: v.version ?? v.id }))
+    .sort((a, b) => (b.version ?? 0) - (a.version ?? 0));
 }
 
 // Innehållet i en model set-version: vilken filversion som ingår, vilken som är
 // den senaste, och om samordningen ligger i fas (isTipVersion).
 async function getModelSetVersion(projectId, modelSetId, version) {
-  const id = projectId.startsWith('b.') ? projectId.slice(2) : projectId;
-  return apsGet(`/construction/model-set/v3/projects/${id}/model-sets/${modelSetId}/versions/${version}`);
+  return apsGet(`${MC_BASE}/${mcContainer(projectId)}/modelsets/${modelSetId}/versions/${version}`);
 }
 
 // De sparade vyerna i ett model set, med namn och vilka modeller vyn består av.
 async function listModelSetViews(projectId, modelSetId) {
-  const id = projectId.startsWith('b.') ? projectId.slice(2) : projectId;
   return mcSidor(
-    `/construction/model-set/v3/projects/${id}/model-sets/${modelSetId}/views`,
-    res => res.modelSetViews || res.results || []
+    `${MC_BASE}/${mcContainer(projectId)}/modelsets/${modelSetId}/views`,
+    res => res.modelSetViews || []
   );
 }
 
 // Vad vyerna faktiskt innehöll i en bestämd model set-version, per vy.
 async function listModelSetViewVersions(projectId, modelSetId, version) {
-  const id = projectId.startsWith('b.') ? projectId.slice(2) : projectId;
   return mcSidor(
-    `/construction/model-set/v3/projects/${id}/model-sets/${modelSetId}/versions/${version}/views`,
-    res => res.modelSetViewVersions || res.results || []
+    `${MC_BASE}/${mcContainer(projectId)}/modelsets/${modelSetId}/versions/${version}/views`,
+    res => res.modelSetViewVersions || []
   );
 }
 
@@ -316,10 +331,28 @@ async function mcSidor(path, plocka) {
   return alla;
 }
 
-async function listModelSetItems(projectId, modelSetId, versionId) {
-  const id  = projectId.startsWith('b.') ? projectId.slice(2) : projectId;
-  const res = await apsGet(`/construction/model-set/v3/projects/${id}/model-sets/${modelSetId}/versions/${versionId}/model-set-items`);
-  return res.results || [];
+// Filerna i en model set-version. Det finns ingen egen items-adress, listan
+// ligger i versionen. En Revitfil ger en post per 3D-vy, så de slås ihop till
+// en per modell. Fälten name och itemUrn behålls för Modellkontroll.
+async function listModelSetItems(projectId, modelSetId, version) {
+  const detalj   = await getModelSetVersion(projectId, modelSetId, version);
+  const perModell = new Map();
+
+  for (const d of detalj.documentVersions || []) {
+    const itemUrn = String(d.documentLineage?.lineageUrn || '').split('#')[0];
+    if (!itemUrn || perModell.has(itemUrn)) continue;
+
+    perModell.set(itemUrn, {
+      itemUrn,
+      versionUrn: d.versionUrn,
+      name: d.originalSeedFileVersionName
+         || String(d.displayName || '').replace(/^\{[^}]*\}_?/, '')
+         || d.displayName || '',
+      isTipVersion:   d.isTipVersion,
+      documentStatus: d.documentStatus,
+    });
+  }
+  return [...perModell.values()];
 }
 
 // ── Issues ────────────────────────────────────────────────────────────────────
