@@ -38,6 +38,27 @@ async function getFolderContents(projectId, folderId) {
   return res.data;
 }
 
+// Söker rekursivt genom en mapp och alla undermappar. Svaret är senaste
+// versionen av varje träff, så filens item-id plockas ur relationen.
+async function searchFolder(projectId, folderId, displayName) {
+  const res = await apsGet(
+    `/data/v1/projects/${projectId}/folders/${encodeURIComponent(folderId)}/search` +
+    `?filter[attributes.displayName]=${encodeURIComponent(displayName)}`
+  );
+  return (res.data || [])
+    .map(v => ({
+      itemId: v.relationships?.item?.data?.id,
+      namn:   v.attributes?.displayName || v.attributes?.name || '',
+      andrad: v.attributes?.lastModifiedTime || null,
+    }))
+    .filter(t => t.itemId);
+}
+
+async function getItemParent(projectId, itemId) {
+  const res = await apsGet(`/data/v1/projects/${projectId}/items/${encodeURIComponent(itemId)}/parent`);
+  return res.data;
+}
+
 async function getItemTip(projectId, itemId) {
   const res = await apsGet(`/data/v1/projects/${projectId}/items/${encodeURIComponent(itemId)}/tip`);
   return res.data;

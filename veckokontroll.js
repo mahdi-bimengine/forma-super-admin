@@ -9,10 +9,10 @@
 
 const VK_FILTYPER = ['rvt', 'ifc', 'nwc', 'nwd', 'dwg'];
 
-// Inställningar och veckologg ligger i projektet självt, i en egen mapp under
-// Project Files. Fast namn, så att vem som helst i projektet hittar dem utan
-// att först behöva veta var någon annan lade filen.
-const VK_MAPPNAMN = 'Veckokontroll';
+// Inställningar och veckologg ligger i projektet självt, i den mapp du väljer.
+// Filnamnet är däremot fast: fliken letar upp filen med ACC:s sökning genom
+// projektets mappar, så vem som helst i projektet hittar den utan att veta var
+// någon annan lade den.
 const VK_INST_FIL = 'veckokontroll-installningar.json';
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -26,14 +26,16 @@ const _vk = {
 
   // Var i ACC filerna ligger
   lagring: {
-    rotMapp: null,          // {id, namn} mappen Project Files
-    mappId:  null,          // mappen Veckokontroll, null om den inte finns än
-    itemId:  null,          // inställningsfilen, null om den inte finns än
+    mapp:     null,         // {id, namn, sokvag} mappen filen ligger i
+    itemId:   null,         // inställningsfilen, null om den inte finns än
+    dubletter: 0,           // antal extra träffar på filnamnet i projektet
   },
 
-  // Mappväljaren
-  folderState:   {},        // folderId → {items, expanded, loaded, loading}
+  // Mappväljaren. Innehållet cachas per mapp och delas av båda träden, men
+  // varje träd har sina egna utfällda grenar.
+  folderState:   {},        // folderId → {items, loaded, loading}
   folderPath:    {},        // folderId → 'Project Files / Modeller'
+  oppna:         { bevakade: new Set(), lagring: new Set() },
   itemsById:     {},
   fids:          [],
 
@@ -56,15 +58,17 @@ function vkFid(id) {
 
 function vkFidLookup(i) { return _vk.fids[i]; }
 
+// Sökvägen som visas i gränssnittet. Utkastets val går före det som gäller nu.
 function vkLagringsSokvag() {
-  const rot = _vk.lagring.rotMapp?.namn || 'Project Files';
-  return `${rot} / ${VK_MAPPNAMN} / ${VK_INST_FIL}`;
+  const mapp = _vk.utkast?.lagringMapp || _vk.lagring.mapp;
+  return mapp ? `${mapp.sokvag || mapp.namn} / ${VK_INST_FIL}` : VK_INST_FIL;
 }
 
 function vkNyaInstallningar() {
   return {
     version:  1,
     projekt:  { id: _currentProject?.id || '', namn: _currentProject?.attributes?.name || '' },
+    lagringMapp: null,                  // {id, namn, sokvag} där filen sparas
     mappar:   [],                       // {id, namn, sokvag}[]
     undermappar: true,
     filtyper: ['rvt', 'ifc'],
@@ -90,9 +94,10 @@ function vkReset() {
   _vk.fel           = null;
   _vk.installningar = null;
   _vk.utkast        = null;
-  _vk.lagring       = { rotMapp: null, mappId: null, itemId: null };
+  _vk.lagring       = { mapp: null, itemId: null, dubletter: 0 };
   _vk.folderState   = {};
   _vk.folderPath    = {};
+  _vk.oppna         = { bevakade: new Set(), lagring: new Set() };
   _vk.itemsById     = {};
   _vk.fids          = [];
   _vk.modellSet     = null;
@@ -101,32 +106,42 @@ function vkReset() {
 
 // ── Lagring i projektet ───────────────────────────────────────────────────────
 
-// Letar upp mappen Project Files, mappen Veckokontroll i den, och
-// inställningsfilen. Ingenting skapas här, bara letas.
+function vkMappNamnAv(f) {
+  return f?.attributes?.displayName || f?.attributes?.name || '';
+}
+
+// Söker igenom projektets mappar efter inställningsfilen. Filen får ligga var
+// som helst, så länge namnet stämmer. Ligger den på flera ställen används den
+// senast ändrade och de övriga rapporteras.
 async function vkHittaLagring() {
-  const hub      = _hubs[_hubIdx];
-  const toppar   = await getTopFolders(hub.id, _currentProject.id);
-  const namnAv   = f => f?.attributes?.displayName || f?.attributes?.name || '';
+  const hub    = _hubs[_hubIdx];
+  const toppar = await getTopFolders(hub.id, _currentProject.id);
+  if (!toppar.length) throw new Error('Hittade inga mappar i projektet. Har du behörighet till Docs?');
 
-  // Project Files heter så i API:t, men namnet kan vara översatt i gränssnittet.
-  const rot = toppar.find(f => /^project files$/i.test(namnAv(f)) || /^projektfiler$/i.test(namnAv(f)))
-           || toppar.find(f => !/^(plans|ritningar)$/i.test(namnAv(f)))
-           || toppar[0];
-  if (!rot) throw new Error('Hittade inga mappar i projektet. Har du behörighet till Docs?');
+  _vk.lagring = { mapp: null, itemId: null, dubletter: 0 };
 
-  _vk.lagring.rotMapp = { id: rot.id, namn: namnAv(rot) };
-  _vk.lagring.mappId  = null;
-  _vk.lagring.itemId  = null;
+  const traffar = [];
+  for (const topp of toppar) {
+    try {
+      traffar.push(...await searchFolder(_currentProject.id, topp.id, VK_INST_FIL));
+    } catch {
+      // En toppmapp som inte går att söka i, till exempel Plans utan behörighet,
+      // ska inte stoppa resten.
+    }
+  }
+  if (!traffar.length) return;
 
-  const iRoten = await getFolderContents(_currentProject.id, rot.id);
-  const mapp   = iRoten.find(f => f.type === 'folders' && namnAv(f).toLowerCase() === VK_MAPPNAMN.toLowerCase());
-  if (!mapp) return;
+  traffar.sort((a, b) => String(b.andrad || '').localeCompare(String(a.andrad || '')));
+  _vk.lagring.itemId    = traffar[0].itemId;
+  _vk.lagring.dubletter = traffar.length - 1;
 
-  _vk.lagring.mappId = mapp.id;
-
-  const iMappen = await getFolderContents(_currentProject.id, mapp.id);
-  const fil     = iMappen.find(f => f.type === 'items' && namnAv(f).toLowerCase() === VK_INST_FIL.toLowerCase());
-  if (fil) _vk.lagring.itemId = fil.id;
+  // Mappen filen ligger i, för att kunna visa var och för att spara vidare dit.
+  try {
+    const mapp = await getItemParent(_currentProject.id, traffar[0].itemId);
+    _vk.lagring.mapp = { id: mapp.id, namn: vkMappNamnAv(mapp), sokvag: vkMappNamnAv(mapp) };
+  } catch {
+    _vk.lagring.mapp = null;
+  }
 }
 
 async function vkLaddaInstallningar() {
@@ -138,6 +153,13 @@ async function vkLaddaInstallningar() {
     _vk.installningar = _vk.lagring.itemId
       ? JSON.parse(await readTextFile(_currentProject.id, _vk.lagring.itemId))
       : null;
+
+    // Filen bär själv med sig var den skulle ligga. Står den i en annan mapp än
+    // sökningen hittade den i, är det sökningen som gäller.
+    const sagd = _vk.installningar?.lagringMapp;
+    if (sagd && _vk.lagring.mapp && sagd.id === _vk.lagring.mapp.id && sagd.sokvag) {
+      _vk.lagring.mapp.sokvag = sagd.sokvag;
+    }
   } catch (err) {
     _vk.fel = err.message;
   }
@@ -162,23 +184,21 @@ async function vkSparaInstallningar() {
   sattKnapp('Sparar…', true);
 
   try {
-    if (!_vk.lagring.rotMapp) await vkHittaLagring();
+    // Byter man mapp går den gamla filen inte att lägga en ny version på, då
+    // måste en ny fil skapas på den nya platsen.
+    const sammaMapp = _vk.lagring.mapp && _vk.lagring.mapp.id === utkast.lagringMapp.id;
 
-    if (!_vk.lagring.mappId) {
-      sattKnapp(`Skapar mappen ${VK_MAPPNAMN}…`, true);
-      _vk.lagring.mappId = await createFolder(_currentProject.id, _vk.lagring.rotMapp.id, VK_MAPPNAMN);
-    }
-
-    sattKnapp('Sparar…', true);
     _vk.lagring.itemId = await writeTextFile(
       _currentProject.id,
-      _vk.lagring.mappId,
+      utkast.lagringMapp.id,
       VK_INST_FIL,
       JSON.stringify(utkast, null, 2),
-      _vk.lagring.itemId
+      sammaMapp ? _vk.lagring.itemId : null
     );
-
+    const flyttad = !sammaMapp && !!_vk.lagring.mapp;
+    _vk.lagring.mapp  = { ...utkast.lagringMapp };
     _vk.installningar = utkast;
+    if (flyttad) _vk.lagring.dubletter += 1;
     _vk.utkast        = null;
     _vk.vy            = 'kor';
     renderVeckokontroll();
@@ -202,6 +222,8 @@ function vkFelText(err) {
 
 function vkValideraUtkast() {
   const u = _vk.utkast;
+  if (!u.lagringMapp)
+    return 'Välj vilken mapp i projektet inställningarna ska sparas i.';
   if (!u.mappar.length && !u.modellSet.length)
     return 'Välj minst en mapp eller ett model set som ska följas.';
   if (!u.filtyper.length)
@@ -251,7 +273,7 @@ function renderVeckokontroll() {
   if (_vk.vy === 'installningar') {
     setTimeout(() => {
       if (!_vk.folderState['__top__']?.loaded && !_vk.folderState['__top__']?.loading) vkLaddaToppmappar();
-      else vkRitaMapptrad();
+      else vkRitaAllaTrad();
       if (!_vk.modellSet && !_vk.modellSetFel) vkLaddaModellSet();
       else vkRitaModellSet();
     }, 0);
@@ -354,6 +376,10 @@ function vkRenderKorvy() {
           ? `${vkEsc(bp.familj)} &nbsp;<span class="text-ads-muted">tolerans ${vkEsc(bp.tolerans)} mm</span>`
           : '<span class="text-ads-muted italic">avstängd</span>')}
       ${rad('Åldersgräns', `${vkEsc(i.grans?.dagar ?? 7)} dagar`)}
+      ${rad('Sparad i projektet', vkEsc(vkLagringsSokvag()) +
+          (_vk.lagring.dubletter > 0
+            ? ` <span class="text-orange-700">(${_vk.lagring.dubletter} fil${_vk.lagring.dubletter === 1 ? '' : 'er'} med samma namn finns också)</span>`
+            : ''))}
     </div>
 
     <div class="bg-white border border-ads-border rounded p-5">
@@ -388,6 +414,10 @@ function vkOppnaInstallningar() {
   _vk.utkast = _vk.installningar
     ? JSON.parse(JSON.stringify(_vk.installningar))
     : vkNyaInstallningar();
+
+  // Den plats filen verkligen ligger på väger tyngre än vad filen påstår.
+  if (_vk.lagring.mapp) _vk.utkast.lagringMapp = { ..._vk.lagring.mapp };
+
   _vk.vy = 'installningar';
   renderVeckokontroll();
 }
@@ -449,7 +479,7 @@ function vkRenderInstallningar() {
         <p class="text-xs font-medium text-ads-text mb-1.5">Mappar som följs</p>
         <div id="vk-valda-mappar" class="mb-3">${vkRenderValdaMappar()}</div>
         <div class="border border-ads-border rounded max-h-72 overflow-auto bg-white">
-          <div id="vk-mapptrad"></div>
+          <div id="vk-mapptrad-bevakade"></div>
         </div>
         <label class="flex items-center gap-2 mt-3 text-xs text-ads-text cursor-pointer">
           <input type="checkbox" id="vk-undermappar" ${u.undermappar ? 'checked' : ''}
@@ -495,11 +525,21 @@ function vkRenderInstallningar() {
         </div>
       `)}
 
+      ${vkKort('5. Var inställningarna sparas', `
+        Filen läggs i den mapp du väljer här, i projektet. Filnamnet
+        <code class="bg-ads-gray px-1 py-0.5 rounded">${VK_INST_FIL}</code> är däremot fast, för det är på
+        namnet fliken hittar filen igen, var i projektet den än ligger. Samma mapp används sedan för
+        veckologgen.`, `
+        <div id="vk-lagringsval" class="mb-3">${vkRenderLagringsval()}</div>
+        <div class="border border-ads-border rounded max-h-72 overflow-auto bg-white">
+          <div id="vk-mapptrad-lagring"></div>
+        </div>
+      `)}
+
       <div class="flex items-center justify-between gap-4 pb-2">
         <p class="text-[11px] text-ads-muted">
-          Sparas i projektet som
-          <code class="bg-white border border-ads-border rounded px-1 py-0.5">${vkEsc(vkLagringsSokvag())}</code>,
-          ${_vk.lagring.mappId ? 'i den mapp som redan finns.' : `mappen ${VK_MAPPNAMN} skapas första gången.`}
+          Sparas som
+          <code class="bg-white border border-ads-border rounded px-1 py-0.5">${vkEsc(vkLagringsSokvag())}</code>
         </p>
         <div class="flex items-center gap-2 shrink-0">
         <button onclick="vkAvbrytInstallningar()"
@@ -542,10 +582,13 @@ function vkToggleFiltyp(ft) {
   const i     = lista.indexOf(ft);
   if (i === -1) lista.push(ft); else lista.splice(i, 1);
   document.getElementById('vk-filtyper').innerHTML = vkRenderFiltyper();
-  vkRitaMapptrad();
+  vkRitaMapptrad('bevakade');
 }
 
 // ── Mappväljaren ──────────────────────────────────────────────────────────────
+// Samma träd används två gånger: 'bevakade' väljer flera mappar med modeller,
+// 'lagring' väljer den enda mappen som filerna sparas i. Mappinnehållet delas,
+// men träden fälls ut oberoende av varandra.
 
 function vkRenderValdaMappar() {
   const valda = _vk.utkast.mappar;
@@ -562,12 +605,12 @@ function vkRenderValdaMappar() {
 function vkTaBortMapp(i) {
   _vk.utkast.mappar.splice(i, 1);
   document.getElementById('vk-valda-mappar').innerHTML = vkRenderValdaMappar();
-  vkRitaMapptrad();
+  vkRitaMapptrad('bevakade');
 }
 
 async function vkLaddaToppmappar() {
   _vk.folderState['__top__'] = { loading: true, loaded: false, items: [] };
-  vkRitaMapptrad();
+  vkRitaAllaTrad();
   try {
     const hub   = _hubs[_hubIdx];
     const items = await getTopFolders(hub.id, _currentProject.id);
@@ -579,15 +622,20 @@ async function vkLaddaToppmappar() {
   } catch (err) {
     _vk.folderState['__top__'] = { loading: false, loaded: false, items: [], error: err.message };
   }
-  vkRitaMapptrad();
+  vkRitaAllaTrad();
 }
 
 function vkMappNamn(item) {
   return item?.attributes?.displayName || item?.attributes?.name || '';
 }
 
-function vkRitaMapptrad() {
-  const el = document.getElementById('vk-mapptrad');
+function vkRitaAllaTrad() {
+  vkRitaMapptrad('bevakade');
+  vkRitaMapptrad('lagring');
+}
+
+function vkRitaMapptrad(mal) {
+  const el = document.getElementById(`vk-mapptrad-${mal}`);
   if (!el) return;
   const st = _vk.folderState['__top__'];
 
@@ -607,44 +655,54 @@ function vkRitaMapptrad() {
     el.innerHTML = `<p class="text-ads-muted text-sm px-4 py-6">Inga mappar hittades.</p>`;
     return;
   }
-  el.innerHTML = vkRitaMappnoder(st.items, 0);
+  el.innerHTML = vkRitaMappnoder(st.items, 0, mal);
 }
 
-function vkRitaMappnoder(items, djup) {
+function vkMappVald(mal, id) {
+  return mal === 'lagring'
+    ? _vk.utkast.lagringMapp?.id === id
+    : _vk.utkast.mappar.some(m => m.id === id);
+}
+
+function vkRitaMappnoder(items, djup, mal) {
   const bas = 12 + djup * 20;
 
   return items.map(item => {
     if (item.type !== 'folders' || item.attributes?.hidden) return '';
 
     const st    = _vk.folderState[item.id] || {};
-    const oppen = st.expanded || false;
+    const oppen = _vk.oppna[mal].has(item.id);
     const namn  = vkMappNamn(item);
     const i     = vkFid(item.id);
-    const vald  = _vk.utkast.mappar.some(m => m.id === item.id);
+    const vald  = vkMappVald(mal, item.id);
     const antal = (st.items || []).filter(it => it.type === 'items' && vkArModellfil(vkMappNamn(it))).length;
 
-    const ruta = vald
-      ? `<svg class="w-3.5 h-3.5 shrink-0 text-ads-blue" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="2" fill="currentColor"/><path stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 8l3 3 5-5"/></svg>`
-      : `<svg class="w-3.5 h-3.5 shrink-0 text-ads-muted" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>`;
+    const ruta = mal === 'lagring'
+      ? (vald
+        ? `<svg class="w-3.5 h-3.5 shrink-0 text-ads-blue" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="3.5" fill="currentColor"/></svg>`
+        : `<svg class="w-3.5 h-3.5 shrink-0 text-ads-muted" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/></svg>`)
+      : (vald
+        ? `<svg class="w-3.5 h-3.5 shrink-0 text-ads-blue" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="2" fill="currentColor"/><path stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 8l3 3 5-5"/></svg>`
+        : `<svg class="w-3.5 h-3.5 shrink-0 text-ads-muted" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>`);
 
     return `
-      <div onclick="vkToggleMapp(${i})"
+      <div onclick="vkToggleMapp('${mal}', ${i})"
            class="flex items-center gap-2 py-1.5 pr-4 rounded hover:bg-ads-gray cursor-pointer select-none"
            style="padding-left:${bas}px">
         <svg class="w-3.5 h-3.5 shrink-0 text-ads-muted transition-transform ${oppen ? 'rotate-90' : ''}"
              fill="none" viewBox="0 0 20 20">
           <path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M7 5l6 5-6 5"/>
         </svg>
-        <span onclick="event.stopPropagation(); vkToggleMappval(${i})"
+        <span onclick="event.stopPropagation(); vkToggleMappval('${mal}', ${i})"
               class="flex items-center justify-center p-0.5 rounded hover:bg-ads-border">${ruta}</span>
         <svg class="w-4 h-4 shrink-0 text-amber-400" viewBox="0 0 20 15" fill="currentColor">
           <path d="M0 2.5A1.5 1.5 0 0 1 1.5 1h4.764a1.5 1.5 0 0 1 1.06.44l.94.94A1.5 1.5 0 0 0 9.322 3H18.5A1.5 1.5 0 0 1 20 4.5v8A1.5 1.5 0 0 1 18.5 14H1.5A1.5 1.5 0 0 1 0 12.5v-10z"/>
         </svg>
         <span class="text-sm ${vald ? 'text-ads-blue font-medium' : 'text-ads-text'} truncate flex-1">${vkEsc(namn)}</span>
-        ${st.loaded && antal ? `<span class="text-[11px] text-ads-muted shrink-0">${antal} modeller</span>` : ''}
+        ${mal === 'bevakade' && st.loaded && antal ? `<span class="text-[11px] text-ads-muted shrink-0">${antal} modeller</span>` : ''}
         ${st.loading ? `<span class="text-xs text-ads-muted shrink-0">laddar…</span>` : ''}
       </div>
-      ${oppen ? vkRitaMappnoder(st.items || [], djup + 1) : ''}`;
+      ${oppen ? vkRitaMappnoder(st.items || [], djup + 1, mal) : ''}`;
   }).join('');
 }
 
@@ -653,13 +711,21 @@ function vkArModellfil(namn) {
   return _vk.utkast.filtyper.includes(ext);
 }
 
-async function vkToggleMapp(idx) {
+async function vkToggleMapp(mal, idx) {
   const id = vkFidLookup(idx);
-  const st = _vk.folderState[id] || { items: [], expanded: false, loaded: false, loading: false };
+  const st = _vk.folderState[id] || { items: [], loaded: false, loading: false };
+
+  if (_vk.oppna[mal].has(id)) {
+    _vk.oppna[mal].delete(id);
+    vkRitaMapptrad(mal);
+    return;
+  }
+
+  _vk.oppna[mal].add(id);
 
   if (!st.loaded) {
-    _vk.folderState[id] = { ...st, expanded: true, loading: true };
-    vkRitaMapptrad();
+    _vk.folderState[id] = { ...st, loading: true };
+    vkRitaMapptrad(mal);
     try {
       const innehall = await getFolderContents(_currentProject.id, id);
       innehall.forEach(it => {
@@ -669,29 +735,100 @@ async function vkToggleMapp(idx) {
           _vk.folderPath[it.id] = foralder ? `${foralder} / ${vkMappNamn(it)}` : vkMappNamn(it);
         }
       });
-      _vk.folderState[id] = { items: innehall, expanded: true, loaded: true, loading: false };
+      _vk.folderState[id] = { items: innehall, loaded: true, loading: false };
     } catch (err) {
-      _vk.folderState[id] = { ...st, expanded: false, loaded: false, loading: false };
+      _vk.folderState[id] = { ...st, loaded: false, loading: false };
+      _vk.oppna[mal].delete(id);
       vkToast(`Kunde inte läsa mappen: ${err.message}`, 'red');
     }
-  } else {
-    _vk.folderState[id] = { ...st, expanded: !st.expanded };
   }
-  vkRitaMapptrad();
+  vkRitaMapptrad(mal);
 }
 
-function vkToggleMappval(idx) {
+function vkToggleMappval(mal, idx) {
   const id   = vkFidLookup(idx);
   const item = _vk.itemsById[id];
   if (!item) return;
 
+  const mapp = { id, namn: vkMappNamn(item), sokvag: _vk.folderPath[id] || vkMappNamn(item) };
+
+  if (mal === 'lagring') {
+    // Bara en mapp åt gången, och att klicka på den valda tar bort valet.
+    _vk.utkast.lagringMapp = _vk.utkast.lagringMapp?.id === id ? null : mapp;
+    vkRitaMapptrad('lagring');
+    vkRitaLagringsval();
+    return;
+  }
+
   const lista = _vk.utkast.mappar;
   const i     = lista.findIndex(m => m.id === id);
   if (i !== -1) lista.splice(i, 1);
-  else lista.push({ id, namn: vkMappNamn(item), sokvag: _vk.folderPath[id] || vkMappNamn(item) });
+  else lista.push(mapp);
 
   document.getElementById('vk-valda-mappar').innerHTML = vkRenderValdaMappar();
-  vkRitaMapptrad();
+  vkRitaMapptrad('bevakade');
+}
+
+// ── Var filerna sparas ────────────────────────────────────────────────────────
+
+function vkRenderLagringsval() {
+  const vald    = _vk.utkast.lagringMapp;
+  const nuvarande = _vk.lagring.mapp;
+  const flyttas = vald && nuvarande && vald.id !== nuvarande.id;
+
+  return `
+    <div class="flex items-center gap-2 flex-wrap mb-1">
+      ${vald
+        ? `<span class="inline-flex items-center gap-1.5 bg-blue-50 text-ads-blue text-xs rounded px-2 py-1">
+             ${vkEsc(vald.sokvag || vald.namn)} / ${VK_INST_FIL}
+           </span>`
+        : `<span class="text-xs text-ads-muted italic">Ingen mapp vald, markera en i trädet nedan.</span>`}
+      ${vald ? `<button onclick="vkSkapaUndermapp()"
+                  class="text-xs text-ads-blue hover:underline">+ Skapa undermapp här</button>` : ''}
+    </div>
+    ${flyttas ? `
+      <p class="text-[11px] text-orange-700 bg-orange-50 border border-orange-200 rounded px-2 py-1.5 mb-1">
+        Filen ligger i dag i ${vkEsc(nuvarande.sokvag || nuvarande.namn)}. När du sparar skapas en ny fil i
+        den nya mappen, och den gamla lämnas kvar. Ta bort den i ACC så att sökningen inte hittar två.
+      </p>` : ''}
+    ${_vk.lagring.dubletter > 0 ? `
+      <p class="text-[11px] text-orange-700 bg-orange-50 border border-orange-200 rounded px-2 py-1.5">
+        ${_vk.lagring.dubletter === 1 ? 'Det finns en till fil' : `Det finns ${_vk.lagring.dubletter} till filer`}
+        med samma namn i projektet. Den senast ändrade används.
+      </p>` : ''}`;
+}
+
+function vkRitaLagringsval() {
+  const el = document.getElementById('vk-lagringsval');
+  if (el) el.innerHTML = vkRenderLagringsval();
+}
+
+// Skapar en undermapp i den valda mappen och väljer den direkt, så att en egen
+// mapp för veckokontrollen inte behöver ordnas i ACC först.
+async function vkSkapaUndermapp() {
+  const foralder = _vk.utkast.lagringMapp;
+  if (!foralder) return;
+
+  const namn = (window.prompt('Namn på den nya mappen:', 'Veckokontroll') || '').trim();
+  if (!namn) return;
+
+  vkToast(`Skapar mappen ${namn}…`);
+  try {
+    const id = await createFolder(_currentProject.id, foralder.id, namn);
+    _vk.folderPath[id]     = `${foralder.sokvag || foralder.namn} / ${namn}`;
+    _vk.itemsById[id]      = { id, type: 'folders', attributes: { displayName: namn } };
+    _vk.utkast.lagringMapp = { id, namn, sokvag: _vk.folderPath[id] };
+
+    // Töm mappens cache så att den nya undermappen syns när trädet fälls ut.
+    delete _vk.folderState[foralder.id];
+    _vk.oppna.lagring.delete(foralder.id);
+
+    vkRitaLagringsval();
+    vkRitaAllaTrad();
+    vkToast(`Mappen ${namn} är skapad och vald.`);
+  } catch (err) {
+    vkToast(`Kunde inte skapa mappen: ${vkFelText(err)}`, 'red');
+  }
 }
 
 // ── Model set ─────────────────────────────────────────────────────────────────
