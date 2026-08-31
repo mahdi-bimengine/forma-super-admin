@@ -279,6 +279,43 @@ async function getModelSetVersion(projectId, modelSetId, version) {
   return apsGet(`/construction/model-set/v3/projects/${id}/model-sets/${modelSetId}/versions/${version}`);
 }
 
+// De sparade vyerna i ett model set, med namn och vilka modeller vyn består av.
+async function listModelSetViews(projectId, modelSetId) {
+  const id = projectId.startsWith('b.') ? projectId.slice(2) : projectId;
+  return mcSidor(
+    `/construction/model-set/v3/projects/${id}/model-sets/${modelSetId}/views`,
+    res => res.modelSetViews || res.results || []
+  );
+}
+
+// Vad vyerna faktiskt innehöll i en bestämd model set-version, per vy.
+async function listModelSetViewVersions(projectId, modelSetId, version) {
+  const id = projectId.startsWith('b.') ? projectId.slice(2) : projectId;
+  return mcSidor(
+    `/construction/model-set/v3/projects/${id}/model-sets/${modelSetId}/versions/${version}/views`,
+    res => res.modelSetViewVersions || res.results || []
+  );
+}
+
+// Model Coordination sidbryter med continuationToken. Samma token två gånger,
+// eller för många sidor, betyder att vi slutar hellre än att snurra vidare.
+async function mcSidor(path, plocka) {
+  const alla   = [];
+  const sedda  = new Set();
+  let   token  = null;
+
+  for (let sida = 0; sida < 20; sida++) {
+    const q = new URLSearchParams({ pageLimit: '200', ...(token ? { continuationToken: token } : {}) });
+    const res = await apsGet(`${path}?${q}`);
+    alla.push(...plocka(res));
+
+    token = res.page?.continuationToken || null;
+    if (!token || sedda.has(token)) break;
+    sedda.add(token);
+  }
+  return alla;
+}
+
 async function listModelSetItems(projectId, modelSetId, versionId) {
   const id  = projectId.startsWith('b.') ? projectId.slice(2) : projectId;
   const res = await apsGet(`/construction/model-set/v3/projects/${id}/model-sets/${modelSetId}/versions/${versionId}/model-set-items`);

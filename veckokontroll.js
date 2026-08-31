@@ -42,6 +42,9 @@ const _vk = {
   // Model Coordination
   modellSet:     null,      // model sets i projektet
   modellSetFel:  null,
+  tillgangligaVyer: null,   // vyer i de valda model setten
+  vyerFel:       null,
+  laddarVyer:    false,
 
   // Körningen, se veckokontroll-kor.js
   kor: {
@@ -98,6 +101,32 @@ function vkNyaInstallningar() {
   };
 }
 
+// Filen i projektet kan vara skriven av en äldre version, eller ändrad för
+// hand. Fyll ut det som saknas mot standarduppsättningen, annars faller
+// gränssnittet på ett fält som inte finns.
+function vkNormalisera(inst) {
+  const bas = vkNyaInstallningar();
+  if (!inst || typeof inst !== 'object') return bas;
+
+  const bp = inst.baspunkt || {};
+  return {
+    ...bas,
+    ...inst,
+    projekt:   { ...bas.projekt, ...(inst.projekt || {}) },
+    mappar:    Array.isArray(inst.mappar)    ? inst.mappar    : [],
+    modellSet: Array.isArray(inst.modellSet) ? inst.modellSet : [],
+    vyer:      Array.isArray(inst.vyer)      ? inst.vyer      : [],
+    filtyper:  Array.isArray(inst.filtyper) && inst.filtyper.length ? inst.filtyper : bas.filtyper,
+    baspunkt: {
+      ...bas.baspunkt,
+      ...bp,
+      parametrar: { ...bas.baspunkt.parametrar, ...(bp.parametrar || {}) },
+      forvantat:  { ...bas.baspunkt.forvantat,  ...(bp.forvantat  || {}) },
+    },
+    grans: { ...bas.grans, ...(inst.grans || {}) },
+  };
+}
+
 // ── Reset (körs vid projektbyte) ──────────────────────────────────────────────
 
 function vkReset() {
@@ -114,6 +143,9 @@ function vkReset() {
   _vk.fids          = [];
   _vk.modellSet     = null;
   _vk.modellSetFel  = null;
+  _vk.tillgangligaVyer = null;
+  _vk.vyerFel       = null;
+  _vk.laddarVyer    = false;
   _vk.kor           = { pagar: false, steg: '', fel: null, resultat: null,
                         logg: null, loggItemId: null, sparad: false, sparar: false };
 }
@@ -165,7 +197,7 @@ async function vkLaddaInstallningar() {
   try {
     await vkHittaLagring();
     _vk.installningar = _vk.lagring.itemId
-      ? JSON.parse(await readTextFile(_currentProject.id, _vk.lagring.itemId))
+      ? vkNormalisera(JSON.parse(await readTextFile(_currentProject.id, _vk.lagring.itemId)))
       : null;
 
     // Filen bär själv med sig var den skulle ligga. Står den i en annan mapp än
@@ -290,6 +322,7 @@ function renderVeckokontroll() {
       else vkRitaAllaTrad();
       if (!_vk.modellSet && !_vk.modellSetFel) vkLaddaModellSet();
       else vkRitaModellSet();
+      if (!_vk.tillgangligaVyer && !_vk.laddarVyer) vkLaddaTillgangligaVyer();
     }, 0);
   }
 }
@@ -411,7 +444,7 @@ function vkDatum(iso) {
 
 function vkOppnaInstallningar() {
   _vk.utkast = _vk.installningar
-    ? JSON.parse(JSON.stringify(_vk.installningar))
+    ? vkNormalisera(JSON.parse(JSON.stringify(_vk.installningar)))
     : vkNyaInstallningar();
 
   // Den plats filen verkligen ligger på väger tyngre än vad filen påstår.
@@ -493,11 +526,11 @@ function vkRenderInstallningar() {
         <div id="vk-modellset" class="border border-ads-border rounded bg-white max-h-48 overflow-auto"></div>
       `)}
 
-      ${vkKort('2. Vyer du bekräftar varje vecka', `
-        Autodesk erbjuder inget API för de sparade vyerna i Model Coordination, så listan hålls här.
-        När ett model set har fått en ny version flaggas vyerna som "behöver bekräftas igen", och din
-        avbockning följer med i veckans logg.`, `
-        <div id="vk-vyer">${vkRenderVyer()}</div>
+      ${vkKort('2. Vyer du går igenom varje vecka', `
+        Vyerna läses ur de valda model setten. Kontrollen kan själv se om en vy innehåller senaste
+        versionen av sina modeller. Att vyn ser rätt ut måste du däremot bedöma själv, och din
+        avbockning följer med i veckans logg tills model settet får en ny version.`, `
+        <div id="vk-vyer">${vkRenderVyval()}</div>
       `)}
 
       ${vkKort('3. Baspunkt', `
@@ -888,41 +921,168 @@ function vkToggleModellSet(idx) {
   else lista.push({ id, namn: ms.name || id });
 
   vkRitaModellSet();
+  vkLaddaTillgangligaVyer();
 }
 
 // ── Vyer ──────────────────────────────────────────────────────────────────────
+// Vyerna hämtas ur de valda model setten, så att man kryssar i riktiga vyer i
+// stället för att skriva av namn och riskera stavfel. En vy som ännu inte finns
+// kan ändå läggas till för hand.
 
-function vkRenderVyer() {
-  const vyer = _vk.utkast.vyer;
+async function vkLaddaTillgangligaVyer() {
+  // Listan ritas om här, så det som står i noteringsfälten måste tas in först.
+  vkHarvestaUtkast();
 
-  const rader = vyer.map((v, i) => `
+  const set = _vk.utkast?.modellSet || [];
+  if (!set.length) {
+    _vk.tillgangligaVyer = [];
+    _vk.vyerFel = null;
+    vkRitaVyval();
+    return;
+  }
+
+  _vk.laddarVyer = true;
+  _vk.vyerFel    = null;
+  vkRitaVyval();
+
+  const hittade = [];
+  const fel     = [];
+  for (const ms of set) {
+    try {
+      const vyer = await listModelSetViews(_currentProject.id, ms.id);
+      vyer.forEach(v => hittade.push({
+        viewId: v.viewId,
+        namn:   v.name || '(namnlös vy)',
+        privat: !!v.isPrivate,
+        antal:  (v.definition || []).length,
+        setId:  ms.id,
+        setNamn: ms.namn,
+      }));
+    } catch (err) {
+      fel.push(`${ms.namn}: ${err.message}`);
+    }
+  }
+
+  _vk.tillgangligaVyer = hittade;
+  _vk.vyerFel          = fel.length ? fel.join('. ') : null;
+  _vk.laddarVyer       = false;
+  vkRitaVyval();
+}
+
+function vkRitaVyval() {
+  const el = document.getElementById('vk-vyer');
+  if (el) el.innerHTML = vkRenderVyval();
+}
+
+function vkRenderVyval() {
+  const valda = _vk.utkast.vyer;
+  const index = v => valda.findIndex(x => x.viewId
+    ? x.viewId === v.viewId
+    : String(x.namn || '').trim().toLowerCase() === v.namn.toLowerCase());
+
+  if (!_vk.utkast.modellSet.length) {
+    return `<p class="text-xs text-ads-muted italic">Välj minst ett model set i steg 1, så listas dess vyer här.</p>`;
+  }
+
+  if (_vk.laddarVyer) {
+    return `<div class="flex items-center gap-2 text-sm text-ads-muted py-2">
+      <svg class="animate-spin w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
+        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" opacity=".25"/>
+        <path stroke="currentColor" stroke-width="3" stroke-linecap="round" d="M22 12a10 10 0 0 0-10-10" opacity=".75"/>
+      </svg>Läser vyer…</div>`;
+  }
+
+  const tillgangliga = _vk.tillgangligaVyer || [];
+
+  // Poster i listan som inte motsvarar någon hämtad vy: tillagda för hand, eller
+  // vyer som bytt namn eller tagits bort.
+  const egna = valda
+    .map((v, i) => ({ v, i }))
+    .filter(({ v }) => !tillgangliga.some(t => (v.viewId ? t.viewId === v.viewId
+      : t.namn.toLowerCase() === String(v.namn || '').trim().toLowerCase())));
+
+  const rad = t => {
+    const i     = index(t);
+    const vald  = i !== -1;
+    const fid   = vkFid('vy:' + t.viewId);
+    return `
+      <div class="flex items-start gap-2 py-1.5 border-t border-ads-border first:border-t-0">
+        <input type="checkbox" ${vald ? 'checked' : ''} onchange="vkToggleVy(${fid})"
+               class="w-3.5 h-3.5 accent-ads-blue mt-1 shrink-0"/>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-sm ${vald ? 'text-ads-blue font-medium' : 'text-ads-text'}">${vkEsc(t.namn)}</span>
+            ${t.privat ? `<span class="text-[10px] bg-gray-100 text-gray-500 rounded px-1.5 py-0.5">Privat</span>` : ''}
+            <span class="text-[11px] text-ads-muted">${vkEsc(t.setNamn)}, ${t.antal} modell${t.antal === 1 ? '' : 'er'}</span>
+          </div>
+          ${vald ? `
+            <input id="vk-vy-not-${i}" value="${vkEsc(valda[i].notering || '')}"
+                   placeholder="Vad du tittar efter i vyn (valfritt)"
+                   class="w-full mt-1 border border-ads-border rounded px-2.5 py-1 text-xs text-ads-muted
+                          focus:outline-none focus:ring-1 focus:ring-ads-blue"/>` : ''}
+        </div>
+      </div>`;
+  };
+
+  const egenRad = ({ v, i }) => `
     <div class="flex items-center gap-2 mb-2">
       <input id="vk-vy-namn-${i}" value="${vkEsc(v.namn)}" placeholder="Vyns namn i Model Coordination"
              class="flex-1 border border-ads-border rounded px-2.5 py-1.5 text-sm
                     focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
-      <input id="vk-vy-not-${i}" value="${vkEsc(v.notering || '')}" placeholder="Vad du tittar efter (valfritt)"
+      <input id="vk-vy-not-${i}" value="${vkEsc(v.notering || '')}" placeholder="Notering (valfritt)"
              class="flex-1 border border-ads-border rounded px-2.5 py-1.5 text-sm text-ads-muted
                     focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
       <button onclick="vkTaBortVy(${i})" title="Ta bort"
               class="shrink-0 w-8 h-8 rounded border border-ads-border text-ads-muted hover:text-red-600 hover:border-red-300">×</button>
-    </div>`).join('');
+    </div>`;
 
   return `
-    ${vyer.length ? rader : `<p class="text-xs text-ads-muted italic mb-2">Ingen vy tillagd ännu.</p>`}
-    <button onclick="vkLaggTillVy()"
-            class="text-sm text-ads-blue hover:underline">+ Lägg till vy</button>`;
+    ${_vk.vyerFel ? `<p class="text-xs text-red-600 mb-2">Kunde inte läsa alla vyer. ${vkEsc(_vk.vyerFel)}</p>` : ''}
+    ${tillgangliga.length
+      ? `<div class="border border-ads-border rounded bg-white px-3 py-1 mb-3 max-h-64 overflow-auto">
+           ${tillgangliga.map(rad).join('')}
+         </div>
+         <p class="text-[11px] text-ads-muted mb-3">
+           Kryssa i de vyer du går igenom. Kryssar du inga tas alla vyer med i kontrollen.
+         </p>`
+      : `<p class="text-xs text-ads-muted italic mb-3">Model setten har inga sparade vyer.</p>`}
+
+    ${egna.length ? `
+      <p class="text-xs font-medium text-ads-text mb-1.5">Tillagda för hand</p>
+      ${egna.map(egenRad).join('')}` : ''}
+
+    <div class="flex items-center gap-4">
+      <button onclick="vkLaggTillVy()" class="text-sm text-ads-blue hover:underline">+ Lägg till vy för hand</button>
+      <button onclick="vkLaddaTillgangligaVyer()" class="text-sm text-ads-muted hover:text-ads-text">Läs om vyerna</button>
+    </div>`;
+}
+
+function vkToggleVy(fid) {
+  const viewId = String(vkFidLookup(fid)).replace(/^vy:/, '');
+  const t = (_vk.tillgangligaVyer || []).find(x => x.viewId === viewId);
+  if (!t) return;
+
+  vkHarvestaUtkast();
+  const valda = _vk.utkast.vyer;
+  const i = valda.findIndex(x => x.viewId ? x.viewId === viewId
+    : String(x.namn || '').trim().toLowerCase() === t.namn.toLowerCase());
+
+  if (i !== -1) valda.splice(i, 1);
+  else valda.push({ viewId, namn: t.namn, setId: t.setId, notering: '' });
+
+  vkRitaVyval();
 }
 
 function vkLaggTillVy() {
   vkHarvestaUtkast();
   _vk.utkast.vyer.push({ namn: '', notering: '' });
-  document.getElementById('vk-vyer').innerHTML = vkRenderVyer();
+  vkRitaVyval();
 }
 
 function vkTaBortVy(i) {
   vkHarvestaUtkast();
   _vk.utkast.vyer.splice(i, 1);
-  document.getElementById('vk-vyer').innerHTML = vkRenderVyer();
+  vkRitaVyval();
 }
 
 // ── Baspunktsfält ─────────────────────────────────────────────────────────────

@@ -141,6 +141,57 @@ async function vkLasModellSet(inst, rapport) {
   return { setLista, problem };
 }
 
+// ── Model Coordination: de sparade vyerna ─────────────────────────────────────
+// En vy är en uppsättning modeller som du tittar på tillsammans. Vyn hör till
+// model settet, och innehållet läses ur den model set-version som gäller nu.
+
+async function vkLasVyer(setLista, rapport) {
+  const projektId = _currentProject.id;
+  const vyer      = [];
+  const problem   = [];
+
+  for (const s of setLista) {
+    if (s.version == null) continue;
+
+    rapport?.(`Läser vyer i ${s.namn}`);
+    try {
+      const definitioner = await listModelSetViews(projektId, s.id);
+      const innehall     = await listModelSetViewVersions(projektId, s.id, s.version);
+      const perVy        = new Map(innehall.map(v => [v.viewId, v]));
+
+      for (const def of definitioner) {
+        const dokument = vkGrupperaDokument(perVy.get(def.viewId)?.documentVersions || []);
+        const efter    = dokument.filter(d => d.arTip === false);
+
+        // Modeller som vyn är definierad med men som inte kom med i versionen.
+        const finns   = new Set(dokument.map(d => d.itemId));
+        const saknade = (def.definition || [])
+          .map(d => vkUtanViewable(d.lineageUrn))
+          .filter(id => id && !finns.has(id));
+
+        vyer.push({
+          viewId:     def.viewId,
+          namn:       def.name || '(namnlös vy)',
+          beskrivning: def.description || '',
+          privat:     !!def.isPrivate,
+          setId:      s.id,
+          setNamn:    s.namn,
+          setVersion: s.version,
+          antalModeller: dokument.length,
+          dokument,
+          efter,
+          saknade,
+          iFas:       efter.length === 0 && saknade.length === 0,
+        });
+      }
+    } catch (err) {
+      problem.push(`Kunde inte läsa vyer i model set ${s.namn}: ${err.message}`);
+    }
+  }
+
+  return { vyer, problem };
+}
+
 function vkSenasteSetVersion(versioner) {
   const nr = v => v.version ?? v.versionNumber ?? 0;
   return [...versioner].sort((a, b) => {

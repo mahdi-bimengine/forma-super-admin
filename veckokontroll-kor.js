@@ -63,8 +63,12 @@ async function vkKor() {
       ? await vkLasModellSet(inst, rapport)
       : { setLista: [], problem: [] };
 
+    const vyData = setData.setLista.length
+      ? await vkLasVyer(setData.setLista, rapport)
+      : { vyer: [], problem: [] };
+
     rapport('Jämför mot förra avläsningen');
-    _vk.kor.resultat = vkJamfor(inst, mappData, setData, forra);
+    _vk.kor.resultat = vkJamfor(inst, mappData, setData, vyData, forra);
   } catch (err) {
     _vk.kor.fel = vkFelText(err);
   }
@@ -75,7 +79,7 @@ async function vkKor() {
 
 // ── Jämförelsen ───────────────────────────────────────────────────────────────
 
-function vkJamfor(inst, mappData, setData, forra, nu = Date.now()) {
+function vkJamfor(inst, mappData, setData, vyData, forra, nu = Date.now()) {
   const grans      = inst.grans?.dagar ?? 7;
   const forraLista = forra?.modeller || [];
   const forraPer   = new Map(forraLista.map(m => [m.itemId, m]));
@@ -124,13 +128,15 @@ function vkJamfor(inst, mappData, setData, forra, nu = Date.now()) {
 
   rader.sort((a, b) => vkAllvar(b) - vkAllvar(a) || a.namn.localeCompare(b.namn, 'sv'));
 
+  const vyer = vkKopplaVyer(inst, vyData, forra);
+
   return {
     tid:      new Date().toISOString(),
     forsta:   !forra,
     forraTid: forra?.tid || null,
-    rader, utanfor, borttagna,
+    rader, utanfor, borttagna, vyer,
     setLista: setData.setLista,
-    problem:  [...(mappData.problem || []), ...(setData.problem || [])],
+    problem:  [...(mappData.problem || []), ...(setData.problem || []), ...(vyData.problem || [])],
     bromsad:  mappData.bromsad,
     antalMappar: mappData.antalMappar,
     grans,
@@ -144,8 +150,62 @@ function vkJamfor(inst, mappData, setData, forra, nu = Date.now()) {
       setEfter:    rader.filter(r => r.setEfter).length,
       borttagna:   borttagna.length,
       utanfor:     utanfor.length,
+      vyerEfter:   vyer.rader.filter(v => !v.iFas).length,
+      vyerObekraftade: vyer.rader.filter(v => v.behoverBekraftas).length,
+      vyerAttGa:   vyer.rader.filter(v => !v.iFas || v.behoverBekraftas).length,
     },
   };
+}
+
+// ── Vyerna ────────────────────────────────────────────────────────────────────
+// Inställningarna säger vilka vyer som ska bevakas. Har inga valts visas alla
+// vyer som finns i model setten, det är mer användbart än en tom lista.
+
+function vkVyNyckel(v) {
+  return v.viewId || `namn:${String(v.namn || '').trim().toLowerCase()}`;
+}
+
+function vkKopplaVyer(inst, vyData, forra) {
+  const valda     = inst.vyer || [];
+  const forraVyer = new Map((forra?.vyer || []).map(v => [vkVyNyckel(v), v]));
+
+  const passar = (val, vy) => val.viewId
+    ? val.viewId === vy.viewId
+    : String(val.namn || '').trim().toLowerCase() === vy.namn.toLowerCase();
+
+  const bevakade = valda.length ? vyData.vyer.filter(vy => valda.some(val => passar(val, vy))) : vyData.vyer;
+
+  const rader = bevakade.map(vy => {
+    // Bekräftelsen hänger på model set-versionen, inte på körningen. Har settet
+    // fått en ny version sedan bekräftelsen behöver vyn ses över igen.
+    const tidigare = forraVyer.get(vkVyNyckel(vy)) || forraVyer.get(`namn:${vy.namn.toLowerCase()}`);
+    const bekraftadFor = tidigare?.bekraftad ? (tidigare.setVersion ?? null) : null;
+
+    return {
+      ...vy,
+      notering:        valda.find(val => passar(val, vy))?.notering || '',
+      bekraftadFor,
+      bekraftadAv:     tidigare?.av || '',
+      bekraftadTid:    tidigare?.tid || null,
+      behoverBekraftas: bekraftadFor == null || bekraftadFor !== vy.setVersion,
+      bekraftad:       false,   // kryssas i under den här körningen
+    };
+  });
+
+  rader.sort((a, b) => (a.iFas === b.iFas ? 0 : a.iFas ? 1 : -1) || a.namn.localeCompare(b.namn, 'sv'));
+
+  const hittadeInte = valda.filter(val => !vyData.vyer.some(vy => passar(val, vy)));
+  const ovriga      = valda.length ? vyData.vyer.filter(vy => !bevakade.includes(vy)) : [];
+
+  return { rader, hittadeInte, ovriga, antalIProjektet: vyData.vyer.length, allaVisas: !valda.length };
+}
+
+function vkToggleVyBekraftad(i) {
+  const v = _vk.kor.resultat?.vyer?.rader?.[i];
+  if (!v) return;
+  v.bekraftad = !v.bekraftad;
+  const el = document.getElementById('vk-vyer-kort');
+  if (el) el.innerHTML = vkRenderVyerInnehall(_vk.kor.resultat);
 }
 
 // Sorteringsvikt, så att det som behöver åtgärdas ligger överst.
@@ -175,6 +235,7 @@ async function vkSparaAvlasning() {
         version: r.version, andrad: r.andrad, av: r.av,
       })),
       modellSet: res.setLista.map(s => ({ id: s.id, namn: s.namn, version: s.version, tid: s.tid })),
+      vyer: res.vyer.rader.map(v => vkBekraftelseAttSpara(v)),
       summering: res.summering,
     });
     while (logg.korningar.length > VK_LOGG_ANTAL) logg.korningar.shift();
@@ -196,6 +257,25 @@ async function vkSparaAvlasning() {
 
   _vk.kor.sparar = false;
   renderVeckokontroll();
+}
+
+// En bekräftelse gäller den model set-version den sattes för. Kryssas vyn i nu
+// skrivs en ny bekräftelse, annars följer den gamla med oförändrad, så att en
+// vy som redan är genomgången inte tappar sin bock bara för att veckan går.
+function vkBekraftelseAttSpara(vy) {
+  if (vy.bekraftad) {
+    return {
+      viewId: vy.viewId, namn: vy.namn, setVersion: vy.setVersion,
+      bekraftad: true, av: _profile?.email || '', tid: new Date().toISOString(),
+    };
+  }
+  return {
+    viewId: vy.viewId, namn: vy.namn,
+    setVersion: vy.bekraftadFor ?? null,
+    bekraftad:  vy.bekraftadFor != null,
+    av:  vy.bekraftadAv || '',
+    tid: vy.bekraftadTid || null,
+  };
 }
 
 // ── Körkortet ─────────────────────────────────────────────────────────────────
@@ -248,6 +328,7 @@ function vkRenderResultat() {
     <div class="mt-5 space-y-5">
       ${vkRenderSammanfattning(res)}
       ${vkRenderModelltabell(res)}
+      ${vkRenderVyer(res)}
       ${vkRenderAvvikelser(res)}
       ${vkRenderSparaKort(res)}
     </div>`;
@@ -286,6 +367,7 @@ function vkRenderSammanfattning(res) {
         ${bricka(s.gamla, `äldre än ${res.grans} dagar`, s.gamla ? 'text-orange-600' : 'text-ads-text')}
         ${bricka(s.saknasISet + s.setEfter, 'avviker mot samordningen', (s.saknasISet + s.setEfter) ? 'text-orange-600' : 'text-ads-text')}
         ${bricka(s.borttagna, 'försvunna sedan förra', s.borttagna ? 'text-red-600' : 'text-ads-text')}
+        ${res.setLista.length ? bricka(s.vyerAttGa, 'vyer att gå igenom', s.vyerAttGa ? 'text-orange-600' : 'text-ads-text') : ''}
       </div>
     </div>`;
 }
@@ -372,6 +454,97 @@ function vkRenderModelltabell(res) {
         </table>
       </div>
     </div>`;
+}
+
+// ── Vy-kortet ─────────────────────────────────────────────────────────────────
+
+function vkRenderVyer(res) {
+  if (!res.setLista.length) return '';
+
+  return `
+    <div class="bg-white border border-ads-border rounded p-5">
+      <h3 class="text-sm font-semibold text-ads-text mb-1">Vyer i samordningen</h3>
+      <p class="text-xs text-ads-muted mb-3 max-w-2xl">
+        Om en vy innehåller senaste versionen av sina modeller går att läsa ur samordningen.
+        Om vyn ser rätt ut måste du däremot titta på den själv, och kryssa i den här.
+        Bocken gäller den model set-version den sattes för, så när settet får en ny version
+        behöver vyn ses över igen.
+      </p>
+      <div id="vk-vyer-kort">${vkRenderVyerInnehall(res)}</div>
+    </div>`;
+}
+
+function vkRenderVyerInnehall(res) {
+  const v = res.vyer;
+
+  if (!v.rader.length && !v.hittadeInte.length) {
+    return `<p class="text-sm text-ads-muted">Inga vyer hittades i de valda model setten.</p>`;
+  }
+
+  const rad = (vy, i) => {
+    const status = vy.iFas
+      ? vkMarke('I fas med senaste modellerna', 'gron')
+      : vy.efter.length
+        ? vkMarke(`${vy.efter.length} modell${vy.efter.length === 1 ? '' : 'er'} ligger efter`, 'orange')
+        : vkMarke(`${vy.saknade.length} modell${vy.saknade.length === 1 ? '' : 'er'} saknas i vyn`, 'orange');
+
+    const bekraftelse = vy.bekraftad
+      ? `<span class="text-[11px] text-green-700 font-medium">Bekräftad nu för v${vy.setVersion}</span>`
+      : vy.behoverBekraftas
+        ? `<span class="text-[11px] text-orange-700">
+             ${vy.bekraftadFor != null
+               ? `Bekräftad för v${vy.bekraftadFor}, settet är på v${vy.setVersion}`
+               : 'Inte bekräftad ännu'}
+           </span>`
+        : `<span class="text-[11px] text-ads-muted">
+             Bekräftad för v${vy.bekraftadFor}${vy.bekraftadAv ? ` av ${vkEsc(vy.bekraftadAv)}` : ''}
+             ${vy.bekraftadTid ? vkEsc(vkKortDatum(vy.bekraftadTid)) : ''}
+           </span>`;
+
+    return `
+      <div class="border-t border-ads-border py-2.5 flex items-start gap-3">
+        <label class="flex items-center pt-0.5 cursor-pointer shrink-0" title="Bekräfta att vyn är genomgången">
+          <input type="checkbox" ${vy.bekraftad ? 'checked' : ''} onchange="vkToggleVyBekraftad(${i})"
+                 class="w-4 h-4 accent-ads-blue"/>
+        </label>
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-sm text-ads-text font-medium">${vkEsc(vy.namn)}</span>
+            ${vy.privat ? vkMarke('Privat vy', 'gra') : ''}
+            ${status}
+          </div>
+          <div class="text-[11px] text-ads-muted mt-0.5">
+            ${vkEsc(vy.setNamn)} v${vy.setVersion}, ${vy.antalModeller} modell${vy.antalModeller === 1 ? '' : 'er'}
+            ${vy.notering ? ` &middot; ${vkEsc(vy.notering)}` : ''}
+          </div>
+          ${vy.efter.length ? `
+            <div class="text-[11px] text-orange-700 mt-1">
+              Ligger efter: ${vy.efter.map(d => `${vkEsc(d.namn)} (v${d.versionISet ?? '?'} av v${d.tipVersion ?? '?'})`).join(', ')}
+            </div>` : ''}
+          <div class="mt-1">${bekraftelse}</div>
+        </div>
+      </div>`;
+  };
+
+  return `
+    ${v.allaVisas && v.rader.length ? `
+      <p class="text-[11px] text-ads-muted mb-1">
+        Inga vyer är utpekade i inställningarna, så alla ${v.antalIProjektet} vyer visas.
+      </p>` : ''}
+    ${v.rader.map(rad).join('')}
+    ${v.hittadeInte.length ? `
+      <div class="border-t border-ads-border pt-3 mt-1">
+        <p class="text-xs text-orange-700">
+          Hittade inte ${v.hittadeInte.length === 1 ? 'vyn' : 'vyerna'}
+          ${v.hittadeInte.map(x => `<strong>${vkEsc(x.namn)}</strong>`).join(', ')}
+          i model setten. Vyn kan ha bytt namn, tagits bort, eller vara privat för någon annan.
+        </p>
+      </div>` : ''}
+    ${v.ovriga.length ? `
+      <p class="text-[11px] text-ads-muted border-t border-ads-border pt-2.5 mt-1">
+        ${v.ovriga.length} ${v.ovriga.length === 1 ? 'vy' : 'vyer'} till finns i settet men bevakas inte:
+        ${v.ovriga.map(x => vkEsc(x.namn)).join(', ')}
+      </p>` : ''}`;
 }
 
 function vkRenderAvvikelser(res) {
