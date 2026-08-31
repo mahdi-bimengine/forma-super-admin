@@ -42,6 +42,7 @@ async function vkKor() {
   _vk.kor.resultat = null;
   _vk.kor.sparad   = false;
   _vk.kor.steg     = 'Läser veckologgen';
+  _vk.bp           = { pagar: false, avbryt: false, klara: 0, totalt: 0, rader: [], steg: '' };
   renderVeckokontroll();
 
   const rapport = text => {
@@ -236,6 +237,11 @@ async function vkSparaAvlasning() {
       })),
       modellSet: res.setLista.map(s => ({ id: s.id, namn: s.namn, version: s.version, tid: s.tid })),
       vyer: res.vyer.rader.map(v => vkBekraftelseAttSpara(v)),
+      baspunkt: _vk.bp.rader.map(r => ({
+        namn: r.namn, status: r.status,
+        position: r.position ? { x: r.position.x, y: r.position.y, z: r.position.z } : null,
+        varsta: r.varsta ?? null, fel: r.fel || null,
+      })),
       summering: res.summering,
     });
     while (logg.korningar.length > VK_LOGG_ANTAL) logg.korningar.shift();
@@ -329,6 +335,7 @@ function vkRenderResultat() {
       ${vkRenderSammanfattning(res)}
       ${vkRenderModelltabell(res)}
       ${vkRenderVyer(res)}
+      ${vkRenderBaspunkt(res)}
       ${vkRenderAvvikelser(res)}
       ${vkRenderSparaKort(res)}
     </div>`;

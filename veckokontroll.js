@@ -46,6 +46,9 @@ const _vk = {
   vyerFel:       null,
   laddarVyer:    false,
 
+  // Baspunktskontrollen, se veckokontroll-baspunkt.js
+  bp: { pagar: false, avbryt: false, klara: 0, totalt: 0, rader: [], steg: '' },
+
   // Körningen, se veckokontroll-kor.js
   kor: {
     pagar:      false,
@@ -146,6 +149,7 @@ function vkReset() {
   _vk.tillgangligaVyer = null;
   _vk.vyerFel       = null;
   _vk.laddarVyer    = false;
+  _vk.bp            = { pagar: false, avbryt: false, klara: 0, totalt: 0, rader: [], steg: '' };
   _vk.kor           = { pagar: false, steg: '', fel: null, resultat: null,
                         logg: null, loggItemId: null, sparad: false, sparar: false };
 }
@@ -1093,12 +1097,8 @@ function vkRenderBaspunktFalt() {
   const koordrad = (nyckel, etikett) => `
     <div>
       <label class="block text-[11px] text-ads-muted mb-1">${etikett}</label>
-      <input id="vk-bp-param-${nyckel}" value="${vkEsc(bp.parametrar[nyckel] || '')}"
-             placeholder="parameterns namn"
-             class="w-full border border-ads-border rounded px-2.5 py-1.5 text-sm mb-1.5
-                    focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
       <input id="vk-bp-forv-${nyckel}" value="${vkEsc(bp.forvantat[nyckel] ?? '')}"
-             placeholder="förväntat värde"
+             placeholder="t.ex. 110809673.333"
              class="w-full border border-ads-border rounded px-2.5 py-1.5 text-sm
                     focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
     </div>`;
@@ -1106,17 +1106,22 @@ function vkRenderBaspunktFalt() {
   return `
     <div class="mb-4">
       <label class="block text-[11px] text-ads-muted mb-1">Familjenamn, eller en del av det</label>
-      <input id="vk-bp-familj" value="${vkEsc(bp.familj)}" placeholder="t.ex. BASPUNKT"
+      <input id="vk-bp-familj" value="${vkEsc(bp.familj)}" placeholder="t.ex. PAG Project Base Point"
              class="w-full max-w-sm border border-ads-border rounded px-2.5 py-1.5 text-sm
                     focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
       <p class="text-[11px] text-ads-muted mt-1">Matchas fritt mot familj- och typnamn, stora och små bokstäver spelar ingen roll.</p>
     </div>
 
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
-      ${koordrad('ost',  'Öst / X')}
-      ${koordrad('nord', 'Nord / Y')}
-      ${koordrad('hojd', 'Höjd / Z')}
+    <p class="text-xs font-medium text-ads-text mb-1.5">Förväntad koordinat, i millimeter</p>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-2">
+      ${koordrad('ost',  'X / Öst')}
+      ${koordrad('nord', 'Y / Nord')}
+      ${koordrad('hojd', 'Z / Höjd')}
     </div>
+    <p class="text-[11px] text-ads-muted mb-4">
+      Familjen bär inga koordinatparametrar, så läget läses ur modellens geometri. Samma värden som
+      visaren i ACC redovisar för elementet, i millimeter.
+    </p>
 
     <div>
       <label class="block text-[11px] text-ads-muted mb-1">Tolerans</label>
