@@ -38,6 +38,36 @@ async function getFolderContents(projectId, folderId) {
   return res.data;
 }
 
+// Mappens innehåll tillsammans med senaste versionen av varje fil. ACC lägger
+// tip-versionerna i included, så ett anrop per mapp räcker i stället för ett
+// anrop per fil. Följer sidbrytningen så att stora mappar kommer med i sin helhet.
+async function getFolderContentsWithTips(projectId, folderId) {
+  let url = `${APS_BASE}/data/v1/projects/${projectId}/folders/${encodeURIComponent(folderId)}/contents`;
+  const poster = [];
+  const tips   = {};
+  let sidor    = 0;
+
+  while (url && sidor < 20) {
+    const res = await apsGetUrl(url);
+    poster.push(...(res.data || []));
+    (res.included || []).forEach(v => { tips[v.id] = v; });
+    url = res.links?.next?.href || null;
+    sidor++;
+  }
+  return { poster, tips, fleraSidor: sidor > 1 };
+}
+
+// Senaste versionen av en fil ur tip-listan. Relationen är det säkra spåret,
+// men version-urn och item-urn delar nyckel, så den duger som reserv.
+function tipVersionOf(item, tips) {
+  const viaRelation = item?.relationships?.tip?.data?.id;
+  if (viaRelation && tips[viaRelation]) return tips[viaRelation];
+
+  const nyckel = String(item?.id || '').split(':').pop();
+  if (!nyckel) return null;
+  return Object.values(tips).find(v => String(v.id).includes(nyckel)) || null;
+}
+
 // Söker rekursivt genom en mapp och alla undermappar. Svaret är senaste
 // versionen av varje träff, så filens item-id plockas ur relationen.
 async function searchFolder(projectId, folderId, displayName) {
@@ -242,6 +272,13 @@ async function getModelSetVersions(projectId, modelSetId) {
   return res.results || [];
 }
 
+// Innehållet i en model set-version: vilken filversion som ingår, vilken som är
+// den senaste, och om samordningen ligger i fas (isTipVersion).
+async function getModelSetVersion(projectId, modelSetId, version) {
+  const id = projectId.startsWith('b.') ? projectId.slice(2) : projectId;
+  return apsGet(`/construction/model-set/v3/projects/${id}/model-sets/${modelSetId}/versions/${version}`);
+}
+
 async function listModelSetItems(projectId, modelSetId, versionId) {
   const id  = projectId.startsWith('b.') ? projectId.slice(2) : projectId;
   const res = await apsGet(`/construction/model-set/v3/projects/${id}/model-sets/${modelSetId}/versions/${versionId}/model-set-items`);
@@ -284,8 +321,13 @@ async function githubPutFile(token, path, content, sha, message) {
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
 
 async function apsGet(path) {
+  return apsGetUrl(`${APS_BASE}${path}`);
+}
+
+// Samma som apsGet men med absolut adress, för att kunna följa next-länkar.
+async function apsGetUrl(url) {
   if (!_token) throw new Error('No APS token set. Call setToken() first.');
-  const res = await fetch(`${APS_BASE}${path}`, {
+  const res = await fetch(url, {
     headers: { Authorization: `Bearer ${_token}` }
   });
   if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);

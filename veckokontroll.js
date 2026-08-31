@@ -42,6 +42,18 @@ const _vk = {
   // Model Coordination
   modellSet:     null,      // model sets i projektet
   modellSetFel:  null,
+
+  // Körningen, se veckokontroll-kor.js
+  kor: {
+    pagar:      false,
+    steg:       '',
+    fel:        null,
+    resultat:   null,
+    logg:       null,       // veckologgen som den ser ut i projektet
+    loggItemId: null,
+    sparad:     false,
+    sparar:     false,
+  },
 };
 
 // ── Små hjälpare ──────────────────────────────────────────────────────────────
@@ -102,6 +114,8 @@ function vkReset() {
   _vk.fids          = [];
   _vk.modellSet     = null;
   _vk.modellSetFel  = null;
+  _vk.kor           = { pagar: false, steg: '', fel: null, resultat: null,
+                        logg: null, loggItemId: null, sparad: false, sparar: false };
 }
 
 // ── Lagring i projektet ───────────────────────────────────────────────────────
@@ -382,23 +396,8 @@ function vkRenderKorvy() {
             : ''))}
     </div>
 
-    <div class="bg-white border border-ads-border rounded p-5">
-      <div class="flex items-center justify-between gap-4">
-        <div>
-          <h3 class="text-sm font-semibold text-ads-text">Kör veckans kontroll</h3>
-          <p class="text-xs text-ads-muted mt-0.5">
-            Läser senaste versionen av varje modell och jämför med förra veckans avläsning.
-          </p>
-        </div>
-        <button disabled
-                class="shrink-0 bg-ads-border text-ads-muted text-sm font-medium rounded px-4 py-2 cursor-not-allowed">
-          Kör veckokontroll
-        </button>
-      </div>
-      <p class="text-[11px] text-ads-muted mt-3 border-t border-dashed border-ads-border pt-3">
-        Kontrollstegen byggs härnäst. Inställningarna ovan är det som körningen kommer att utgå från.
-      </p>
-    </div>`;
+    ${vkRenderKorkort()}
+    ${vkRenderResultat()}`;
 }
 
 function vkDatum(iso) {
