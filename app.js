@@ -417,6 +417,7 @@ function renderProjectView(project) {
   _fids           = [];
   mkReset();
   grReset();
+  vkReset();
   renderSidebar('overview');
   renderOverview();
 }
@@ -438,6 +439,7 @@ function renderSidebar(activeTab) {
     cube:   `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M10 2l7 3.5v9L10 18l-7-3.5v-9L10 2z"/><path stroke-linecap="round" stroke-linejoin="round" d="M10 2v16M3 5.5l7 3.5 7-3.5"/></svg>`,
     layers: `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2 7l8-4 8 4-8 4-8-4z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2 11l8 4 8-4"/><path stroke-linecap="round" stroke-linejoin="round" d="M2 15l8 4 8-4"/></svg>`,
     sheet:  `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="3" width="15" height="14" rx="1.5"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.5 13.5h9v3.5M11.5 13.5h6"/><path stroke-linecap="round" stroke-linejoin="round" d="M13 6.5h3M13 9h3"/></svg>`,
+    week:   `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="4" width="15" height="13.5" rx="1.5"/><path stroke-linecap="round" d="M2.5 8h15M6.5 2.5v3M13.5 2.5v3"/><path stroke-linecap="round" stroke-linejoin="round" d="M7 12.5l1.8 1.8L13 10"/></svg>`,
   };
 
   const navItem = (tab, label, icon) => {
@@ -474,6 +476,7 @@ function renderSidebar(activeTab) {
       ${navItem('issues',          'Issues',          ICONS.clock)}
       ${navItem('modelldata',      'Modellkontroll',  ICONS.cube)}
       ${navItem('ritningsgranskning', 'Ritningsgranskning', ICONS.sheet)}
+      ${navItem('veckokontroll',   'Veckokontroll',   ICONS.week)}
       ${navItem('assets',          'Assets',          ICONS.layers)}
     </div>
 
@@ -492,6 +495,7 @@ function showTab(tab) {
   if (tab === 'overview')        renderOverview();
   if (tab === 'modelldata')      renderModelldata();
   if (tab === 'ritningsgranskning') renderRitningsgranskning();
+  if (tab === 'veckokontroll')   vkOppnaFlik();
   if (tab === 'data-management') renderPlaceholder('Data Management');
   if (tab === 'issues')          renderPlaceholder('Issues');
   if (tab === 'assets')          renderPlaceholder('Assets');
