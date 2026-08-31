@@ -53,6 +53,21 @@ function mkRapTruncName(s, max) {
   return n.length > max ? n.slice(0, max - 1) + '…' : n;
 }
 
+// Longest common prefix across names, trimmed back to the last delimiter so we
+// never cut mid-token. Used to shorten matrix column headers.
+function mkRapCommonPrefix(names) {
+  if (names.length < 2) return '';
+  let prefix = names[0];
+  for (const n of names.slice(1)) {
+    let i = 0;
+    while (i < prefix.length && i < n.length && prefix[i] === n[i]) i++;
+    prefix = prefix.slice(0, i);
+    if (!prefix) return '';
+  }
+  const m = prefix.match(/^(.*[-_ ])/);
+  return m ? m[1] : '';
+}
+
 function mkRapDot(level, size = 8) {
   return `<span style="display:inline-block;width:${size}px;height:${size}px;border-radius:${size}px;background:${MK_RAPPORT_LEVELS[level].dot};flex:0 0 auto"></span>`;
 }
@@ -128,6 +143,13 @@ function mkCollectReportData() {
     };
   });
 
+  // Shorten matrix column headers by stripping the prefix shared by every model name
+  const baseNames  = models.map((m) => m.name.replace(/\.(rvt|ifc|dwg|nwd)$/i, ''));
+  const namePrefix = mkRapCommonPrefix(baseNames);
+  models.forEach((m, i) => {
+    m.displayName = namePrefix ? baseNames[i].slice(namePrefix.length) : baseNames[i];
+  });
+
   const perParam = params.map((p, i) => {
     const counts = emptyCounts();
     models.forEach((m) => counts[m.cells[i].level]++);
@@ -151,15 +173,22 @@ function mkCollectReportData() {
   // Pages 1–3 fixed + one page per matrix chunk + page for kravställda parametrar
   const totalPages = 3 + matrixChunks.length + 1;
 
+  const auditorEmail = (typeof _profile !== 'undefined' && _profile?.email)
+    || document.getElementById('user-label')?.textContent?.trim() || '';
+  const auditorName  = (typeof _profile !== 'undefined' && _profile?.name)
+    || (auditorEmail ? auditorEmail.split('@')[0] : '');
+
   return {
     meta: {
       project: _currentProject?.attributes?.name || _currentProject?.name || 'Okänt projekt',
       hub:     (typeof _hubs !== 'undefined' && _hubs[_hubIdx]?.attributes?.name) || '',
       refFile: _mk.refFile?.name || '',
-      author:  document.getElementById('user-label')?.textContent?.trim() || '',
+      author:      auditorName,
+      authorEmail: auditorEmail,
       date:    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`,
       checkId: `MK-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`,
       logoUrl: new URL('logo.png', location.href).href,
+      namePrefix,
     },
     params: perParam, models, skipped, totals, totalChecks,
     matrixChunks, totalPages,
@@ -240,10 +269,15 @@ function mkRapPage1(d) {
       ${mkRapExtBadge(m.ext)}${mkRapEsc(m.name.replace(/\.(rvt|ifc|dwg|nwd)$/i, ''))}
     </span>`).join('');
 
+  const auditorVal = meta.author
+    ? meta.author + (meta.authorEmail && meta.authorEmail !== meta.author ? ` · ${meta.authorEmail}` : '')
+    : (meta.authorEmail || '');
+
   const metaItems = [
-    ['Referensfil', meta.refFile], ['Kontroll-ID', meta.checkId],
-    ['Antal kravparametrar', `${params.length} st`], ['Antal modeller', `${models.length} st`],
-    ['Konto / hub', meta.hub], ['Genererad', meta.date],
+    ['Granskad av', auditorVal], ['Referensfil', meta.refFile],
+    ['Kontroll-ID', meta.checkId], ['Antal kravparametrar', `${params.length} st`],
+    ['Antal modeller', `${models.length} st`], ['Konto / hub', meta.hub],
+    ['Genererad', meta.date],
   ].filter(([, v]) => v).map(([l, v]) => `
     <div style="border-top:1px solid #e3e3e1;padding:9px 0">
       <div style="font-size:10px;font-weight:700;letter-spacing:.08em;color:#7c7b77;text-transform:uppercase">${l}</div>
@@ -412,10 +446,12 @@ function mkRapPage4(d, chunkModels, pageNum) {
     ? ` — modeller ${chunkStart}–${chunkEnd} av ${d.models.length}`
     : '';
 
+  const headerH = 150;
   const headerCells = chunkModels.map((m) => `
-    <div style="width:${colW}px;display:flex;justify-content:center;flex:0 0 auto">
-      <div style="transform:rotate(-90deg);white-space:nowrap;font-size:10px;font-weight:600;color:#2D2926;
-                  width:116px;text-align:left;overflow:hidden;text-overflow:ellipsis">${mkRapEsc(mkRapTruncName(m.name, 22))}</div>
+    <div style="width:${colW}px;height:${headerH}px;display:flex;align-items:flex-end;justify-content:center;flex:0 0 auto">
+      <span style="writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;
+                   font-size:10px;font-weight:600;color:#2D2926;font-family:ui-monospace,Menlo,monospace;
+                   max-height:${headerH}px;overflow:hidden">${mkRapEsc(mkRapTruncName(m.displayName || m.name, 26))}</span>
     </div>`).join('');
 
   const cell = (level) => {
@@ -466,8 +502,9 @@ function mkRapPage4(d, chunkModels, pageNum) {
       <div class="mkr-body">
         ${mkRapSlimHeader(meta, 'Parameter × modell')}
         ${mkRapSectionHead('Detaljerad matris', 'Parameter × modell',
-          `Status för varje kravställd parameter i respektive modell${mkRapEsc(rangeNote)}.`)}
-        <div style="display:flex;align-items:flex-end;gap:${gap}px;padding-left:${labelW}px;height:120px;margin-bottom:4px">
+          `Status för varje kravställd parameter i respektive modell${mkRapEsc(rangeNote)}.${
+            meta.namePrefix ? ` Modellnamn visas utan gemensamt prefix <strong style="color:#2D2926">${mkRapEsc(meta.namePrefix)}</strong>.` : ''}`)}
+        <div style="display:flex;align-items:flex-end;gap:${gap}px;padding-left:${labelW}px;height:${headerH}px;margin-bottom:4px">
           ${headerCells}
           <div style="width:1px;margin:0 6px;flex:0 0 auto"></div>
           <div style="width:${summaryW}px;text-align:right;font-size:9.5px;font-weight:700;letter-spacing:.06em;
@@ -518,6 +555,7 @@ function mkRapPage5(d) {
           <div style="border-top:2px solid #2D2926;padding-top:16px;display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:28px">
             <div style="font-size:11px;color:#7c7b77;max-width:440px;line-height:1.5">
               Rapporten är maskinellt genererad av BIM&nbsp;Engine Modellkontroll baserat på modellernas senaste publicerade version${meta.hub ? ' i ' + mkRapEsc(meta.hub) : ''}.
+              ${meta.author || meta.authorEmail ? `<br/><span style="color:#2D2926;font-weight:600">Kontakt:</span> ${mkRapEsc(meta.author || '')}${meta.authorEmail ? ` · ${mkRapEsc(meta.authorEmail)}` : ''}` : ''}
             </div>
             <img src="${mkRapEsc(meta.logoUrl)}" alt="" style="height:40px;opacity:.9"/>
           </div>
@@ -529,16 +567,7 @@ function mkRapPage5(d) {
 
 // ── Dokument ──────────────────────────────────────────────────────────────────
 
-function mkBuildReportHtml(d) {
-  return `<!DOCTYPE html>
-<html lang="sv">
-<head>
-<meta charset="UTF-8"/>
-<title>Modellkontroll — ${mkRapEsc(d.meta.project)} — ${mkRapEsc(d.meta.checkId)}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"/>
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;750&display=swap" rel="stylesheet"/>
-<style>
+const MK_RAPPORT_STYLE = `
   * { box-sizing: border-box; margin: 0; }
   html, body { background: #eceeef; }
   body { font-family: Inter, system-ui, sans-serif; color: #3d3d3d; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -557,12 +586,42 @@ function mkBuildReportHtml(d) {
   .mkr-badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 4px;
                font-size: 11px; font-weight: 600; padding: 2px 7px; white-space: nowrap; }
   .mkr-ext { display: inline-block; border-radius: 3px; font-size: 9.5px; font-weight: 700;
-             letter-spacing: .04em; padding: 2px 5px; text-transform: uppercase; }
+             letter-spacing: .04em; padding: 2px 5px; text-transform: uppercase; }`;
+
+function mkRapPagesHtml(d) {
+  return `${mkRapPage1(d)}
+${mkRapPage2(d)}
+${mkRapPage3(d)}
+${d.matrixChunks.map((chunk, ci) => mkRapPage4(d, chunk, 4 + ci)).join('')}
+${mkRapPage5(d)}`;
+}
+
+function mkReportFileBase(d) {
+  return `Modellkontroll_${d.meta.project}_${d.meta.checkId}`.replace(/[^\w.-]+/g, '_');
+}
+
+function mkBuildReportHtml(d) {
+  // Editable Word document (HTML-based .doc) embedded for in-page download
+  const wordJson  = JSON.stringify(mkBuildWordHtml(d)).replace(/</g, '\\u003c');
+  const fileName  = JSON.stringify(mkReportFileBase(d) + '.doc');
+
+  return `<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8"/>
+<title>Modellkontroll — ${mkRapEsc(d.meta.project)} — ${mkRapEsc(d.meta.checkId)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;750&display=swap" rel="stylesheet"/>
+<style>
+${MK_RAPPORT_STYLE}
   .mkr-toolbar { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; z-index: 10; }
   .mkr-toolbar button { font: 600 13px Inter, system-ui, sans-serif; padding: 9px 16px; border-radius: 6px;
                         border: none; cursor: pointer; background: #2D2926; color: #fff;
                         box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+  .mkr-toolbar button.mkr-secondary { background: #fff; color: #2D2926; border: 1px solid #d3d3d1; }
   .mkr-toolbar button:hover { background: #000; }
+  .mkr-toolbar button.mkr-secondary:hover { background: #f3f3f1; color: #2D2926; }
   @media print {
     html, body { background: #fff; }
     .mkr-toolbar { display: none; }
@@ -574,12 +633,47 @@ function mkBuildReportHtml(d) {
 </style>
 </head>
 <body>
-<div class="mkr-toolbar"><button onclick="window.print()">Skriv ut / Spara som PDF</button></div>
-${mkRapPage1(d)}
-${mkRapPage2(d)}
-${mkRapPage3(d)}
-${d.matrixChunks.map((chunk, ci) => mkRapPage4(d, chunk, 4 + ci)).join('')}
-${mkRapPage5(d)}
+<div class="mkr-toolbar">
+  <button onclick="window.print()">Skriv ut / Spara som PDF</button>
+  <button class="mkr-secondary" onclick="mkDownloadWord()">Ladda ner som Word (.doc)</button>
+</div>
+${mkRapPagesHtml(d)}
+<script>
+  var MK_WORD_HTML = ${wordJson};
+  function mkDownloadWord() {
+    var blob = new Blob(['\\ufeff', MK_WORD_HTML], { type: 'application/msword' });
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement('a');
+    a.href = url; a.download = ${fileName};
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+</script>
+</body>
+</html>`;
+}
+
+// Word-flavoured HTML (.doc). Word's engine has weak flexbox support, so the
+// page width is relaxed and @page set to A4 for the best editable approximation.
+function mkBuildWordHtml(d) {
+  return `<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40" lang="sv">
+<head>
+<meta charset="UTF-8"/>
+<title>Modellkontroll — ${mkRapEsc(d.meta.project)} — ${mkRapEsc(d.meta.checkId)}</title>
+<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->
+<style>
+${MK_RAPPORT_STYLE}
+  body { background: #fff; }
+  .mkr-page { width: 100%; min-height: 0; margin: 0 0 24px; box-shadow: none; page-break-after: always; }
+  .mkr-page:last-child { page-break-after: auto; }
+  @page { size: A4; margin: 1.2cm; }
+</style>
+</head>
+<body>
+${mkRapPagesHtml(d)}
 </body>
 </html>`;
 }
