@@ -2,8 +2,11 @@
 
 const _mk = {
   step:          1,
-  refFile:       null,
-  refParams:     [],        // {name, valueType, comment, paramType, selected}[]
+  refFile:       null,      // {name, itemId}
+  refRaw:        null,      // ArrayBuffer of the shared parameter file as loaded
+  refWarnings:   [],
+  refParams:     [],        // {name, guid, valueType, group, comment, paramType, selected}[]
+  pk:            null,      // ACC file picker state
   fileSource:    'dm',      // 'dm' | 'mc'
   folderState:   {},        // folderId → {items, expanded, loaded, loading}
   itemsById:     {},        // id → item (DM + MC)
@@ -30,10 +33,12 @@ const MK_CHECKS_PATH = 'saved-checks.json';
 
 // ── Conformity helpers ────────────────────────────────────────────────────────
 
-function mkConformityLevel(exists, hasValue, conforms) {
-  if (!exists)   return 'grey';
-  if (!hasValue) return 'orange';
-  if (!conforms) return 'yellow';
+// A wrong data type means the model holds another parameter under the same name,
+// so its values say nothing about the required one; that outranks missing values.
+function mkConformityLevel(exists, hasValue, typeMatch) {
+  if (!exists)             return 'grey';
+  if (typeMatch === false) return 'yellow';
+  if (!hasValue)           return 'orange';
   return 'green';
 }
 
@@ -43,18 +48,68 @@ function mkOverallLevel(paramResults) {
     order[p.level] < order[worst] ? p.level : worst, 'green');
 }
 
-function mkValueConforms(value, valueType) {
-  if (value === null || value === undefined) return false;
-  const str  = String(value).trim();
-  if (!str)  return false;
-  const type = (valueType || '').toLowerCase().trim();
-  if (type === 'numeric' || type === 'number') return /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(str);
-  return true; // text / string / alphanumeric — non-empty is sufficient
+// ── Data type helpers ─────────────────────────────────────────────────────────
+// The model's property catalogue (see getModelPropertyFields) reports String,
+// Boolean, Integer or Double plus a unit. Checked against the sample models:
+// TEXT → String, YESNO → Boolean, INTEGER → Integer, NUMBER → Double without
+// unit, LENGTH → Double in mm, AREA → Double in m².
+
+const MK_UNIT_SHORT = {
+  millimeters: 'mm', centimeters: 'cm', meters: 'm', feet: 'ft', inches: 'in',
+  squareMeters: 'm²', squareFeet: 'ft²', cubicMeters: 'm³', cubicFeet: 'ft³',
+  liters: 'l', degrees: '°', degreesCelsius: '°C',
+};
+
+function mkExpectedType(dataType) {
+  const t = String(dataType || '').toUpperCase();
+  if (['TEXT', 'MULTILINETEXT', 'URL'].includes(t)) return { type: 'String' };
+  if (t === 'YESNO')   return { type: 'Boolean' };
+  if (t === 'INTEGER') return { type: 'Integer' };
+  if (t === 'NUMBER')  return { type: 'Double', unit: null };
+  if (t === 'LENGTH')  return { type: 'Double', unit: 'length' };
+  if (t === 'AREA')    return { type: 'Double', unit: 'area' };
+  if (t === 'VOLUME')  return { type: 'Double', unit: 'volume' };
+  if (t === 'ANGLE')   return { type: 'Double', unit: 'angle' };
+  return null; // material, family type and discipline types are not checked
+}
+
+function mkUnitName(uom) {
+  return String(uom || '').split(':').pop().split('-')[0];
+}
+
+function mkUnitKind(uom) {
+  const u = mkUnitName(uom).toLowerCase();
+  if (!u) return null;
+  if (/celsius|fahrenheit|kelvin|rankine/.test(u)) return 'temperature';
+  if (/^square|acres|hectares/.test(u))            return 'area';
+  if (/^cubic|liters|gallons/.test(u))             return 'volume';
+  if (/degrees|radians|gradians/.test(u))          return 'angle';
+  if (/meters|feet|inches/.test(u))                return 'length';
+  return 'other';
+}
+
+// Describes a catalogue field in the shared parameter file's own vocabulary.
+function mkDescribeField(f) {
+  if (f.type === 'String')  return 'TEXT';
+  if (f.type === 'Boolean') return 'YESNO';
+  if (f.type === 'Integer') return 'INTEGER';
+  if (f.type === 'Double') {
+    const unit = MK_UNIT_SHORT[mkUnitName(f.uom)] || mkUnitName(f.uom);
+    const name = { length: 'LENGTH', area: 'AREA', volume: 'VOLUME', angle: 'ANGLE' }[mkUnitKind(f.uom)] || 'NUMBER';
+    return unit ? `${name} (${unit})` : name;
+  }
+  return f.type;
+}
+
+function mkFieldMatches(f, expected) {
+  if (f.type !== expected.type) return false;
+  if (expected.type !== 'Double') return true;
+  return expected.unit === null ? !f.uom : mkUnitKind(f.uom) === expected.unit;
 }
 
 function mkConformityBadge(level) {
   const map    = { green: 'bg-green-100 text-green-700', yellow: 'bg-yellow-100 text-yellow-700', orange: 'bg-orange-100 text-orange-700', grey: 'bg-gray-100 text-gray-500' };
-  const labels = { green: 'OK', yellow: 'Typfel', orange: 'Saknar värde', grey: 'Saknar param' };
+  const labels = { green: 'OK', yellow: 'Fel datatyp', orange: 'Saknar värde', grey: 'Saknar param' };
   return `<span class="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded ${map[level]}">${labels[level]}</span>`;
 }
 
@@ -84,6 +139,8 @@ function mkFidLookup(i) { return _mk.fids[i]; }
 function mkReset() {
   _mk.step          = 1;
   _mk.refFile       = null;
+  _mk.refRaw        = null;
+  _mk.refWarnings   = [];
   _mk.refParams     = [];
   _mk.fileSource    = 'dm';
   _mk.folderState   = {};
@@ -133,7 +190,7 @@ function renderModellkontroll() {
       <div class="flex items-center justify-between mb-6">
         <div>
           <h2 class="text-lg font-semibold text-ads-text">Modellkontroll</h2>
-          <p class="text-ads-muted text-sm mt-0.5">Kontrollera modeller mot kravlista för parametrar.</p>
+          <p class="text-ads-muted text-sm mt-0.5">Kontrollera modeller mot en Revit shared parameter-fil.</p>
         </div>
         <button onclick="mkShowSavedChecks()"
                 class="text-sm border border-ads-border bg-white rounded px-3 py-1.5 hover:border-ads-blue
@@ -176,7 +233,7 @@ function renderModellkontroll() {
 
 function mkStepIndicator() {
   const steps = [
-    { n: 1, label: 'Referensfil' },
+    { n: 1, label: 'Parameterfil' },
     { n: 2, label: 'Välj modeller' },
     { n: 3, label: 'Resultat' },
   ];
@@ -200,10 +257,21 @@ function mkStepIndicator() {
     </div>`;
 }
 
-// ── Step 1: Reference file ────────────────────────────────────────────────────
+// ── Step 1: Shared parameter file ─────────────────────────────────────────────
+
+function mkEsc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 function mkRenderStep1() {
   const hasParams = _mk.refParams.length > 0;
+  const btn = 'text-xs border border-ads-border bg-white rounded px-2.5 py-1 hover:border-ads-blue hover:text-ads-blue transition-colors text-ads-text';
+  const warn = _mk.refWarnings.length ? `
+      <div class="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3 mb-4 text-xs text-yellow-800">
+        <p class="font-semibold mb-1">${_mk.refWarnings.length} anmärkning${_mk.refWarnings.length === 1 ? '' : 'ar'} på filen</p>
+        ${_mk.refWarnings.slice(0, 6).map(w => `<p>${mkEsc(w)}</p>`).join('')}
+        ${_mk.refWarnings.length > 6 ? `<p>… och ${_mk.refWarnings.length - 6} till</p>` : ''}
+      </div>` : '';
   return `
     <div>
       <div class="bg-white border-2 ${hasParams ? 'border-green-300 bg-green-50' : 'border-dashed border-ads-border'} rounded-lg p-8 text-center mb-4"
@@ -213,36 +281,35 @@ function mkRenderStep1() {
           <svg class="w-7 h-7 text-green-500 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
           </svg>
-          <p class="text-sm font-medium text-green-700">${_mk.refFile?.name || 'Referensfil laddad'}</p>
+          <p class="text-sm font-medium text-green-700">${mkEsc(_mk.refFile?.name || 'Parameterfil laddad')}</p>
           <p class="text-xs text-green-600 mt-0.5">${_mk.refParams.length} parametrar funna</p>
-          <button onclick="document.getElementById('mk-ref-input').click()" class="mt-2 text-xs text-ads-blue hover:underline">Byt fil</button>
+          <div class="flex items-center gap-2 justify-center mt-3">
+            <button onclick="document.getElementById('mk-ref-input').click()" class="${btn}">Byt fil (ladda upp)</button>
+            <button onclick="mkOpenPicker('open')" class="${btn}">Byt fil (från ACC)</button>
+            <button onclick="mkOpenPicker('save')" class="${btn}">Spara i ACC</button>
+          </div>
         ` : `
           <svg class="w-8 h-8 text-ads-muted mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
           </svg>
-          <p class="text-sm text-ads-muted mb-1">Dra och släpp CSV eller XLSX-fil hit</p>
-          <p class="text-xs text-ads-muted mb-1">Referensdokument ska ha formaterade kolumner enligt:</p>
-          <p class="text-xs text-ads-muted mb-3 font-medium">Parameternamn | Värdetyp | Kommentar | Nivå (Instans/Typ/Projekt)</p>
-          <button onclick="document.getElementById('mk-ref-input').click()"
-                  class="text-sm bg-ads-blue text-white px-4 py-1.5 rounded hover:bg-ads-blue-dark transition-colors">
-            Välj fil
-          </button>
-          <div class="flex items-center gap-2 justify-center mt-4">
-            <span class="text-xs text-ads-muted">eller använd förinställd:</span>
-            <button onclick="mkLoadPreset('kravst%C3%A4llda%20objektparametrar%20PAG.xlsx', 'kravställda objektparametrar PAG.xlsx')"
-                    class="text-xs border border-ads-border bg-white rounded px-2.5 py-1 hover:border-ads-blue hover:text-ads-blue
-                           transition-colors flex items-center gap-1.5 text-ads-text">
-              <svg class="w-3.5 h-3.5 text-emerald-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-              </svg>
-              kravställda objektparametrar PAG.xlsx
+          <p class="text-sm text-ads-muted mb-1">Dra och släpp en Revit shared parameter-fil (.txt) hit</p>
+          <p class="text-xs text-ads-muted mb-3">Alla parametrar i filen kontrolleras mot modellerna, och varje parameter måste ha ett värde.</p>
+          <div class="flex items-center gap-2 justify-center">
+            <button onclick="document.getElementById('mk-ref-input').click()"
+                    class="text-sm bg-ads-blue text-white px-4 py-1.5 rounded hover:bg-ads-blue-dark transition-colors">
+              Ladda upp fil
+            </button>
+            <button onclick="mkOpenPicker('open')"
+                    class="text-sm border border-ads-border bg-white px-4 py-1.5 rounded hover:border-ads-blue hover:text-ads-blue transition-colors text-ads-text">
+              Välj från ACC
             </button>
           </div>
         `}
-        <input id="mk-ref-input" type="file" accept=".csv,.xlsx,.xls" class="hidden"
-               onchange="if(this.files[0]) mkHandleRefFile(this.files[0])" />
+        <input id="mk-ref-input" type="file" accept=".txt" class="hidden"
+               onchange="if(this.files[0]) mkHandleRefFile(this.files[0]); this.value=''" />
       </div>
 
+      ${warn}
       ${hasParams ? mkRenderParamTable() : ''}
 
       ${hasParams && _mk.refParams.some(p => p.selected) ? `
@@ -259,6 +326,7 @@ function mkRenderParamTable() {
   const q        = _mk.paramSearch.trim().toLowerCase();
   const filtered = q ? _mk.refParams.filter(p => p.name.toLowerCase().includes(q)) : _mk.refParams;
   const all      = filtered.length > 0 && filtered.every(p => p.selected);
+  const th       = 'py-2.5 px-3 text-left text-xs font-semibold text-ads-muted uppercase tracking-wide';
   return `
     <div class="bg-white border border-ads-border rounded-lg overflow-hidden">
       <div class="px-3 pt-3 pb-2 border-b border-ads-border">
@@ -267,7 +335,7 @@ function mkRenderParamTable() {
                fill="none" viewBox="0 0 20 20" stroke="currentColor" stroke-width="2">
             <circle cx="9" cy="9" r="5"/><path stroke-linecap="round" d="M16 16l-2-2"/>
           </svg>
-          <input type="search" value="${_mk.paramSearch}" placeholder="Sök parameter…"
+          <input type="search" value="${mkEsc(_mk.paramSearch)}" placeholder="Sök parameter…"
                  oninput="mkSetParamSearch(this.value)"
                  class="w-full pl-7 pr-3 py-1.5 text-xs border border-ads-border rounded
                         focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
@@ -280,15 +348,16 @@ function mkRenderParamTable() {
               <input type="checkbox" ${all ? 'checked' : ''} id="mk-all-cb"
                      onchange="mkToggleAllParams(this.checked)" class="accent-ads-blue" />
             </th>
-            <th class="py-2.5 px-3 text-left text-xs font-semibold text-ads-muted uppercase tracking-wide">Parameter</th>
-            <th class="py-2.5 px-3 text-left text-xs font-semibold text-ads-muted uppercase tracking-wide">Värdetyp</th>
-            <th class="py-2.5 px-3 text-left text-xs font-semibold text-ads-muted uppercase tracking-wide">Param-typ</th>
-            <th class="py-2.5 px-3 text-left text-xs font-semibold text-ads-muted uppercase tracking-wide">Kommentar</th>
+            <th class="${th}">Parameter</th>
+            <th class="${th}">Datatyp</th>
+            <th class="${th}">GUID</th>
+            <th class="${th}">Grupp</th>
+            <th class="${th}">Beskrivning</th>
           </tr>
         </thead>
         <tbody>
           ${filtered.length === 0
-            ? `<tr><td colspan="5" class="py-6 px-3 text-center text-xs text-ads-muted italic">Inga parametrar matchar sökningen.</td></tr>`
+            ? `<tr><td colspan="6" class="py-6 px-3 text-center text-xs text-ads-muted italic">Inga parametrar matchar sökningen.</td></tr>`
             : filtered.map(p => {
                 const actualIdx = _mk.refParams.indexOf(p);
                 return `
@@ -296,10 +365,11 @@ function mkRenderParamTable() {
                     <td class="py-2 px-3">
                       <input type="checkbox" ${p.selected ? 'checked' : ''} onchange="mkToggleParam(${actualIdx})" class="accent-ads-blue" />
                     </td>
-                    <td class="py-2 px-3 font-medium text-ads-text">${p.name}</td>
-                    <td class="py-2 px-3 text-ads-muted">${p.valueType || '—'}</td>
-                    <td class="py-2 px-3 text-ads-muted">${p.paramType || '—'}</td>
-                    <td class="py-2 px-3 text-ads-muted text-xs">${p.comment || ''}</td>
+                    <td class="py-2 px-3 font-medium text-ads-text">${mkEsc(p.name)}</td>
+                    <td class="py-2 px-3"><span class="text-xs font-mono bg-ads-gray text-ads-text rounded px-1.5 py-0.5">${mkEsc(p.valueType || '—')}</span></td>
+                    <td class="py-2 px-3 text-ads-muted text-[11px] font-mono">${mkEsc(p.guid)}</td>
+                    <td class="py-2 px-3 text-ads-muted text-xs">${mkEsc(p.group || '—')}</td>
+                    <td class="py-2 px-3 text-ads-muted text-xs">${mkEsc(p.comment)}</td>
                   </tr>`;
               }).join('')}
         </tbody>
@@ -327,95 +397,263 @@ function mkSetParamSearch(q) {
   if (content) content.innerHTML = mkRenderStep1();
 }
 
-// ── Reference file parsing ────────────────────────────────────────────────────
+// ── Shared parameter file parsing ─────────────────────────────────────────────
+// Revit saves the file as UTF-16 with a BOM; other editors may save UTF-8 or ANSI.
+// Lines are tab separated. GROUP rows give id → name, PARAM rows are
+// PARAM  GUID  NAME  DATATYPE  DATACATEGORY  GROUP  VISIBLE  DESCRIPTION  USERMODIFIABLE  HIDEWHENNOVALUE
 
-function mkHandleRefFile(file) {
-  _mk.refFile = file;
-  const ext   = (file.name.split('.').pop() || '').toLowerCase();
-  const reader = new FileReader();
+function mkDecodeSharedParamFile(buffer) {
+  const b = new Uint8Array(buffer);
+  if (b[0] === 0xFF && b[1] === 0xFE) return new TextDecoder('utf-16le').decode(b.subarray(2));
+  if (b[0] === 0xFE && b[1] === 0xFF) return new TextDecoder('utf-16be').decode(b.subarray(2));
+  if (b[0] === 0xEF && b[1] === 0xBB && b[2] === 0xBF) return new TextDecoder('utf-8').decode(b.subarray(3));
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(b); }
+  catch { return new TextDecoder('windows-1252').decode(b); }
+}
 
-  if (ext === 'csv') {
-    reader.onload = e => {
-      try {
-        _mk.refParams = mkParseCSV(e.target.result);
-        renderModellkontroll();
-      } catch (err) {
-        alert('Kunde inte läsa CSV-fil: ' + err.message);
+function mkParseSharedParams(text) {
+  const guidRe   = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const groups   = {};
+  const params   = [];
+  const warnings = [];
+  const seenGuid = new Set();
+  const seenName = new Set();
+
+  text.split(/\r?\n/).forEach((line, n) => {
+    if (!line.trim() || line[0] === '#' || line[0] === '*') return;
+    const c = line.split('\t');
+
+    if (c[0] === 'GROUP') {
+      groups[(c[1] || '').trim()] = (c[2] || '').trim();
+    } else if (c[0] === 'PARAM') {
+      const guid = (c[1] || '').trim().toLowerCase();
+      const name = (c[2] || '').trim();
+      if (!guidRe.test(guid) || !name) {
+        warnings.push(`Rad ${n + 1}: ogiltig GUID eller saknat namn – hoppades över.`);
+        return;
       }
-    };
-    reader.readAsText(file, 'UTF-8');
-  } else if (ext === 'xlsx' || ext === 'xls') {
-    reader.onload = e => {
-      try {
-        if (typeof XLSX === 'undefined') throw new Error('XLSX-biblioteket laddades inte.');
-        const wb   = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
-        const ws   = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-        _mk.refParams = mkRowsToParams(rows);
-        renderModellkontroll();
-      } catch (err) {
-        alert('Kunde inte läsa XLSX-fil: ' + err.message);
+      if (seenGuid.has(guid)) {
+        warnings.push(`Rad ${n + 1}: GUID för "${name}" finns redan i filen – hoppades över.`);
+        return;
       }
-    };
-    reader.readAsArrayBuffer(file);
-  } else {
-    alert('Endast CSV och XLSX stöds.');
+      seenGuid.add(guid);
+      if (seenName.has(name.toLowerCase())) {
+        warnings.push(`Parameternamnet "${name}" förekommer flera gånger i filen. Matchning sker på namn, så resultatet kan bli osäkert.`);
+      }
+      seenName.add(name.toLowerCase());
+      params.push({
+        name,
+        guid,
+        valueType: (c[3] || '').trim().toUpperCase(),
+        group:     (c[5] || '').trim(),
+        comment:   (c[7] || '').trim(),
+        paramType: '',
+        selected:  true,
+      });
+    }
+  });
+
+  params.forEach(p => { p.group = groups[p.group] || p.group; });
+  return { params, warnings };
+}
+
+function mkApplySharedParams(buffer, name, itemId) {
+  const { params, warnings } = mkParseSharedParams(mkDecodeSharedParamFile(buffer));
+  if (!params.length) throw new Error('Hittade inga parametrar. Är det en Revit shared parameter-fil?');
+  _mk.refRaw      = buffer;
+  _mk.refFile     = { name, itemId: itemId || null };
+  _mk.refParams   = params;
+  _mk.refWarnings = warnings;
+  _mk.paramSearch = '';
+  renderModellkontroll();
+}
+
+async function mkHandleRefFile(file) {
+  try {
+    mkApplySharedParams(await file.arrayBuffer(), file.name, null);
+  } catch (err) {
+    mkToast('Kunde inte läsa filen: ' + err.message, 'red');
   }
 }
 
-async function mkLoadPreset(encodedUrl, displayName) {
-  const btn = event?.target?.closest('button');
-  if (btn) { btn.textContent = 'Laddar…'; btn.disabled = true; }
+async function mkFetchItemBuffer(projectId, itemId) {
+  const { urls } = await getItemDownload(projectId, itemId);
+  if (!urls.length) throw new Error('Filen har ingen nedladdningsadress.');
+  const res = await fetch(urls[0]);
+  if (!res.ok) throw new Error(`Kunde inte hämta filen (${res.status}).`);
+  return res.arrayBuffer();
+}
+
+// ── ACC file picker (open a .txt / pick a folder to save in) ──────────────────
+
+function mkOpenPicker(mode) {
+  _mk.pk = { mode, state: {}, sel: null };
+  document.getElementById('mk-picker')?.remove();
+  const open = mode === 'open';
+  const d = document.createElement('div');
+  d.id = 'mk-picker';
+  d.className = 'fixed inset-0 bg-black/40 z-50 flex items-center justify-center';
+  d.innerHTML = `
+    <div class="bg-white rounded-lg shadow-xl w-[560px] max-w-[92vw] flex flex-col" style="max-height:80vh">
+      <div class="px-5 pt-4 pb-3 border-b border-ads-border">
+        <h3 class="font-semibold text-ads-text">${open ? 'Välj shared parameter-fil i ACC' : 'Spara shared parameter-fil i ACC'}</h3>
+        <p class="text-xs text-ads-muted mt-0.5">${open ? 'Öppna mappar och klicka på en .txt-fil.' : 'Välj mappen filen ska sparas i. Finns filen redan läggs en ny version till.'}</p>
+      </div>
+      <div id="mk-pk-body" class="flex-1 overflow-y-auto py-2" style="min-height:200px"></div>
+      <div class="px-5 py-3 border-t border-ads-border">
+        ${open ? '' : `
+          <input id="mk-pk-name" type="text" value="${mkEsc(_mk.refFile?.name || 'Shared Parameters.txt')}"
+                 class="w-full border border-ads-border rounded px-3 py-1.5 text-sm mb-2 focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
+          <p id="mk-pk-sel" class="text-xs text-ads-muted mb-3">Ingen mapp vald</p>`}
+        <div class="flex justify-end gap-2">
+          <button onclick="document.getElementById('mk-picker').remove()" class="text-sm text-ads-muted px-3 py-1.5 hover:text-ads-text">Avbryt</button>
+          ${open ? '' : `<button id="mk-pk-save" onclick="mkPkSave()" disabled
+                  class="text-sm bg-ads-blue text-white px-4 py-1.5 rounded hover:bg-ads-blue-dark disabled:opacity-40">Spara</button>`}
+        </div>
+      </div>
+    </div>`;
+  mkModal(d);
+  mkPkLoadTop();
+}
+
+async function mkPkLoadTop() {
+  const pk = _mk.pk;
+  pk.state.__top__ = { loading: true, items: [] };
+  mkPkRender();
   try {
-    const res = await fetch(encodedUrl);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buffer = await res.arrayBuffer();
-    if (typeof XLSX === 'undefined') throw new Error('XLSX-biblioteket laddades inte.');
-    const wb   = XLSX.read(new Uint8Array(buffer), { type: 'array' });
-    const ws   = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
-    _mk.refParams = mkRowsToParams(rows);
-    _mk.refFile   = { name: displayName };
+    const items = await getTopFolders(_hubs[_hubIdx].id, _currentProject.id);
+    items.forEach(item => { _mk.itemsById[item.id] = item; });
+    pk.state.__top__ = { loaded: true, items };
+  } catch (err) {
+    pk.state.__top__ = { error: err.message, items: [] };
+  }
+  mkPkRender();
+}
+
+function mkPkRender() {
+  const el = document.getElementById('mk-pk-body');
+  if (!el) return;
+  const top = _mk.pk.state.__top__;
+  if (top.loading) { el.innerHTML = `<p class="text-sm text-ads-muted px-5 py-6">Laddar mappar…</p>`; return; }
+  if (top.error)   { el.innerHTML = `<p class="text-sm text-red-600 px-5 py-6">Fel: ${mkEsc(top.error)}</p>`; return; }
+  el.innerHTML = mkPkRows(top.items, 0) || `<p class="text-sm text-ads-muted px-5 py-6">Inga mappar hittades.</p>`;
+}
+
+function mkPkRows(items, depth) {
+  const pk  = _mk.pk;
+  const pad = 16 + depth * 20;
+  return items.map(item => {
+    if (item.attributes?.hidden) return '';
+    const name = item.attributes?.displayName || item.attributes?.name || '';
+    const i    = mkFid(item.id);
+
+    if (item.type === 'folders') {
+      const st  = pk.state[item.id] || {};
+      const sel = pk.mode === 'save' && pk.sel === item.id;
+      return `
+        <div onclick="mkPkToggle(${i})"
+             class="flex items-center gap-2 py-1.5 pr-4 cursor-pointer select-none ${sel ? 'bg-blue-50' : 'hover:bg-ads-gray'}"
+             style="padding-left:${pad}px">
+          <svg class="w-3.5 h-3.5 shrink-0 text-ads-muted transition-transform ${st.expanded ? 'rotate-90' : ''}" fill="none" viewBox="0 0 20 20">
+            <path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M7 5l6 5-6 5"/>
+          </svg>
+          <svg class="w-4 h-4 shrink-0 text-amber-400" viewBox="0 0 20 15" fill="currentColor">
+            <path d="M0 2.5A1.5 1.5 0 0 1 1.5 1h4.764a1.5 1.5 0 0 1 1.06.44l.94.94A1.5 1.5 0 0 0 9.322 3H18.5A1.5 1.5 0 0 1 20 4.5v8A1.5 1.5 0 0 1 18.5 14H1.5A1.5 1.5 0 0 1 0 12.5v-10z"/>
+          </svg>
+          <span class="text-sm truncate flex-1 ${sel ? 'text-ads-blue font-medium' : 'text-ads-text'}">${mkEsc(name)}</span>
+          ${st.loading ? `<span class="text-xs text-ads-muted">laddar…</span>` : ''}
+          ${pk.mode === 'save' ? `<button onclick="event.stopPropagation(); mkPkSelectFolder(${i})"
+                  class="text-xs border border-ads-border rounded px-2 py-0.5 hover:border-ads-blue hover:text-ads-blue">${sel ? 'Vald' : 'Välj'}</button>` : ''}
+        </div>
+        ${st.expanded ? mkPkRows(st.items || [], depth + 1) : ''}`;
+    }
+
+    if (item.type === 'items' && pk.mode === 'open' && /\.txt$/i.test(name)) {
+      return `
+        <div onclick="mkPkPickFile(${i})"
+             class="flex items-center gap-2 py-1.5 pr-4 cursor-pointer select-none hover:bg-ads-gray"
+             style="padding-left:${pad + 18}px">
+          <svg class="w-4 h-4 shrink-0 text-ads-muted" viewBox="0 0 16 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.5 1H3a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6.5L9.5 1z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.5 1v5.5H15"/>
+          </svg>
+          <span class="text-sm text-ads-text truncate flex-1">${mkEsc(name)}</span>
+        </div>`;
+    }
+    return '';
+  }).join('');
+}
+
+async function mkPkToggle(i) {
+  const pk = _mk.pk;
+  const id = mkFidLookup(i);
+  const st = pk.state[id] || { items: [], expanded: false, loaded: false, loading: false };
+
+  if (!st.loaded) {
+    pk.state[id] = { ...st, expanded: true, loading: true };
+    mkPkRender();
+    try {
+      const contents = await getFolderContents(_currentProject.id, id);
+      contents.forEach(item => { _mk.itemsById[item.id] = item; });
+      pk.state[id] = { items: contents, expanded: true, loaded: true, loading: false };
+    } catch {
+      pk.state[id] = { ...st, expanded: false, loaded: false, loading: false };
+    }
+  } else {
+    pk.state[id] = { ...st, expanded: !st.expanded };
+  }
+  mkPkRender();
+}
+
+function mkPkSelectFolder(i) {
+  const pk = _mk.pk;
+  pk.sel = mkFidLookup(i);
+  const item = _mk.itemsById[pk.sel];
+  const sel  = document.getElementById('mk-pk-sel');
+  if (sel) sel.textContent = 'Vald mapp: ' + (item?.attributes?.displayName || item?.attributes?.name || '');
+  const save = document.getElementById('mk-pk-save');
+  if (save) save.disabled = false;
+  mkPkRender();
+}
+
+async function mkPkPickFile(i) {
+  const item = _mk.itemsById[mkFidLookup(i)];
+  if (!item) return;
+  const name = item.attributes?.displayName || item.attributes?.name || '';
+  const body = document.getElementById('mk-pk-body');
+  if (body) body.innerHTML = `<p class="text-sm text-ads-muted px-5 py-6">Läser ${mkEsc(name)}…</p>`;
+  try {
+    const buffer = await mkFetchItemBuffer(_currentProject.id, item.id);
+    mkApplySharedParams(buffer, name, item.id);
+    document.getElementById('mk-picker')?.remove();
+  } catch (err) {
+    mkToast('Kunde inte läsa filen: ' + err.message, 'red');
+    mkPkRender();
+  }
+}
+
+async function mkPkSave() {
+  const pk       = _mk.pk;
+  const fileName = document.getElementById('mk-pk-name')?.value.trim();
+  const save     = document.getElementById('mk-pk-save');
+  if (!pk.sel || !fileName || !_mk.refRaw) return;
+  if (save) { save.disabled = true; save.textContent = 'Sparar…'; }
+
+  try {
+    const st       = pk.state[pk.sel];
+    const contents = st?.loaded ? st.items : await getFolderContents(_currentProject.id, pk.sel);
+    const existing = contents.find(it => it.type === 'items' &&
+      (it.attributes?.displayName || it.attributes?.name) === fileName);
+
+    const itemId = await writeTextFile(_currentProject.id, pk.sel, fileName, new Blob([_mk.refRaw]), existing?.id);
+    _mk.refFile = { name: fileName, itemId };
+    document.getElementById('mk-picker')?.remove();
+    mkToast(existing ? 'Ny version av filen sparad i ACC.' : 'Filen sparad i ACC.', 'green');
     renderModellkontroll();
   } catch (err) {
-    mkToast('Kunde inte ladda förinställd fil: ' + err.message, 'red');
-    if (btn) { btn.textContent = displayName; btn.disabled = false; }
+    mkToast('Kunde inte spara: ' + err.message, 'red');
+    if (save) { save.disabled = false; save.textContent = 'Spara'; }
   }
-}
-
-function mkParseCSV(text) {
-  const lines = text.trim().split(/\r?\n/);
-  if (!lines.length) return [];
-  const delim = lines[0].includes('\t') ? '\t' : lines[0].includes(';') ? ';' : ',';
-  const rows  = lines.map(line => mkParseCsvLine(line, delim));
-  return mkRowsToParams(rows);
-}
-
-function mkParseCsvLine(line, delim) {
-  const result = [];
-  let cur = '', inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    if (line[i] === '"') { inQ = !inQ; }
-    else if (line[i] === delim && !inQ) { result.push(cur.trim()); cur = ''; }
-    else { cur += line[i]; }
-  }
-  result.push(cur.trim());
-  return result;
-}
-
-function mkRowsToParams(rows) {
-  if (!rows.length) return [];
-  const firstCell = String(rows[0][0] || '').toLowerCase().trim();
-  const isHeader  = ['parameter', 'name', 'param', 'property', 'namn', 'parametrar'].some(h => firstCell.includes(h));
-  return (isHeader ? rows.slice(1) : rows)
-    .filter(row => row[0] && String(row[0]).trim())
-    .map(row => ({
-      name:      String(row[0] || '').trim(),
-      valueType: String(row[1] || 'text').trim() || 'text',
-      comment:   String(row[2] || '').trim(),
-      paramType: String(row[3] || '').trim(),
-      selected:  true,
-    }));
 }
 
 // ── Step 2: File selection ────────────────────────────────────────────────────
@@ -1032,8 +1270,17 @@ async function mkCheckSingleModel(file, params) {
     const collection     = propsRes?.data?.collection;
     result.elementCount  = collection.length;
 
+    // Data types come from the property catalogue. If it can't be built the
+    // check still runs, with the data type left unchecked.
+    let fields = null;
+    try {
+      fields = await getModelPropertyFields(file.projectId, versionUrn);
+    } catch (err) {
+      result.typeError = err.message;
+    }
+
     for (const param of params) {
-      result.paramResults.push(mkCheckParam(param, collection));
+      result.paramResults.push(mkCheckParam(param, collection, fields));
     }
 
     result.status = 'done';
@@ -1045,7 +1292,7 @@ async function mkCheckSingleModel(file, params) {
   return result;
 }
 
-function mkCheckParam(param, collection) {
+function mkCheckParam(param, collection, fields) {
   const elements = [];
 
   for (const obj of collection) {
@@ -1053,36 +1300,39 @@ function mkCheckParam(param, collection) {
     for (const cat of Object.values(obj.properties)) {
       if (typeof cat !== 'object' || Array.isArray(cat)) continue;
       if (param.name in cat) {
-        const value = cat[param.name];
         elements.push({
-          dbId:     obj.objectid,
-          name:     obj.name || '',
-          extId:    obj.externalId || '',
-          value,
-          conforms: mkValueConforms(value, param.valueType),
+          dbId:  obj.objectid,
+          name:  obj.name || '',
+          extId: obj.externalId || '',
+          value: cat[param.name],
         });
         break;
       }
     }
   }
 
-  const withValue   = elements.filter(e => e.value !== null && e.value !== undefined && String(e.value).trim() !== '');
-  const conforming  = withValue.filter(e => e.conforms);
-  const exists      = elements.length > 0;
-  const hasValue    = withValue.length > 0;
-  const conforms    = hasValue && conforming.length === withValue.length;
+  const withValue = elements.filter(e => e.value !== null && e.value !== undefined && String(e.value).trim() !== '');
+  const exists    = elements.length > 0;
+  const hasValue  = withValue.length > 0;
+
+  // typeMatch: true / false, or null when it couldn't be checked. The same name
+  // can sit under several property groups; every one of them must match.
+  const expected   = mkExpectedType(param.valueType);
+  const matching   = fields ? fields.filter(f => f.name === param.name && !String(f.category).startsWith('__')) : [];
+  const modelTypes = [...new Set(matching.map(mkDescribeField))];
+  const typeMatch  = expected && matching.length ? matching.every(f => mkFieldMatches(f, expected)) : null;
 
   return {
     param,
     exists,
     hasValue,
-    conforms,
-    level:        mkConformityLevel(exists, hasValue, conforms),
+    typeMatch,
+    modelTypes,
+    level:      mkConformityLevel(exists, hasValue, typeMatch),
     elements,
-    totalCount:   collection.length,
-    existCount:   elements.length,
-    valueCount:   withValue.length,
-    conformCount: conforming.length,
+    totalCount: collection.length,
+    existCount: elements.length,
+    valueCount: withValue.length,
   };
 }
 
@@ -1107,7 +1357,7 @@ function mkRenderSummaryStrip() {
   const pct = n => Math.max(1, Math.round((n / total) * 100));
   const segments = [
     { count: green,  cls: 'bg-green-500',  dot: 'bg-green-500',  label: 'OK' },
-    { count: yellow, cls: 'bg-yellow-400', dot: 'bg-yellow-400', label: 'Typfel' },
+    { count: yellow, cls: 'bg-yellow-400', dot: 'bg-yellow-400', label: 'Fel datatyp' },
     { count: orange, cls: 'bg-orange-400', dot: 'bg-orange-400', label: 'Saknar värde' },
     { count: grey,   cls: 'bg-gray-300',   dot: 'bg-gray-300',   label: 'Saknar param' },
   ].filter(s => s.count > 0);
@@ -1262,6 +1512,7 @@ function mkResultCard(result, i) {
           <span class="font-medium text-sm text-ads-text truncate">${result.file.name}</span>
         </div>
         <div class="flex items-center gap-2 shrink-0 ml-2">
+          ${result.typeError ? `<span class="text-xs text-amber-600" title="${mkEsc(result.typeError)}">Datatyp ej kontrollerad</span>` : ''}
           <span class="text-xs text-ads-muted">${okCount}/${result.paramResults.length} OK</span>
           <span class="text-xs text-ads-muted">${result.elementCount} elem.</span>
           <button onclick="event.stopPropagation(); mkRerunModel(${i})"
@@ -1280,26 +1531,39 @@ function mkResultCard(result, i) {
     </div>`;
 }
 
+// File data type, then what the model reports when it differs or can't be checked.
+function mkDataTypeCell(p) {
+  const file = `<span class="font-mono">${mkEsc(p.param.valueType || '—')}</span>`;
+  if (p.typeMatch === true)  return `${file} <span class="text-green-600">✓</span>`;
+  if (p.typeMatch === false) return `${file} <span class="text-red-500 font-semibold">≠ ${mkEsc(p.modelTypes.join(', '))}</span>`;
+  if (p.modelTypes?.length)  return `${file} <span class="text-ads-muted">· modell: ${mkEsc(p.modelTypes.join(', '))} (ej kontrollerad)</span>`;
+  return file;
+}
+
 function mkResultDetail(result, modelIdx) {
   const rows = result.paramResults.map(p => `
     <tr class="border-t border-ads-border">
-      <td class="py-2 px-3 text-sm font-medium text-ads-text">${p.param.name}</td>
+      <td class="py-2 px-3 text-sm font-medium text-ads-text">${mkEsc(p.param.name)}</td>
       <td class="py-2 px-3 text-center text-sm">${p.exists ? '<span class="text-green-600">✓</span>' : '<span class="text-red-400">✗</span>'}</td>
       <td class="py-2 px-3 text-center text-sm">${p.hasValue ? '<span class="text-green-600">✓</span>' : '<span class="text-ads-muted">—</span>'}</td>
-      <td class="py-2 px-3 text-center text-sm">${p.hasValue ? (p.conforms ? '<span class="text-green-600">✓</span>' : '<span class="text-red-400">✗</span>') : '<span class="text-ads-muted">—</span>'}</td>
+      <td class="py-2 px-3 text-xs">${mkDataTypeCell(p)}</td>
       <td class="py-2 px-3">${mkConformityBadge(p.level)}</td>
       <td class="py-2 px-3 text-xs text-ads-muted">${p.existCount}/${p.totalCount}</td>
     </tr>`).join('');
 
   return `
     <div class="border-t border-ads-border">
+      ${result.typeError ? `
+        <p class="px-3 py-2 text-xs text-amber-700 bg-amber-50 border-b border-amber-200">
+          Datatyperna kunde inte kontrolleras: ${mkEsc(result.typeError)}
+        </p>` : ''}
       <table class="w-full text-xs">
         <thead>
           <tr class="bg-ads-gray text-ads-muted">
             <th class="py-2 px-3 text-left font-semibold">Parameter</th>
             <th class="py-2 px-3 text-center font-semibold w-16">Finns</th>
             <th class="py-2 px-3 text-center font-semibold w-16">Värde</th>
-            <th class="py-2 px-3 text-center font-semibold w-16">Typkrav</th>
+            <th class="py-2 px-3 text-left font-semibold">Datatyp</th>
             <th class="py-2 px-3 text-left font-semibold w-28">Status</th>
             <th class="py-2 px-3 text-left font-semibold w-20">Täckning</th>
           </tr>
@@ -1343,7 +1607,7 @@ function mkOpenViewer(modelIdx) {
       <div class="flex items-center justify-between px-4 py-3 border-b border-ads-border shrink-0">
         <div>
           <span class="font-medium text-sm text-ads-text">${result.file.name}</span>
-          <span class="ml-3 text-xs text-ads-muted">Färgkodning: grön = OK · gul = typfel · orange = saknar värde · grå = saknar param</span>
+          <span class="ml-3 text-xs text-ads-muted">Färgkodning: grön = OK · gul = fel datatyp · orange = saknar värde · grå = saknar param</span>
         </div>
         <button onclick="mkCloseViewer()" class="text-ads-muted hover:text-ads-text p-1">
           <svg class="w-5 h-5" fill="none" viewBox="0 0 20 20"><path stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M4 4l12 12M16 4L4 16"/></svg>
@@ -1351,7 +1615,8 @@ function mkOpenViewer(modelIdx) {
       </div>
       <div id="mk-viewer-container" class="flex-1 relative"></div>
     </div>`;
-  document.body.appendChild(overlay);
+  // Escape is left to the viewer (it clears the selection there).
+  mkModal(overlay, mkCloseViewer, false);
 
   setTimeout(() => mkInitViewer('mk-viewer-container', result.versionUrn, result), 50);
 }
@@ -1451,7 +1716,7 @@ function mkShowSaveDialog() {
                 class="text-sm bg-ads-blue text-white px-4 py-1.5 rounded hover:bg-ads-blue-dark">Spara</button>
       </div>
     </div>`;
-  document.body.appendChild(d);
+  mkModal(d);
   setTimeout(() => document.getElementById('mk-save-name')?.focus(), 50);
 }
 
@@ -1517,7 +1782,7 @@ async function mkOpenSavedPanel() {
         </div>
       </div>
     </div>`;
-  document.body.appendChild(d);
+  mkModal(d);
 
   try {
     const file = await githubGetFile(_mk.githubToken, MK_CHECKS_PATH);
@@ -1599,7 +1864,7 @@ function mkShowApsCredentialsPrompt(onConfirm) {
                 class="text-sm bg-ads-blue text-white px-4 py-1.5 rounded hover:bg-ads-blue-dark">Bekräfta</button>
       </div>
     </div>`;
-  document.body.appendChild(d);
+  mkModal(d);
   _mk._apsCredCallback = onConfirm;
   setTimeout(() => document.getElementById('mk-aps-id-input')?.focus(), 50);
 }
@@ -1638,7 +1903,7 @@ function mkShowTokenPrompt(action, payload) {
                 class="text-sm bg-ads-blue text-white px-4 py-1.5 rounded hover:bg-ads-blue-dark">Bekräfta</button>
       </div>
     </div>`;
-  document.body.appendChild(d);
+  mkModal(d);
   setTimeout(() => document.getElementById('mk-token-input')?.focus(), 50);
 }
 
@@ -1651,6 +1916,28 @@ function mkConfirmToken(action, payload) {
   if (action === 'save') mkSaveCheck(payload);
   if (action === 'load') mkOpenSavedPanel();
 }
+
+// ── Dialogs ───────────────────────────────────────────────────────────────────
+// Every dialog can be left without doing anything: its own cancel/close button,
+// a click on the dimmed background, or Escape (the topmost dialog closes first).
+
+const _mkModals = [];
+
+function mkModal(d, onClose = () => d.remove(), escape = true) {
+  _mkModals.push({ d, onClose, escape });
+  d.addEventListener('mousedown', e => { if (e.target === d) onClose(); });
+  document.body.appendChild(d);
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  while (_mkModals.length && !document.body.contains(_mkModals[_mkModals.length - 1].d)) _mkModals.pop();
+  const top = _mkModals[_mkModals.length - 1];
+  if (!top?.escape) return;
+  _mkModals.pop();
+  e.preventDefault();
+  top.onClose();
+});
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 

@@ -258,6 +258,33 @@ async function getDerivativeProperties(urn, guid) {
   return res.data.collection;
 }
 
+// ── Model Properties (index) ──────────────────────────────────────────────────
+// ACC bygger en katalog över alla egenskaper i en modellversion. Varje post har
+// name, category, type (String, Boolean, Integer, Double, DbKey) och uom (enhet,
+// t.ex. autodesk.unit.unit:millimeters-1.0.1). Parameterns GUID finns inte med.
+// batch-status startar indexeringen om den inte redan finns; den tar oftast
+// under en minut. Fältlistan kommer som en JSON-post per rad.
+
+async function getModelPropertyFields(projectId, versionUrn) {
+  const base = `/construction/index/v2/projects/${mcContainer(projectId)}`;
+  let idx = null;
+  for (let i = 0; i < 36; i++) {
+    const res = await apsPost(`${base}/indexes:batch-status`, { versions: [{ versionUrn }] });
+    idx = res.indexes?.[0];
+    if (!idx || idx.state !== 'PROCESSING') break;
+    await new Promise(r => setTimeout(r, 5000));
+  }
+  if (idx?.state !== 'FINISHED') {
+    throw new Error(`Egenskapskatalogen kunde inte byggas (${idx?.state || 'inget svar'}).`);
+  }
+
+  const res = await fetch(`${APS_BASE}${base}/indexes/${idx.indexId}/fields`, {
+    headers: { Authorization: `Bearer ${_token}` }
+  });
+  if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);
+  return (await res.text()).split('\n').filter(l => l.trim()).map(l => JSON.parse(l));
+}
+
 // ── Model Coordination ────────────────────────────────────────────────────────
 // Adressen är /bim360/modelset/v3/containers/... även för ACC-projekt. Den
 // tidigare varianten under /construction/model-set/v3/projects/... finns inte,
