@@ -312,6 +312,23 @@ async function listModelSetViewVersions(projectId, modelSetId, version) {
   );
 }
 
+// Ändrar vilka modeller en vy innehåller. Model Coordination vill ha både den
+// gamla och den nya listan, så att en ändring som någon annan hunnit göra under
+// tiden inte skrivs över. Svaret är ett jobb som körs klart i bakgrunden, så vi
+// frågar efter det tills det inte längre står Running.
+async function updateModelSetViewDefinition(projectId, modelSetId, viewId, gammal, ny) {
+  const bas = `${MC_BASE}/${mcContainer(projectId)}/modelsets/${modelSetId}/views/${viewId}`;
+  let jobb  = await apsSend('PATCH', bas, { oldDefinition: gammal, newDefinition: ny });
+
+  for (let i = 0; jobb.status === 'Running' && i < 40; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    jobb = await apsGet(`${bas}/jobs/${jobb.jobId}`);
+  }
+  if (jobb.status === 'Running')   throw new Error('Model Coordination blev inte klar i tid. Läs om och kontrollera vyn.');
+  if (jobb.status !== 'Succeeded') throw new Error(`Model Coordination svarade ${jobb.status || 'okänt'}.`);
+  return jobb;
+}
+
 // Model Coordination sidbryter med continuationToken. Samma token två gånger,
 // eller för många sidor, betyder att vi slutar hellre än att snurra vidare.
 async function mcSidor(path, plocka) {
@@ -437,9 +454,13 @@ async function apsPostJsonApi(path, body) {
 }
 
 async function apsPost(path, body) {
+  return apsSend('POST', path, body);
+}
+
+async function apsSend(method, path, body) {
   if (!_token) throw new Error('No APS token set. Call setToken() first.');
   const res = await fetch(`${APS_BASE}${path}`, {
-    method:  'POST',
+    method,
     headers: { Authorization: `Bearer ${_token}`, 'Content-Type': 'application/json' },
     body:    JSON.stringify(body)
   });
