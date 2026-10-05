@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BIM Engine | Forma Super Admin</title>
+  <title>BE Forma Console</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -43,7 +43,7 @@
     <div class="flex items-center gap-4">
       <img src="logo.png" alt="BIM Engine" class="h-7 w-auto brightness-0 invert" />
       <span class="text-white/30 text-xs">|</span>
-      <span class="text-white/70 text-xs tracking-wide">Forma Super Admin</span>
+      <span class="text-white/70 text-xs tracking-wide">BE Forma Console</span>
     </div>
     <div class="flex items-center gap-4">
       <span id="user-label" class="text-white/60 text-xs"></span>
@@ -70,8 +70,7 @@
           <div class="flex flex-col items-center gap-3">
             <img src="logo.png" alt="BIM Engine" class="h-20 w-auto" />
             <div class="text-center">
-              <div class="font-semibold text-be-charcoal text-base tracking-wide">Forma Super Admin</div>
-              <div class="text-ads-muted text-xs mt-0.5">Internal tool</div>
+              <div class="font-semibold text-be-charcoal text-base tracking-wide">Forma Console</div>
             </div>
           </div>
 
@@ -79,7 +78,6 @@
 
           <!-- Auth button -->
           <div class="flex flex-col items-center gap-3 w-full">
-            <p class="text-ads-muted text-xs text-center">Sign in with your Autodesk account to continue.</p>
             <button
               id="auth-btn"
               onclick="login()"
@@ -88,10 +86,6 @@
               Sign in with Autodesk
             </button>
           </div>
-
-          <p class="text-ads-muted text-[11px] text-center">
-            Access is restricted to authorised BIM Engine staff.
-          </p>
         </div>
       </div>
 
@@ -118,6 +112,7 @@
   <script src="veckokontroll-kor.js"></script>
   <script src="veckokontroll-baspunkt.js"></script>
   <script src="veckokontroll-not.js"></script>
+  <script src="vyhantering.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

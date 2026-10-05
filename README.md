@@ -1,2 +1,2 @@
 # forma-super-admin
-BIM Engine's Forma Super Admin panel
+BIM Engine's BE Forma Console
