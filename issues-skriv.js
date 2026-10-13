@@ -119,9 +119,7 @@ function isUppdateraArende(projektId, ra) {
   if (!p) return;
   const i = p.arenden.findIndex(a => a.id === ra.id);
   if (i < 0) return;
-  const typNamn = new Map();
-  for (const t of p.typer) { typNamn.set(t.id, t.title); for (const st of t.subtypes || []) typNamn.set(st.id, st.title); }
-  p.arenden[i] = isNormalisera(ra, { id: p.id, attributes: { name: p.namn } }, p.accId, typNamn, p.namnRegister);
+  p.arenden[i] = isNormalisera(ra, { id: p.id, attributes: { name: p.namn } }, p.accId, p.typNamn, p.namnRegister);
 }
 
 // ── Logg och återställning ────────────────────────────────────────────────────

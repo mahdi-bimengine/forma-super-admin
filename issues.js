@@ -100,14 +100,14 @@ async function isHamta() {
       const p = projekt[i++];
       try { nya.set(p.id, await isLasProjekt(hub.id, p)); }
       catch (err) { fel.push(`${p.attributes?.name}: ${bhKortFel(err)}`); }
-      _is.framsteg.klara++;
-      const el = document.getElementById('is-framsteg');
-      if (el) el.textContent = `Hämtar ärenden… ${_is.framsteg.klara} av ${_is.framsteg.totalt} projekt`;
+      isVisaFramsteg();
     }
   };
   await Promise.all([arbetare(), arbetare(), arbetare()]);
 
   Object.assign(_is, { projekt: nya, laddar: false, hamtad: new Date(), fel: fel.length ? fel : null });
+  // Var "Visa stängda" påslaget hämtas de stängda direkt också.
+  if (_is.visaStangda) { _is.visaStangda = false; return isVaxlaStangda(); }
   isRita();
 }
 
@@ -160,9 +160,31 @@ function isSortera(kol) {
   isRita();
 }
 
-function isVaxlaStangda() {
+// Stängda ärenden hämtas först första gången de ska visas.
+async function isVaxlaStangda() {
   _is.visaStangda = !_is.visaStangda;
+  const saknas = [..._is.projekt.values()].filter(p => !p.medStangda);
+  if (!_is.visaStangda || !saknas.length) return isRita();
+
+  Object.assign(_is, { laddar: true, framsteg: { klara: 0, totalt: saknas.length, text: 'Hämtar stängda ärenden…' } });
   isRita();
+  const fel = [];
+  await Promise.all(saknas.map(p => isLasStangda(p)
+    .catch(err => fel.push(`${p.namn}: ${bhKortFel(err)}`))
+    .finally(() => isVisaFramsteg())));
+  Object.assign(_is, { laddar: false, fel: fel.length ? fel : _is.fel });
+  isRita();
+}
+
+function isVisaFramsteg() {
+  _is.framsteg.klara++;
+  const el = document.getElementById('is-framsteg');
+  if (el) el.textContent = isFramstegText();
+}
+
+function isFramstegText() {
+  const f = _is.framsteg || {};
+  return `${f.text || 'Hämtar ärenden…'} ${f.klara || 0} av ${f.totalt || 0} projekt`;
 }
 
 function isVaxlaRedigera() {
@@ -320,8 +342,7 @@ function isHuvudHtml() {
 
 function isKroppHtml() {
   if (_is.laddar) {
-    return `<div class="max-w-xl mx-auto mt-16">${vkLaddarKort('Hämtar ärenden…').replace('Hämtar ärenden…',
-      `<span id="is-framsteg">Hämtar ärenden… ${_is.framsteg?.klara || 0} av ${_is.framsteg?.totalt || 0} projekt</span>`)}</div>`;
+    return `<div class="max-w-xl mx-auto mt-16">${vkLaddarKort('§').replace('§', `<span id="is-framsteg">${isFramstegText()}</span>`)}</div>`;
   }
   const fel = _is.fel ? `
     <div class="mx-5 mt-4 p-3 rounded border border-red-200 bg-red-50 text-xs text-red-800">

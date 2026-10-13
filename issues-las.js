@@ -33,68 +33,108 @@ function isAccId(projektId) {
   return String(projektId).replace(/^b\./, '');
 }
 
-async function isListaArenden(accId) {
-  const ut = [];
-  for (let offset = 0; ; offset += 100) {
-    const res = await bhMedOmforsok(() =>
-      apsGet(`/construction/issues/v1/projects/${accId}/issues?limit=100&offset=${offset}`));
-    ut.push(...(res.results || []));
-    if (ut.length >= (res.pagination?.totalResults ?? 0) || !(res.results || []).length) return ut;
+// Bara fälten fliken använder. Utan urval kommer beskrivning, kopplade
+// dokument, egna fält med mera med, vilket gör svaren många gånger större.
+const IS_FALT_URVAL = [
+  'displayId', 'title', 'issueTypeId', 'issueSubtypeId', 'status', 'assignedTo', 'assignedToType',
+  'dueDate', 'createdBy', 'createdAt', 'closedAt', 'permittedStatuses', 'permittedAttributes',
+].join(',');
+
+// Alla statusar utom stängd. Stängda ärenden hämtas först när de ska visas.
+const IS_EJ_STANGDA = IS_STATUS_ORDNING.filter(s => s !== 'closed').join(',');
+
+const IS_PARALLELLA_SIDOR = 4;
+
+// Första sidan ger antalet. Resten av sidorna hämtas sedan parallellt.
+async function isListaArenden(accId, statusar) {
+  const sida = offset => bhMedOmforsok(() => apsGet(
+    `/construction/issues/v1/projects/${accId}/issues?limit=100&offset=${offset}` +
+    `&fields=${IS_FALT_URVAL}&filter[status]=${statusar}`));
+
+  const forsta = await sida(0);
+  const ut     = [...(forsta.results || [])];
+  const totalt = forsta.pagination?.totalResults ?? ut.length;
+  const kvar   = [];
+  for (let offset = 100; offset < totalt; offset += 100) kvar.push(offset);
+
+  const sidor = new Array(kvar.length);
+  let i = 0;
+  const arbetare = async () => {
+    while (i < kvar.length) {
+      const n = i++;
+      sidor[n] = (await sida(kvar[n])).results || [];
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(IS_PARALLELLA_SIDOR, kvar.length) }, arbetare));
+  for (const s of sidor) ut.push(...s);
+  return ut;
+}
+
+// Namn på roller, företag och personer ur behörigheterna på toppmapparna.
+async function isNamnFranMappar(hubId, projekt, accId, namn) {
+  const toppar = (await getTopFolders(hubId, projekt.id)).filter(f => !f.attributes?.hidden);
+  const listor = await Promise.all(toppar.map(f =>
+    bhMedOmforsok(() => getFolderPermissions(accId, f.id)).catch(() => [])));
+  for (const s of listor.flat()) {
+    if (!s.autodeskId) continue;
+    const typ = { USER: 'user', ROLE: 'role', COMPANY: 'company' }[s.subjectType];
+    if (typ && !namn.has(s.autodeskId)) namn.set(s.autodeskId, { namn: s.name || s.email, typ, email: s.email || '' });
   }
 }
 
-// Läser ett projekt. Namnuppslagen är frivilliga: misslyckas de visas id:t.
+// Läser ett projekt. Ärenden, typer och namnuppslag hämtas samtidigt.
+// Namnuppslagen är frivilliga: misslyckas de visas id:t.
 async function isLasProjekt(hubId, projekt) {
   const accId = isAccId(projekt.id);
   const namn  = new Map();   // Autodesk-ID → { namn, typ, email }
   const varningar = [];
 
-  const [typer, arenden] = await Promise.all([
+  const [typer, arenden, , medlemmar] = await Promise.all([
     bhMedOmforsok(() => listIssueTypes(projekt.id)),
-    isListaArenden(accId),
+    isListaArenden(accId, IS_EJ_STANGDA),
+    isNamnFranMappar(hubId, projekt, accId, namn).catch(err => {
+      varningar.push(`Roller och företag kunde inte slås upp: ${err.message.slice(0, 120)}`);
+    }),
+    bhMedOmforsok(() => listProjectUsers(accId)).catch(() => {
+      varningar.push('Medlemslistan kunde inte läsas (kräver projektadmin). Personer utan mappbehörighet visas med id.');
+      return [];
+    }),
   ]);
 
-  // Behörigheterna på toppmapparna ger namn på roller, företag och personer.
-  try {
-    const toppar = (await getTopFolders(hubId, projekt.id)).filter(f => !f.attributes?.hidden);
-    for (const f of toppar) {
-      const beh = await bhMedOmforsok(() => getFolderPermissions(accId, f.id)).catch(() => []);
-      for (const s of beh) {
-        if (!s.autodeskId) continue;
-        const typ = { USER: 'user', ROLE: 'role', COMPANY: 'company' }[s.subjectType];
-        if (typ && !namn.has(s.autodeskId)) namn.set(s.autodeskId, { namn: s.name || s.email, typ, email: s.email || '' });
-      }
-    }
-  } catch (err) {
-    varningar.push(`Roller och företag kunde inte slås upp: ${err.message.slice(0, 120)}`);
+  // Medlemslistan har alla personer, även de utan mappbehörigheter, och går före.
+  for (const u of medlemmar) {
+    if (u.autodeskId) namn.set(u.autodeskId, { namn: u.name || u.email, typ: 'user', email: u.email || '', foretag: u.companyName || '' });
   }
 
-  // Medlemslistan har alla personer, även de utan mappbehörigheter.
-  let medlemmar = [];
-  try {
-    medlemmar = await bhMedOmforsok(() => listProjectUsers(accId));
-    for (const u of medlemmar) {
-      if (u.autodeskId) namn.set(u.autodeskId, { namn: u.name || u.email, typ: 'user', email: u.email || '', foretag: u.companyName || '' });
-    }
-  } catch (err) {
-    varningar.push('Medlemslistan kunde inte läsas (kräver projektadmin). Personer utan mappbehörighet visas med id.');
-  }
-
-  // Typ och subtyp per id.
-  const typNamn = new Map();
-  for (const t of typer) {
-    typNamn.set(t.id, t.title);
-    for (const st of t.subtypes || []) typNamn.set(st.id, st.title);
-  }
-
-  return {
+  const p = {
     id: projekt.id, accId,
     namn: projekt.attributes?.name || accId,
-    arenden: arenden.filter(a => !a.deleted).map(a => isNormalisera(a, projekt, accId, typNamn, namn)),
+    arenden: [],
     namnRegister: namn,
     typer,
+    typNamn: isTypNamnKarta(typer),
     varningar,
+    medStangda: false,
   };
+  p.arenden = arenden.map(a => isNormalisera(a, projekt, accId, p.typNamn, namn));
+  return p;
+}
+
+// Hämtar de stängda ärendena till ett redan inläst projekt.
+async function isLasStangda(p) {
+  const stangda = await isListaArenden(p.accId, 'closed');
+  const projekt = { id: p.id, attributes: { name: p.namn } };
+  p.arenden.push(...stangda.map(a => isNormalisera(a, projekt, p.accId, p.typNamn, p.namnRegister)));
+  p.medStangda = true;
+}
+
+function isTypNamnKarta(typer) {
+  const karta = new Map();
+  for (const t of typer) {
+    karta.set(t.id, t.title);
+    for (const st of t.subtypes || []) karta.set(st.id, st.title);
+  }
+  return karta;
 }
 
 function isNormalisera(a, projekt, accId, typNamn, namn) {
