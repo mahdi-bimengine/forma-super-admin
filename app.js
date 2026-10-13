@@ -509,7 +509,7 @@ function showTab(tab) {
   if (tab === 'vyhantering')     vhOppnaFlik();
   if (tab === 'behorigheter')    bhOppnaFlik();
   if (tab === 'data-management') renderPlaceholder('Data Management');
-  if (tab === 'issues')          renderPlaceholder('Issues');
+  if (tab === 'issues')          isOppnaFlik();
   if (tab === 'assets')          renderPlaceholder('Assets');
 }
 
