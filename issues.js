@@ -23,6 +23,7 @@ const _is = {
   visaStangda: false,
   filter:      { status: null, forfallen: null, projekt: null },
   sok:         '',
+  kolFilter:   {},       // kolumn → söktext i tabellens sökrad
   sortering:   { kol: 'forfaller', upp: true },
   visaAntal:   300,
   redigera:    false,
@@ -132,8 +133,9 @@ function isSokProjekt(text) {
 }
 
 function isValjVy(id) {
-  _is.vyId   = id;
-  _is.filter = { status: null, forfallen: null, projekt: null };
+  _is.vyId      = id;
+  _is.filter    = { status: null, forfallen: null, projekt: null };
+  _is.kolFilter = {};
   isRita();
 }
 
@@ -144,15 +146,38 @@ function isSattFilter(nyckel, ref) {
 }
 
 function isRensaFilter() {
-  _is.filter = { status: null, forfallen: null, projekt: null };
-  _is.sok = '';
+  _is.filter    = { status: null, forfallen: null, projekt: null };
+  _is.sok       = '';
+  _is.kolFilter = {};
   isRita();
 }
 
 function isSok(text) {
   _is.sok = text;
-  const el = document.getElementById('is-tabell');
-  if (el) el.innerHTML = isTabellHtml();
+  isRitaRader();
+}
+
+// Sökfälten under kolumnrubrikerna. Bara raderna ritas om, så att fältet
+// man skriver i behåller fokus.
+function isKolumnSok(kol, text) {
+  if (text) _is.kolFilter[kol] = text; else delete _is.kolFilter[kol];
+  isRitaRader();
+}
+
+// Klick på ett värde i tabellen filtrerar kolumnen på just det värdet.
+function isFiltreraPa(kol, ref) {
+  const varde = _is.ref[ref];
+  if (_is.kolFilter[kol] === varde) delete _is.kolFilter[kol]; else _is.kolFilter[kol] = varde;
+  isRita();
+}
+
+function isRitaRader() {
+  const kropp = document.getElementById('is-tbody');
+  const fot   = document.getElementById('is-fot');
+  if (!kropp) return;
+  const { html, fotHtml } = isRaderHtml();
+  kropp.innerHTML = html;
+  if (fot) fot.innerHTML = fotHtml;
 }
 
 function isSortera(kol) {
@@ -260,6 +285,35 @@ function isVyArenden() {
   return isAllaArenden().filter(a => (_is.visaStangda || a.status !== 'closed') && isMatcharVy(a, vy));
 }
 
+// Texten varje kolumn söks i. Status och dagar har egna val i stället.
+const IS_KOLUMN_TEXT = {
+  nr:        a => String(a.nr),
+  typ:       a => `${a.typ} ${a.subtyp}`,
+  rubrik:    a => a.rubrik,
+  tilldelad: a => a.tilldelad,
+  skapadAv:  a => a.skapadAv,
+  skapat:    a => a.skapat,
+  forfaller: a => a.forfaller,
+  projekt:   a => a.projekt,
+};
+
+const IS_DAGAR_VAL = {
+  forfallna: { text: 'Förfallna',          test: a => isArForfallet(a) },
+  snart:     { text: 'Inom 3 dagar',       test: a => { const d = isDagarKvar(a.forfaller); return d != null && d >= 0 && d <= 3 && !IS_KLARA.has(a.status); } },
+  utan:      { text: 'Utan förfallodatum', test: a => !a.forfaller },
+};
+
+function isMatcharKolumner(a) {
+  for (const [kol, varde] of Object.entries(_is.kolFilter)) {
+    if (kol === 'status') { if (a.status !== varde) return false; continue; }
+    if (kol === 'dagar')  { if (!IS_DAGAR_VAL[varde]?.test(a)) return false; continue; }
+    const text = IS_KOLUMN_TEXT[kol]?.(a) || '';
+    // Flera sökord separerade med komma: något av dem ska finnas.
+    if (!isDelar(varde).some(t => text.toLowerCase().includes(t))) return false;
+  }
+  return true;
+}
+
 function isFiltrerade(arenden) {
   const f = _is.filter;
   const q = _is.sok.trim().toLowerCase();
@@ -267,6 +321,7 @@ function isFiltrerade(arenden) {
     (!f.status || a.status === f.status) &&
     (f.forfallen == null || isArForfallet(a) === f.forfallen) &&
     (!f.projekt || a.projekt === f.projekt) &&
+    isMatcharKolumner(a) &&
     (!q || [a.rubrik, a.typ, a.subtyp, a.tilldelad, a.skapadAv, String(a.nr), a.projekt].some(s => (s || '').toLowerCase().includes(q))));
 }
 
@@ -456,7 +511,7 @@ function isDashboardHtml() {
         <div class="px-4 py-2.5 border-b border-ads-border flex items-center gap-3 flex-wrap">
           <h3 class="text-sm font-semibold text-ads-text">Ärenden</h3>
           ${aktivaFilter.map(t => `<span class="text-[11px] px-2 py-0.5 rounded-full bg-ads-blue/10 text-ads-blue">${vkEsc(t)}</span>`).join('')}
-          ${aktivaFilter.length || _is.sok ? '<button onclick="isRensaFilter()" class="text-[11px] text-ads-muted hover:text-ads-text">Rensa filter ✕</button>' : ''}
+          <button onclick="isRensaFilter()" class="text-[11px] text-ads-muted hover:text-ads-text">Rensa alla filter ✕</button>
           <div class="flex-1"></div>
           <input type="search" placeholder="Sök rubrik, person, nr…" value="${vkEsc(_is.sok)}" oninput="isSok(this.value)"
                  class="px-2.5 py-1 text-sm border border-ads-border rounded w-56 focus:outline-none focus:ring-1 focus:ring-ads-blue" />
@@ -526,15 +581,40 @@ function isStapelHtml(s) {
 }
 
 function isTabellHtml() {
-  const alla  = isSorterade(isFiltrerade(isVyArenden()));
-  const rader = alla.slice(0, _is.visaAntal);
   const { kol, upp } = _is.sortering;
   const rubrik = (k, text, extra = '') => `
-    <th class="px-2 py-2 font-semibold cursor-pointer select-none whitespace-nowrap ${extra}" onclick="isSortera('${k}')">
+    <th class="px-2 pt-2 pb-1 font-semibold cursor-pointer select-none whitespace-nowrap ${extra}" onclick="isSortera('${k}')">
       ${text}${kol === k ? (upp ? ' ▲' : ' ▼') : ''}</th>`;
-  if (!alla.length) return '<p class="p-8 text-center text-sm text-ads-muted">Inga ärenden matchar vyn och filtren.</p>';
+
+  // Förslag i sökfälten: de värden som finns i vyn.
+  const vy = isVyArenden();
+  const lista = (k, varden) => `
+    <datalist id="is-dl-${k}">
+      ${[...new Set(varden.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'sv')).map(v => `<option value="${vkEsc(v)}">`).join('')}
+    </datalist>`;
+  const falt = (k, platshallare, medLista) => `
+    <th class="px-1.5 pb-2 font-normal">
+      <input type="search" value="${vkEsc(_is.kolFilter[k] || '')}" placeholder="${platshallare}" oninput="isKolumnSok('${k}', this.value)"
+             ${medLista ? `list="is-dl-${k}"` : ''}
+             class="w-full min-w-[60px] px-1.5 py-0.5 text-xs font-normal border rounded bg-white focus:outline-none focus:ring-1 focus:ring-ads-blue
+                    ${_is.kolFilter[k] ? 'border-ads-blue' : 'border-ads-border'}" />
+    </th>`;
+  const val = (k, alternativ) => `
+    <th class="px-1.5 pb-2 font-normal">
+      <select onchange="isKolumnSok('${k}', this.value)"
+              class="w-full px-1 py-0.5 text-xs font-normal border rounded bg-white ${_is.kolFilter[k] ? 'border-ads-blue' : 'border-ads-border'}">
+        <option value="">Alla</option>
+        ${alternativ.map(([v, t]) => `<option value="${v}" ${_is.kolFilter[k] === v ? 'selected' : ''}>${t}</option>`).join('')}
+      </select>
+    </th>`;
+  const statusar = IS_STATUS_ORDNING.filter(s => vy.some(a => a.status === s)).map(s => [s, isStatusLabel(s)]);
+  const { html, fotHtml } = isRaderHtml();
 
   return `
+    ${lista('typ', vy.flatMap(a => [a.typ, a.subtyp]))}
+    ${lista('tilldelad', vy.map(a => a.tilldelad))}
+    ${lista('skapadAv', vy.map(a => a.skapadAv))}
+    ${lista('projekt', vy.map(a => a.projekt))}
     <table class="w-full text-sm">
       <thead class="text-[11px] text-ads-muted text-left bg-ads-gray/60">
         <tr>
@@ -543,33 +623,64 @@ function isTabellHtml() {
           ${rubrik('tilldelad', 'Tilldelad till')}${rubrik('skapadAv', 'Skapad av')}${rubrik('skapat', 'Skapat')}
           ${rubrik('forfaller', 'Förfaller')}${rubrik('dagar', 'Dagar', 'text-right')}${rubrik('projekt', 'Projekt')}
         </tr>
+        <tr>
+          ${falt('nr', 'Nr', false)}<th></th>
+          ${falt('typ', 'Sök typ…', true)}${falt('rubrik', 'Sök rubrik…', false)}
+          ${val('status', statusar)}
+          ${falt('tilldelad', 'Sök tilldelad…', true)}${falt('skapadAv', 'Sök…', true)}
+          ${falt('skapat', 'ÅÅÅÅ-MM', false)}${falt('forfaller', 'ÅÅÅÅ-MM', false)}
+          ${val('dagar', Object.entries(IS_DAGAR_VAL).map(([k, v]) => [k, v.text]))}
+          ${falt('projekt', 'Sök projekt…', true)}
+        </tr>
       </thead>
-      <tbody>
-        ${rader.map(a => {
-          const ref   = isRef(a);
-          const dagar = isDagarKvar(a.forfaller);
-          const klar  = IS_KLARA.has(a.status);
-          const dagStil = dagar == null || klar ? '' : dagar <= 0 ? 'bg-red-600 text-white' : dagar <= 3 ? 'bg-amber-200' : '';
-          return `
-            <tr class="border-t border-ads-border/60 hover:bg-ads-gray/40 ${isVantande(a) ? 'bg-amber-50/60' : ''}">
-              <td class="px-2 py-1.5 text-right font-mono text-xs">${a.nr}</td>
-              <td class="px-1"><a href="${isLank(a)}" target="_blank" rel="noopener" class="text-ads-blue" title="Öppna i ACC">↗</a></td>
-              <td class="px-2 py-1.5 text-xs">${vkEsc(a.subtyp || a.typ)}${a.subtyp && a.typ && a.subtyp !== a.typ ? `<div class="text-[10px] text-ads-muted">${vkEsc(a.typ)}</div>` : ''}</td>
-              <td class="px-2 py-1.5 max-w-[280px]"><div class="truncate" title="${vkEsc(a.rubrik)}">${vkEsc(a.rubrik)}</div></td>
-              <td class="px-2 py-1.5">${isStatusCell(a, ref)}</td>
-              <td class="px-2 py-1.5 text-xs">${isTilldeladCell(a, ref)}</td>
-              <td class="px-2 py-1.5 text-xs">${vkEsc(a.skapadAv)}</td>
-              <td class="px-2 py-1.5 text-xs whitespace-nowrap">${a.skapat}</td>
-              <td class="px-2 py-1.5 text-xs whitespace-nowrap">${isForfallerCell(a, ref)}</td>
-              <td class="px-2 py-1.5 text-right text-xs font-mono"><span class="px-1.5 py-0.5 rounded ${dagStil}">${dagar ?? ''}</span></td>
-              <td class="px-2 py-1.5 text-xs">${vkEsc(a.projekt)}</td>
-            </tr>`;
-        }).join('')}
-      </tbody>
+      <tbody id="is-tbody">${html}</tbody>
     </table>
-    ${alla.length > rader.length ? `
-      <div class="p-3 text-center text-xs text-ads-muted">Visar ${rader.length} av ${alla.length}.
-        <button onclick="isVisaFler()" class="text-ads-blue hover:underline">Visa fler</button></div>` : ''}`;
+    <div id="is-fot">${fotHtml}</div>`;
+}
+
+// Raderna och foten under tabellen. Ritas om för sig när man söker.
+function isRaderHtml() {
+  const alla  = isSorterade(isFiltrerade(isVyArenden()));
+  const rader = alla.slice(0, _is.visaAntal);
+  if (!alla.length) {
+    return { html: '<tr><td colspan="11" class="p-8 text-center text-sm text-ads-muted">Inga ärenden matchar vyn och filtren.</td></tr>', fotHtml: '' };
+  }
+  // Ett värde som går att klicka på för att filtrera kolumnen på det.
+  const klick = (k, varde, visas = varde) => varde
+    ? `<button onclick="isFiltreraPa('${k}', ${isRef(varde)})" class="text-left hover:text-ads-blue hover:underline"
+               title="Filtrera på ${vkEsc(varde)}">${vkEsc(visas)}</button>`
+    : '';
+
+  const html = rader.map(a => {
+    const ref   = isRef(a);
+    const dagar = isDagarKvar(a.forfaller);
+    const klar  = IS_KLARA.has(a.status);
+    const dagStil = dagar == null || klar ? '' : dagar <= 0 ? 'bg-red-600 text-white' : dagar <= 3 ? 'bg-amber-200' : '';
+    const typ   = a.subtyp || a.typ;
+    return `
+      <tr class="border-t border-ads-border/60 hover:bg-ads-gray/40 ${isVantande(a) ? 'bg-amber-50/60' : ''}">
+        <td class="px-2 py-1.5 text-right font-mono text-xs">${a.nr}</td>
+        <td class="px-1"><a href="${isLank(a)}" target="_blank" rel="noopener" class="text-ads-blue" title="Öppna i ACC">↗</a></td>
+        <td class="px-2 py-1.5 text-xs">${klick('typ', typ)}${a.subtyp && a.typ && a.subtyp !== a.typ
+          ? `<div class="text-[10px] text-ads-muted">${klick('typ', a.typ)}</div>` : ''}</td>
+        <td class="px-2 py-1.5 max-w-[280px]"><div class="truncate" title="${vkEsc(a.rubrik)}">${vkEsc(a.rubrik)}</div></td>
+        <td class="px-2 py-1.5">${isStatusCell(a, ref)}</td>
+        <td class="px-2 py-1.5 text-xs">${_is.redigera ? isTilldeladCell(a, ref) : (isVantande(a) && 'assignedTo' in isVantande(a).efter ? isTilldeladCell(a, ref) : klick('tilldelad', a.tilldelad))}</td>
+        <td class="px-2 py-1.5 text-xs">${klick('skapadAv', a.skapadAv)}</td>
+        <td class="px-2 py-1.5 text-xs whitespace-nowrap">${a.skapat}</td>
+        <td class="px-2 py-1.5 text-xs whitespace-nowrap">${isForfallerCell(a, ref)}</td>
+        <td class="px-2 py-1.5 text-right text-xs font-mono"><span class="px-1.5 py-0.5 rounded ${dagStil}">${dagar ?? ''}</span></td>
+        <td class="px-2 py-1.5 text-xs">${klick('projekt', a.projekt)}</td>
+      </tr>`;
+  }).join('');
+
+  const fotHtml = `
+    <div class="px-3 py-2 text-center text-xs text-ads-muted">
+      ${alla.length > rader.length
+        ? `Visar ${rader.length} av ${alla.length}. <button onclick="isVisaFler()" class="text-ads-blue hover:underline">Visa fler</button>`
+        : `${alla.length} ärende${alla.length === 1 ? '' : 'n'}`}
+    </div>`;
+  return { html, fotHtml };
 }
 
 // Redigeraren för vyerna. Visar vilka ärendetyper som finns, som hjälp.
