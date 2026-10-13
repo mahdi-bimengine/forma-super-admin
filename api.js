@@ -253,6 +253,22 @@ async function getFolderPermissions(accProjectId, folderId) {
   return apsGet(`/bim360/docs/v1/projects/${accProjectId}/folders/${encodeURIComponent(folderId)}/permissions`);
 }
 
+// Sätter, ändrar eller tar bort behörigheter på en mapp. poster är en lista med
+// { subjectId, subjectType, actions }. Kräver Hantera (CONTROL) på mappen.
+// batch-delete svarar utan innehåll, så svaret läses som text.
+async function changeFolderPermissions(accProjectId, folderId, op, poster) {
+  if (!_token) throw new Error('No APS token set. Call setToken() first.');
+  const res = await fetch(
+    `${APS_BASE}/bim360/docs/v1/projects/${accProjectId}/folders/${encodeURIComponent(folderId)}/permissions:batch-${op}`, {
+      method:  'POST',
+      headers: { Authorization: `Bearer ${_token}`, 'Content-Type': 'application/json' },
+      body:    JSON.stringify(poster),
+    });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`APS error ${res.status}: ${text}`);
+  return text ? JSON.parse(text) : null;
+}
+
 // Projektets medlemmar med roller, företag och accessLevels. Kräver account:read.
 async function listProjectUsers(accProjectId) {
   const users = [];

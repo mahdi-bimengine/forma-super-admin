@@ -199,32 +199,8 @@ function bhMappnamn(f) {
 }
 
 function bhModellFranAcc(projektNamn, mappar) {
-  const principaler = { USER: new Map(), ROLE: new Map(), COMPANY: new Map() };
-  const folders     = new Map();
-  const permissions = new Map();
-
-  for (const m of mappar) {
-    folders.set(m.path, bhNyMapp(m.path));
-    const byId = new Map();
-    for (const s of m.beh || []) {
-      const lista = principaler[s.subjectType];
-      if (!lista || !s.subjectId) continue;
-      if (!lista.has(s.subjectId)) {
-        lista.set(s.subjectId, {
-          id:     s.subjectId,
-          name:   s.name || s.email || s.subjectId,
-          email:  s.email || '',
-          status: s.subjectStatus || '',
-          isProjectAdmin: s.userType === 'PROJECT_ADMIN',
-        });
-      }
-      // Bara behörigheter satta på just den här mappen. Ärvda (inheritActions)
-      // räknas fram ur trädet på samma sätt som för Excel-rapporten.
-      const niva = bhNivaFranActions(s.actions);
-      if (niva) byId.set(s.subjectId, niva);
-    }
-    permissions.set(m.path, { everyone: null, byId });
-  }
+  const folders = new Map();
+  for (const m of mappar) folders.set(m.path, bhNyMapp(m.path));
 
   const meta = {
     projectName: projektNamn,
@@ -233,9 +209,48 @@ function bhModellFranAcc(projektNamn, mappar) {
     createdBy:   'Hämtat direkt från ACC',
     olasta:      mappar.filter(m => m.fel).map(m => ({ path: m.path, fel: m.fel })),
   };
-  return bhFardigModell(meta,
-    [...principaler.USER.values()], [...principaler.ROLE.values()], [...principaler.COMPANY.values()],
-    folders, permissions);
+  const data = bhFardigModell(meta, [], [], [], folders, new Map());
+
+  // Mappens id och de råa behörigheterna behövs för att kunna skriva
+  // ändringar och återställa dem exakt som de var.
+  data.mappId = new Map(mappar.map(m => [m.path, m.id]));
+  data.ra     = new Map();
+  for (const m of mappar) bhSattMappBeh(data, m.path, m.beh || [], false);
+  for (const lista of [data.users, data.roles, data.companies]) lista.sort(bhSv);
+  bhRaknaOm(data);
+  return data;
+}
+
+const BH_LISTA_FOR = { USER: 'users', ROLE: 'roles', COMPANY: 'companies' };
+
+// Lägger in behörigheterna från ACC för en mapp. Används både vid första
+// läsningen och när en mapp läses om efter en ändring.
+function bhSattMappBeh(data, path, beh, sortera = true) {
+  data.ra.set(path, beh);
+  const byId = new Map();
+  for (const s of beh) {
+    const lista = data[BH_LISTA_FOR[s.subjectType]];
+    if (!lista || !s.subjectId) continue;
+    if (!lista.some(e => e.id === s.subjectId)) {
+      lista.push({
+        id:     s.subjectId,
+        name:   s.name || s.email || s.subjectId,
+        email:  s.email || '',
+        status: s.subjectStatus || '',
+        isProjectAdmin: s.userType === 'PROJECT_ADMIN',
+      });
+      if (sortera) lista.sort(bhSv);
+    }
+    // Bara behörigheter satta på just den här mappen. Ärvda (inheritActions)
+    // räknas fram ur trädet på samma sätt som för Excel-rapporten.
+    const niva = bhNivaFranActions(s.actions);
+    if (niva) byId.set(s.subjectId, niva);
+  }
+  data.permissions.set(path, { everyone: null, byId });
+}
+
+function bhRaknaOm(data) {
+  data.stats = { folders: data.folders.size, users: data.users.length, roles: data.roles.length, companies: data.companies.length };
 }
 
 // Medlemmar med roller, företag och projektadmin-flagga från Admin-API:et.
@@ -245,6 +260,7 @@ async function bhLasMedlemmarFranAcc(projekt) {
   const users = await bhMedOmforsok(() => listProjectUsers(accId));
   return {
     members: users.map(u => ({
+      accId:          u.id || null,   // samma id som subjectId i behörighets-API:et
       name:           u.name || [u.firstName, u.lastName].filter(Boolean).join(' ') || u.email,
       email:          u.email || '',
       company:        u.companyName || '',

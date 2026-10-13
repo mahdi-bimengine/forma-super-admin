@@ -6,6 +6,9 @@
 //   Jämför   skillnaderna i effektiv behörighet mellan två personer
 //   Audit    direkta behörigheter som avviker från vad roll och företag ger
 //
+// Med data från ACC går behörigheterna också att ändra, och sparade ändringar
+// kan återställas. Det ligger i behorigheter-skriv.js.
+//
 // Logiken ligger i behorigheter-modell.js och inläsningen i behorigheter-las.js.
 
 const _bh = {
@@ -32,13 +35,32 @@ const _bh = {
   valjare:   null,   // vilken personväljare som är öppen: A | B | audit
   valjarSok: '',
   ref:       [],     // objekt som onclick-attributen pekar på via index
+
+  // Ändringar i ACC, se behorigheter-skriv.js
+  andringar:   [],     // väntande ändringar
+  dialog:      null,   // granska | kor | historik
+  kor:         null,   // pågående eller avslutad skrivning
+  logg:        null,   // sparade omgångar, läses från webbläsaren vid behov
+  aterstaller: null,   // id för omgången som återställs
+  nyTyp:       'ROLE', // vad "Lägg till behörighet" väljer bland
+  massandring: false,
+  markerade:   new Set(),
 };
 
 function bhReset() {
   _bh.perm = null;
   _bh.medl = null;
   _bh.acc  = null;
+  bhNollstallAndringar();
   bhStangOversikt();
+}
+
+function bhNollstallAndringar() {
+  _bh.andringar   = [];
+  _bh.dialog      = null;
+  _bh.kor         = null;
+  _bh.logg        = null;
+  _bh.aterstaller = null;
 }
 
 function bhStangOversikt() {
@@ -58,11 +80,17 @@ function bhStangOversikt() {
   _bh.auditPerson   = null;
   _bh.valjare       = null;
   _bh.valjarSok     = '';
+  _bh.massandring   = false;
+  _bh.markerade     = new Set();
 }
 
 function bhOppnaFlik() {
   bhRita();
 }
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && _bh.dialog) bhStangDialog();
+});
 
 function bhRef(obj) {
   return _bh.ref.push(obj) - 1;
@@ -74,6 +102,7 @@ async function bhHamtaFranAcc() {
   _bh.acc  = { laddar: true, klara: 0, kanda: 0, fel: null };
   _bh.perm = null;
   _bh.medl = null;
+  bhNollstallAndringar();
   bhRita();
 
   try {
@@ -150,6 +179,7 @@ function bhOppnaOversikt() {
 }
 
 function bhNyInlasning() {
+  if (_bh.andringar.length && !confirm(`${_bh.andringar.length} ändringar väntar och försvinner. Läsa in på nytt ändå?`)) return;
   bhReset();
   bhRita();
 }
@@ -490,7 +520,9 @@ function bhOversiktHtml() {
       <div class="flex-1 flex min-h-0">
         ${_bh.lage === 'browse' ? bhBladdraHtml() : _bh.lage === 'diff' ? bhJamforHtml() : bhAuditHtml()}
       </div>
-    </div>`;
+      ${bhAndringsradHtml()}
+    </div>
+    ${bhDialogHtml()}`;
 }
 
 function bhBannersHtml() {
@@ -582,11 +614,13 @@ function bhBladdraHtml() {
                class="flex-1 max-w-md px-2.5 py-1.5 text-sm border border-ads-border rounded bg-white
                       focus:outline-none focus:ring-1 focus:ring-ads-blue" />
         ${_bh.vald ? bhKnapp('bhVaxlaDoljTomma()', _bh.doljTomma ? 'Visar bara åtkomliga' : 'Dölj utan åtkomst') : ''}
+        ${bhKanSkriva() ? bhKnapp('bhVaxlaMassandring()', _bh.massandring ? 'Avsluta massändring' : 'Massändring') : ''}
         <div class="ml-auto flex gap-1">
           <button onclick="bhExpanderaAllt()" class="px-2 py-1 text-[11px] text-ads-muted hover:text-ads-text">Expandera allt</button>
           <button onclick="bhFallIhop()" class="px-2 py-1 text-[11px] text-ads-muted hover:text-ads-text">Fäll ihop</button>
         </div>
       </div>
+      ${_bh.massandring ? `<div id="bh-massrad" class="shrink-0 border-b border-ads-border px-3 py-2 flex items-center gap-2 flex-wrap bg-amber-50/60">${bhMassradHtml()}</div>` : ''}
       <div class="flex-1 overflow-y-auto py-1">
         ${_bh.vald ? '' : `
           <div class="m-3 p-3 rounded border border-ads-border bg-ads-gray/50 text-sm text-ads-text">
@@ -699,11 +733,17 @@ function bhTradHtml() {
     const ref    = bhRef(r.path);
     const arvd   = r.perm?.source === 'inherited';
     const valdes = _bh.valdMapp === r.path;
+    const vantar = _bh.andringar.some(a => a.path === r.path);
+    const ruta   = _bh.massandring
+      ? `<input type="checkbox" onclick="event.stopPropagation()" onchange="bhMarkera(${ref}, this.checked)"
+                ${_bh.markerade.has(r.path) ? 'checked' : ''} class="shrink-0 mr-1 accent-ads-blue" />`
+      : '';
     return `
       <div onclick="bhValjMapp(${ref})"
            class="flex items-center gap-1 pr-2 py-1 cursor-pointer border-l-2
                   ${valdes ? 'bg-emerald-50 border-emerald-500' : 'border-transparent hover:bg-ads-gray'}"
            style="padding-left:${r.depth * 14 + 8}px">
+        ${ruta}
         ${r.barn
           ? `<button onclick="event.stopPropagation(); bhVaxla(${ref})"
                      class="w-4 h-4 shrink-0 text-ads-muted hover:text-ads-text text-[10px]">${r.oppen ? '▾' : '▸'}</button>`
@@ -712,6 +752,7 @@ function bhTradHtml() {
           <path stroke-linejoin="round" d="M2 6a2 2 0 0 1 2-2h3.2a2 2 0 0 1 1.4.6l.8.8a2 2 0 0 0 1.4.6H16a2 2 0 0 1 2 2V15a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6z"/>
         </svg>
         <span class="flex-1 text-sm truncate ${r.perm || !_bh.vald ? 'text-ads-text' : 'text-ads-muted/70'} ${arvd ? 'italic' : ''}">${vkEsc(r.name)}</span>
+        ${vantar ? '<span class="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" title="Har väntande ändringar"></span>' : ''}
         ${r.perm ? `<span class="flex items-center gap-1 shrink-0">${r.perm.via !== 'user' ? bhViaTagg(r.perm.via) : ''}${bhBadge(r.perm.level, arvd)}</span>` : ''}
       </div>`;
   }).join('');
@@ -735,7 +776,9 @@ function bhMappdetaljHtml() {
     </div>
     <div class="flex-1 overflow-y-auto px-4 py-3">
       ${fel ? `<p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 mb-3">Behörigheterna för den här mappen gick inte att läsa.</p>` : ''}
-      ${_bh.vald?.kind === 'member' ? bhMedlemsHarkomstHtml(path, _bh.vald.member) : bhAllaMedAtkomstHtml(path)}
+      ${_bh.vald?.kind === 'member'
+        ? bhMedlemsHarkomstHtml(path, _bh.vald.member) + bhRedigeraPersonHtml(path, _bh.vald.member)
+        : bhAllaMedAtkomstHtml(path) + bhLaggTillHtml(path)}
     </div>`;
 }
 
@@ -784,7 +827,7 @@ function bhMedlemsHarkomstHtml(path, m) {
 function bhAllaMedAtkomstHtml(path) {
   const a     = bhAtkomstTillMapp(_bh.data, path);
   const filtr = lista => _bh.visaArvda ? lista : lista.filter(x => x.source === 'direct');
-  const grupp = (titel, lista, vad) => {
+  const grupp = (titel, lista, vad, kind) => {
     const syns = filtr(lista);
     return `
       <h3 class="text-xs font-semibold uppercase tracking-wider text-ads-muted mt-4 mb-2">
@@ -792,9 +835,15 @@ function bhAllaMedAtkomstHtml(path) {
       </h3>
       ${syns.length ? syns.map(x => `
         <div class="flex items-center justify-between gap-2 text-sm py-0.5">
-          <span class="truncate ${x.source === 'inherited' ? 'text-ads-muted italic' : 'text-ads-text'}"
-                ${x.source === 'inherited' ? `title="Ärvd från ${vkEsc(x.inheritedFrom)}"` : ''}>${vkEsc(x.name)}</span>
-          ${bhBadge(x.level, x.source === 'inherited')}
+          <div class="min-w-0">
+            <div class="truncate ${x.source === 'inherited' ? 'text-ads-muted italic' : 'text-ads-text'}">${vkEsc(x.name)}</div>
+            ${x.source === 'inherited' ? `
+              <button onclick="bhValjMapp(${bhRef(x.inheritedFrom)})" class="text-[10px] text-ads-blue hover:underline truncate max-w-full"
+                      title="Ändras på mappen den ärvs från">ärvd från ${vkEsc(x.inheritedFrom.split('/').pop())}</button>` : ''}
+          </div>
+          <div class="flex items-center gap-1 shrink-0">
+            ${bhKanSkriva() && x.source === 'direct' ? bhRedigeraRadHtml(path, x, kind) : bhBadge(x.level, x.source === 'inherited')}
+          </div>
         </div>`).join('')
         : `<p class="text-xs text-ads-muted italic">Inga ${vad} ${_bh.visaArvda ? 'har åtkomst' : 'satta direkt här'}</p>`}`;
   };
@@ -813,9 +862,9 @@ function bhAllaMedAtkomstHtml(path) {
         <span class="${a.everyone.source === 'inherited' ? 'text-ads-muted italic' : ''}">Alla i projektet</span>
         ${bhBadge(a.everyone.level, a.everyone.source === 'inherited')}
       </div>` : ''}
-    ${grupp('Personer (direkt)', a.users, 'personer')}
-    ${grupp('Roller', a.roles, 'roller')}
-    ${grupp('Företag', a.companies, 'företag')}`;
+    ${grupp('Personer (direkt)', a.users, 'personer', 'user')}
+    ${grupp('Roller', a.roles, 'roller', 'role')}
+    ${grupp('Företag', a.companies, 'företag', 'company')}`;
 }
 
 // ── Personväljare (Jämför och Audit) ──────────────────────────────────────────
@@ -928,6 +977,7 @@ const BH_AUDIT_STIL = {
 function bhAuditHtml() {
   const m     = _bh.auditPerson;
   const audit = m ? bhAudit(_bh.data, m) : null;
+  const skriv = bhKanSkriva() && !!bhSubjekt(m && { kind: 'member', member: m });
 
   let kropp;
   if (!m) {
@@ -945,13 +995,22 @@ function bhAuditHtml() {
       return `
         <div>
           <div class="px-3 py-2 rounded-t border ${s.ram}">
-            <span class="mr-1">${t.ikon}</span><span class="font-semibold text-sm ${s.text}">${t.etikett}</span>
-            <span class="font-mono text-xs text-ads-muted">· ${fynd.length}</span>
+            <div class="flex items-center">
+              <span class="mr-1">${t.ikon}</span><span class="font-semibold text-sm ${s.text}">${t.etikett}</span>
+              <span class="font-mono text-xs text-ads-muted ml-1">· ${fynd.length}</span>
+              <div class="flex-1"></div>
+              ${skriv ? `<button onclick="bhAuditTaBortAlla('${kind}')" class="text-[11px] border border-ads-border bg-white rounded px-2 py-0.5 hover:border-red-400">
+                           Ta bort alla ${fynd.length} direkta</button>` : ''}
+            </div>
             <p class="text-[11px] text-ads-muted italic mt-0.5">${s.hjalp}</p>
           </div>
           <div class="bg-white border border-t-0 ${s.ram.split(' ')[0]} rounded-b">
-            ${fynd.map(f => `
-              <div class="px-3 py-2 border-b border-ads-border/60 last:border-b-0">
+            ${fynd.map(f => {
+              const dar  = f.directInheritedFrom || f.path;
+              const vant = skriv && bhVantandeFor(dar, bhSubjekt({ kind: 'member', member: m }).subjectId);
+              return `
+              <div class="px-3 py-2 border-b border-ads-border/60 last:border-b-0 flex items-start gap-3">
+               <div class="flex-1 min-w-0">
                 <div class="font-mono text-[11px] text-ads-text break-all">${vkEsc(f.path)}</div>
                 <div class="text-[10px] text-ads-muted mt-0.5">
                   Direkt: ${bhBadge(f.directLevel, false, true)}
@@ -960,7 +1019,14 @@ function bhAuditHtml() {
                     ? `<span class="mx-1">·</span>Baslinje: ${bhBadge(f.baselineLevel, false, true)} <span class="italic">via ${vkEsc(f.baselineSourceName || BH_VIA[f.baselineVia] || f.baselineVia)}</span>`
                     : '<span class="ml-1 italic text-amber-700">ingen baslinje</span>'}
                 </div>
-              </div>`).join('')}
+               </div>
+               ${!skriv ? '' : vant
+                 ? `<span class="shrink-0">${bhVantandeTagg(vant)}</span>`
+                 : `<button onclick="bhAuditTaBort(${audit.findings.indexOf(f)})"
+                            class="shrink-0 text-[11px] border border-ads-border rounded px-2 py-0.5 hover:border-red-400"
+                            title="Tar bort den direkta behörigheten på ${vkEsc(dar.split('/').pop())}. Kvar blir det roll, företag och &quot;Alla&quot; ger.">Ta bort direkt</button>`}
+              </div>`;
+            }).join('')}
           </div>
         </div>`;
     }).join('') + '</div>';
