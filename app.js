@@ -3,8 +3,10 @@ const REDIRECT_URI  = 'https://mahdi-bimengine.github.io/forma-super-admin/';
 const APS_AUTH_URL  = 'https://developer.api.autodesk.com/authentication/v2/authorize';
 const APS_TOKEN_URL = 'https://developer.api.autodesk.com/authentication/v2/token';
 // data:write och data:create behövs för att Veckokontroll ska kunna spara sin
-// logg i projektet och skapa issues. Ändras listan måste alla logga in på nytt.
-const SCOPES        = 'openid data:read data:write data:create user-profile:read';
+// logg i projektet och skapa issues. account:read behövs för att Behörigheter
+// ska kunna läsa projektets medlemmar med roller och företag. Ändras listan
+// måste alla logga in på nytt.
+const SCOPES        = 'openid data:read data:write data:create account:read user-profile:read';
 
 // ── Project picker state ───────────────────────────────────────────────────────
 
@@ -421,6 +423,7 @@ function renderProjectView(project) {
   grReset();
   vkReset();
   vhReset();
+  bhReset();
   renderSidebar('overview');
   renderOverview();
 }
@@ -443,6 +446,7 @@ function renderSidebar(activeTab) {
     layers: `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M2 7l8-4 8 4-8 4-8-4z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2 11l8 4 8-4"/><path stroke-linecap="round" stroke-linejoin="round" d="M2 15l8 4 8-4"/></svg>`,
     sheet:  `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="3" width="15" height="14" rx="1.5"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.5 13.5h9v3.5M11.5 13.5h6"/><path stroke-linecap="round" stroke-linejoin="round" d="M13 6.5h3M13 9h3"/></svg>`,
     views:  `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="3" width="15" height="14" rx="1.5"/><path stroke-linecap="round" d="M2.5 8h15M8 8v9"/></svg>`,
+    lock:   `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="9" width="12" height="9" rx="1.5"/><path stroke-linecap="round" d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg>`,
     week:   `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="4" width="15" height="13.5" rx="1.5"/><path stroke-linecap="round" d="M2.5 8h15M6.5 2.5v3M13.5 2.5v3"/><path stroke-linecap="round" stroke-linejoin="round" d="M7 12.5l1.8 1.8L13 10"/></svg>`,
   };
 
@@ -482,6 +486,7 @@ function renderSidebar(activeTab) {
       ${navItem('ritningsgranskning', 'Ritningsgranskning', ICONS.sheet)}
       ${navItem('veckokontroll',   'Veckokontroll',   ICONS.week)}
       ${navItem('vyhantering',     'Vyhantering',     ICONS.views)}
+      ${navItem('behorigheter',    'Behörigheter',    ICONS.lock)}
       ${navItem('assets',          'Assets',          ICONS.layers)}
     </div>
 
@@ -502,6 +507,7 @@ function showTab(tab) {
   if (tab === 'ritningsgranskning') renderRitningsgranskning();
   if (tab === 'veckokontroll')   vkOppnaFlik();
   if (tab === 'vyhantering')     vhOppnaFlik();
+  if (tab === 'behorigheter')    bhOppnaFlik();
   if (tab === 'data-management') renderPlaceholder('Data Management');
   if (tab === 'issues')          renderPlaceholder('Issues');
   if (tab === 'assets')          renderPlaceholder('Assets');

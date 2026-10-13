@@ -233,6 +233,36 @@ async function readTextFile(projectId, itemId) {
   return res.text();
 }
 
+// ── Behörigheter ──────────────────────────────────────────────────────────────
+
+// Bara undermapparna, med sidbrytningen följd så att stora mappar kommer med.
+async function getSubfolders(projectId, folderId) {
+  let url = `${APS_BASE}/data/v1/projects/${projectId}/folders/${encodeURIComponent(folderId)}/contents` +
+            `?filter[type]=folders&page[limit]=200`;
+  const mappar = [];
+  while (url) {
+    const res = await apsGetUrl(url);
+    mappar.push(...(res.data || []));
+    url = res.links?.next?.href || null;
+  }
+  return mappar;
+}
+
+// Användare, roller och företag med behörighet på mappen. Projekt-id utan "b.".
+async function getFolderPermissions(accProjectId, folderId) {
+  return apsGet(`/bim360/docs/v1/projects/${accProjectId}/folders/${encodeURIComponent(folderId)}/permissions`);
+}
+
+// Projektets medlemmar med roller, företag och accessLevels. Kräver account:read.
+async function listProjectUsers(accProjectId) {
+  const users = [];
+  for (let offset = 0; ; offset += 200) {
+    const res = await apsGet(`/construction/admin/v1/projects/${accProjectId}/users?limit=200&offset=${offset}`);
+    users.push(...(res.results || []));
+    if (users.length >= (res.pagination?.totalResults ?? 0) || !(res.results || []).length) return users;
+  }
+}
+
 // ── Model Derivative ──────────────────────────────────────────────────────────
 
 async function getManifest(urn) {
