@@ -28,6 +28,7 @@ function isSattYta(yta) {
   _is.sok = '';
   isRita();
   if (yta === 'clash') { isLasClashKommentarer(); isKorModellkontroll(); }
+  if (yta === 'medlem') isLasMedlemData();
 }
 
 // ── Urval ─────────────────────────────────────────────────────────────────────
@@ -64,7 +65,6 @@ function isStartHtml() {
   const rad = (farg, text, antal) => `
     <div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full shrink-0" style="background:${farg}"></span>
       <span class="flex-1">${text}</span><b class="font-mono">${antal}</b></div>`;
-  const filtreraTyp = text => `isOppnaAllaMedTyp(${isRef(text)})`;
 
   return `
     <div class="px-5 py-5 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -92,25 +92,20 @@ function isStartHtml() {
           (!slapar.length ? '<div class="text-[11px] text-ads-muted italic">Inga områden släpar</div>' : ''),
           slapar.length ? 'border-l-4 !border-l-red-500' : '');
       })()}
-      ${kort(filtreraTyp(inst.onboarding), 'Onboarding', onb.length, 'öppna ärenden om nya medlemmar',
-        rad(IS_BRADSKA.forfallet.farg, 'Förfallna', onb.filter(isArForfallet).length) +
-        '<div class="text-[11px] text-ads-muted italic">Eget arbetskort kommer i fas 3</div>')}
-      ${kort(filtreraTyp(inst.offboarding), 'Offboarding', offb.length, 'öppna ärenden om medlemmar som ska bort',
-        rad(IS_BRADSKA.forfallet.farg, 'Förfallna', offb.filter(isArForfallet).length) +
-        '<div class="text-[11px] text-ads-muted italic">Eget arbetskort kommer i fas 3</div>')}
+      ${[['onb', 'Onboarding', onb, 'öppna ärenden om nya medlemmar'], ['off', 'Offboarding', offb, 'öppna ärenden om medlemmar som ska bort']]
+        .map(([flik, titel, lista, under]) => {
+          // Lägena kräver kommentarerna, som läses när ytan Medlemmar öppnas.
+          const lasta = lista.every(a => _is.medlem.kommentarer.has(a.id));
+          const lage = l => lista.filter(a => isMedlemLage(a).lage === l).length;
+          return kort(`isOppnaMedlem('${flik}')`, titel, lista.length, under,
+            rad(IS_BRADSKA.forfallet.farg, 'Förfallna', lista.filter(isArForfallet).length) +
+            (lasta ? rad('#9CA3AF', 'Att förbereda', lage('ny')) + rad('#D97706', 'Väntar på kontroll', lage('forberedd'))
+                   : '<div class="text-[11px] text-ads-muted italic">Läget visas när Medlemmar har öppnats</div>'));
+        }).join('')}
     </div>
     <p class="px-5 text-[11px] text-ads-muted">
       Vad som räknas som admin, clash och "er" ställs in under Inställningar uppe till höger.
     </p>`;
-}
-
-// Öppnar Alla ärenden filtrerat på en ärendetyp.
-function isOppnaAllaMedTyp(ref) {
-  _is.yta = 'alla';
-  _is.vyId = 'alla';
-  _is.filter = { status: null, forfallen: null, projekt: null };
-  _is.kolFilter = { typ: _is.ref[ref] };
-  isRita();
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────────

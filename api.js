@@ -298,6 +298,29 @@ async function changeFolderPermissions(accProjectId, folderId, op, poster) {
   return text ? JSON.parse(text) : null;
 }
 
+// ── Medlemmar (onboarding och offboarding) ──
+// Kräver account:write och att den inloggade är projektadministratör.
+
+async function addProjectUser(accProjectId, user) {
+  return apsSend('POST', `/construction/admin/v1/projects/${accProjectId}/users`, user);
+}
+
+// Svarar utan innehåll, så svaret läses inte som JSON.
+async function removeProjectUser(accProjectId, userId) {
+  const res = await apsFetch(`${APS_BASE}/construction/admin/v1/projects/${accProjectId}/users/${userId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);
+}
+
+// Kontots företag. Konto-id är hubbens id utan b.-prefix.
+async function listAccountCompanies(accountId) {
+  const ut = [];
+  for (let offset = 0; ; offset += 200) {
+    const res = await apsGet(`/construction/admin/v1/accounts/${accountId}/companies?limit=200&offset=${offset}`);
+    ut.push(...(res.results || []));
+    if (ut.length >= (res.pagination?.totalResults ?? 0) || !(res.results || []).length) return ut;
+  }
+}
+
 // Projektets medlemmar med roller, företag och accessLevels. Kräver account:read.
 async function listProjectUsers(accProjectId) {
   const users = [];

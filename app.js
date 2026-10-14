@@ -4,9 +4,10 @@ const APS_AUTH_URL  = 'https://developer.api.autodesk.com/authentication/v2/auth
 const APS_TOKEN_URL = 'https://developer.api.autodesk.com/authentication/v2/token';
 // data:write och data:create behövs för att Veckokontroll ska kunna spara sin
 // logg i projektet och skapa issues. account:read behövs för att Behörigheter
-// ska kunna läsa projektets medlemmar med roller och företag. Ändras listan
-// måste alla logga in på nytt.
-const SCOPES        = 'openid data:read data:write data:create account:read user-profile:read';
+// ska kunna läsa projektets medlemmar med roller och företag, och account:write
+// för att Issues ska kunna lägga till och ta bort medlemmar vid onboarding och
+// offboarding. Ändras listan måste alla logga in på nytt.
+const SCOPES        = 'openid data:read data:write data:create account:read account:write user-profile:read';
 
 // ── Project picker state ───────────────────────────────────────────────────────
 

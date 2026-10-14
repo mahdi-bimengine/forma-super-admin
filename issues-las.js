@@ -122,6 +122,7 @@ async function isLasProjekt(hubId, projekt) {
     varningar,
     medStangda: false,
     listval:  isListvalKarta(faltDef),
+    medlemmar,                       // rå lista från Admin-API:et, används vid onboarding
     faltDef,
     platsFel,
     platser,

@@ -31,6 +31,7 @@ const _is = {
   modellFilter: 'alla',
   omradeVald:   null,    // utfällt område i ytan Område, se issues-omrade.js
   omradeProjekt: 'alla',
+  medlem:        isNyttMedlemTillstand(),  // ytan Medlemmar, se issues-medlem.js
   tilldela:      new Map(), // ärende-id → valt område i "Tilldela område"
   tilldelaValda: new Set(),
 
@@ -56,13 +57,19 @@ function isRef(x) {
   return _is.ref.push(x) - 1;
 }
 
+function isNyttMedlemTillstand() {
+  return { flik: 'onb', foretag: null, kommentarer: new Map(), laddar: false, fel: null, oppen: null,
+           utkast: new Map(), projektMedlemmar: new Map(), kor: null, logg: null, meddelande: null };
+}
+
 function isOppnaFlik() {
   const hub = _hubs[_hubIdx];
   if (_is.hubId !== hub?.id) {
     // Nytt konto: börja om, men behåll inget från det förra kontot.
     Object.assign(_is, { hubId: hub?.id, projekt: new Map(), valda: null, hamtad: null, fel: null,
                          andringar: [], dialog: null, kor: null, logg: null, vyer: null, inst: null,
-                         kommentarer: new Map(), clashValda: new Set(), yta: 'start', platsNamn: null });
+                         kommentarer: new Map(), clashValda: new Set(), yta: 'start', platsNamn: null,
+                         medlem: isNyttMedlemTillstand() });
   }
   if (!_is.valda) _is.valda = isLasValda();
   if (!_is.vyer)  _is.vyer  = isLasVyer();
@@ -126,7 +133,8 @@ async function isHamta() {
   await Promise.all([arbetare(), arbetare(), arbetare()]);
 
   Object.assign(_is, { projekt: nya, laddar: false, hamtad: new Date(), fel: fel.length ? fel : null, clashValda: new Set(),
-                       modell: new Map(), modellStatus: null, omradeVald: null, omradeProjekt: 'alla' });
+                       modell: new Map(), modellStatus: null, omradeVald: null, omradeProjekt: 'alla',
+                       medlem: { ...isNyttMedlemTillstand(), flik: _is.medlem.flik, foretag: _is.medlem.foretag, logg: _is.medlem.logg } });
   // Var "Visa stängda" påslaget hämtas de stängda direkt också.
   if (_is.visaStangda) { _is.visaStangda = false; return isVaxlaStangda(); }
   isRita();
@@ -419,7 +427,7 @@ function isHuvudHtml() {
       </div>
       ${_is.hamtad && !_is.valjProjekt ? `
         <nav class="flex items-center bg-ads-gray rounded p-0.5 ml-2">
-          ${[['start', 'Start'], ['admin', 'Admin'], ['clash', 'Clash'], ['omrade', 'Område'], ['alla', 'Alla ärenden']].map(([y, t]) => `
+          ${[['start', 'Start'], ['admin', 'Admin'], ['clash', 'Clash'], ['omrade', 'Område'], ['medlem', 'Medlemmar'], ['alla', 'Alla ärenden']].map(([y, t]) => `
             <button onclick="isSattYta('${y}')"
                     class="px-3 py-1 text-xs font-medium rounded ${_is.yta === y ? 'bg-white shadow-sm text-ads-text' : 'text-ads-muted hover:text-ads-text'}">${t}</button>`).join('')}
         </nav>` : ''}
@@ -441,7 +449,7 @@ function isKroppHtml() {
       ${_is.fel.map(f => `<div>${vkEsc(f)}</div>`).join('')}
     </div>` : '';
   if (_is.valjProjekt || !_is.hamtad) return fel + isProjektvalHtml();
-  const yta = { start: isStartHtml, admin: isAdminHtml, clash: isClashHtml, omrade: isOmradeHtml, alla: isDashboardHtml }[_is.yta] || isStartHtml;
+  const yta = { start: isStartHtml, admin: isAdminHtml, clash: isClashHtml, omrade: isOmradeHtml, medlem: isMedlemHtml, alla: isDashboardHtml }[_is.yta] || isStartHtml;
   return fel + isVarningarHtml() + yta();
 }
 
