@@ -89,6 +89,7 @@ async function isLasProjekt(hubId, projekt) {
   const accId = isAccId(projekt.id);
   const namn  = new Map();   // Autodesk-ID → { namn, typ, email }
   const varningar = [];
+  let platsFel = null;
 
   const [typer, arenden, , medlemmar, faltDef, platser] = await Promise.all([
     bhMedOmforsok(() => listIssueTypes(projekt.id)),
@@ -102,7 +103,8 @@ async function isLasProjekt(hubId, projekt) {
     }),
     // Egna fält och platsträdet behövs för område per ärende. Båda är frivilliga.
     isLasFaltDef(accId).catch(() => []),
-    isLasPlatser(accId).catch(() => new Map()),
+    // Felet sparas, så att Område kan visa varför platserna saknas.
+    isLasPlatser(accId).catch(err => { platsFel = String(err.message || err).slice(0, 200); return new Map(); }),
   ]);
 
   // Medlemslistan har alla personer, även de utan mappbehörigheter, och går före.
@@ -120,6 +122,8 @@ async function isLasProjekt(hubId, projekt) {
     varningar,
     medStangda: false,
     listval:  isListvalKarta(faltDef),
+    faltDef,
+    platsFel,
     platser,
   };
   p.arenden = arenden.map(a => isNormalisera(a, p));
@@ -206,6 +210,7 @@ function isNormalisera(a, p) {
     typ:         p.typNamn.get(a.issueTypeId) || '',
     subtyp:      p.typNamn.get(a.issueSubtypeId) || '',
     egnaFalt:    isEgnaFalt(a, p.listval),
+    platsId:     a.locationId || null,
     platsVag:    a.locationId ? isPlatsVag(p.platser, a.locationId) : [],
     platsText:   a.locationDetails || '',
     status:      a.status,
@@ -284,7 +289,7 @@ const IS_STANDARDINST = {
   offboarding: 'Offboarding',
   snartDagar:  2,
   veckaDagar:  7,
-  omradeKalla: 'auto',                     // auto | falt | plats
+  omradeKalla: 'auto',                     // auto | falt | plats | text
   omradeFalt:  'Location, Plats, Område',  // namnet på det egna fältet
   platsNiva:   0,                          // 0 = hela sökvägen, 1 = översta nivån osv.
   gammalDagar: 30,                         // öppna ärenden äldre än så räknas som gamla
@@ -308,8 +313,57 @@ function isOmrade(a) {
   };
   const varde = inst.omradeKalla === 'falt' ? falt()
               : inst.omradeKalla === 'plats' ? plats()
+              : inst.omradeKalla === 'text' ? a.platsText
               : falt() || plats() || a.platsText;
   return varde || IS_UTAN_OMRADE;
+}
+
+// Källorna för område som faktiskt finns i ärendena, med antal och exempel.
+// Används i Inställningar så att man väljer bland det som finns.
+function isOmradeKallor(arenden) {
+  const kallor = [];
+  const exempel = lista => [...new Set(lista.filter(Boolean))].slice(0, 3).join(', ');
+
+  const djup = Math.max(0, ...arenden.map(a => a.platsVag?.length || 0));
+  const medPlats = arenden.filter(a => a.platsVag?.length);
+  for (let n = 1; n <= djup; n++) {
+    kallor.push({ kalla: 'plats', niva: n, antal: medPlats.length,
+      text: `Platsträdet, nivå ${n}`, exempel: exempel(medPlats.map(a => a.platsVag.slice(0, n).join(' › '))) });
+  }
+  if (djup > 1) {
+    kallor.push({ kalla: 'plats', niva: 0, antal: medPlats.length,
+      text: 'Platsträdet, hela sökvägen', exempel: exempel(medPlats.map(a => a.platsVag.join(' › '))) });
+  }
+
+  const titlar = new Map();
+  for (const a of arenden) for (const [t, v] of Object.entries(a.egnaFalt || {})) {
+    if (!titlar.has(t)) titlar.set(t, []);
+    titlar.get(t).push(v);
+  }
+  for (const [t, varden] of [...titlar.entries()].sort((a, b) => b[1].length - a[1].length)) {
+    kallor.push({ kalla: 'falt', falt: t, antal: varden.length, text: `Eget fält: ${t}`, exempel: exempel(varden) });
+  }
+
+  const medText = arenden.filter(a => a.platsText);
+  if (medText.length) kallor.push({ kalla: 'text', antal: medText.length, text: 'Platsbeskrivning (fritext)', exempel: exempel(medText.map(a => a.platsText)) });
+  return kallor;
+}
+
+// Varför ärenden saknar område: per projekt vad som finns i datan.
+function isOmradeDiagnos() {
+  return [..._is.projekt.values()].map(p => {
+    const clash = p.arenden.filter(isArClash);
+    return {
+      projekt:    p.namn,
+      clash:      clash.length,
+      platser:    p.platser?.size || 0,
+      platsFel:   p.platsFel,
+      medPlatsId: clash.filter(a => a.platsId).length,
+      utanTraff:  clash.filter(a => a.platsId && !a.platsVag.length).length,
+      medText:    clash.filter(a => a.platsText).length,
+      medFalt:    clash.filter(a => Object.keys(a.egnaFalt || {}).length).length,
+    };
+  });
 }
 
 function isInst() {

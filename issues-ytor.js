@@ -452,26 +452,13 @@ function isInstHtml() {
         <div>
           <label class="block mb-3">
             <span class="text-xs font-medium text-ads-text">Hämta området från</span>
-            <select onchange="isInstFalt('omradeKalla', this.value)" class="mt-1 w-full px-2 py-1.5 text-sm border border-ads-border rounded bg-white">
-              ${[['auto', 'Eget fält, annars platsträdet'], ['falt', 'Bara eget fält'], ['plats', 'Bara ACC:s platsträd (Locations)']].map(([v, t]) =>
-                `<option value="${v}" ${u.omradeKalla === v ? 'selected' : ''}>${t}</option>`).join('')}
-            </select>
+            ${isOmradeValjare(u, "isValjOmradeKalla(this.value, true)", 'mt-1 w-full px-2 py-1.5 text-sm')}
+            <span class="text-[11px] text-ads-muted">Bara källor som finns i de hämtade clashärendena visas, med antal och exempel.</span>
           </label>
-          ${falt('omradeFalt', 'Det egna fältets namn', 'Till exempel Location. Flera namn separeras med komma.')}
         </div>
         <div>
-          ${falt('platsNiva', 'Nivå i platsträdet', '0 = hela sökvägen, 1 = översta nivån (t.ex. Block), 2 = två nivåer (Block › Plan).')}
           ${falt('gammalDagar', 'Gamla ärenden: öppna längre än antal dagar', '')}
         </div>
-        ${(() => {
-          const titlar = new Map();
-          for (const a of isAllaArenden()) for (const t of Object.keys(a.egnaFalt || {})) titlar.set(t, (titlar.get(t) || 0) + 1);
-          return titlar.size ? `
-            <div class="md:col-span-2 text-[11px] text-ads-muted mb-2">Egna fält i ärendena:
-              ${[...titlar.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) =>
-                `<span class="px-1.5 py-0.5 rounded bg-ads-gray text-ads-text">${vkEsc(t)} <span class="text-ads-muted">${n}</span></span>`).join(' ')}
-            </div>` : '';
-        })()}
       </div>
       ${typer.size ? `
         <div class="md:col-span-2 mt-2 pt-3 border-t border-ads-border">

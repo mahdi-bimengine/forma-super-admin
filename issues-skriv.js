@@ -11,13 +11,24 @@
 const IS_LOGG_MAX = 50;
 const IS_FALT = ['status', 'assignedTo', 'dueDate'];
 
-function isFore(a) {
-  return {
+// Läget för fälten som kan ändras. Plats, platsbeskrivning och egna fält
+// (ca:<definitions-id>) tas med när de efterfrågas, så att områden kan sättas.
+function isFore(a, nycklar = []) {
+  const ut = {
     status:         a.ra.status,
     assignedTo:     a.ra.assignedTo || null,
     assignedToType: a.ra.assignedToType || null,
     dueDate:        a.ra.dueDate ? a.ra.dueDate.slice(0, 10) : null,
   };
+  for (const k of nycklar) {
+    if (k === 'locationId')      ut.locationId = a.ra.locationId || null;
+    if (k === 'locationDetails') ut.locationDetails = a.ra.locationDetails || null;
+    if (k.startsWith('ca:')) {
+      const f = (a.ra.customAttributes || []).find(x => x.attributeDefinitionId === k.slice(3));
+      ut[k] = f?.value ?? null;
+    }
+  }
+  return ut;
 }
 
 function isFarAndra(a, falt) {
@@ -112,10 +123,14 @@ async function isSpara() {
       try {
         const sokvag = `/construction/issues/v1/projects/${r.accId}/issues/${r.id}`;
         const farsk  = await bhMedOmforsok(() => apsGet(sokvag));
-        r.fore = isFore({ ra: farsk });
+        r.fore = isFore({ ra: farsk }, Object.keys(r.efter));
         const kropp = {};
         if ('status' in r.efter) kropp.status = r.efter.status;
         if ('dueDate' in r.efter) kropp.dueDate = r.efter.dueDate;
+        if ('locationId' in r.efter) kropp.locationId = r.efter.locationId;
+        if ('locationDetails' in r.efter) kropp.locationDetails = r.efter.locationDetails;
+        const egna = Object.keys(r.efter).filter(k => k.startsWith('ca:'));
+        if (egna.length) kropp.customAttributes = egna.map(k => ({ attributeDefinitionId: k.slice(3), value: r.efter[k] }));
         if ('assignedTo' in r.efter) {
           kropp.assignedTo     = r.efter.assignedTo;
           kropp.assignedToType = r.efter.assignedToType;
@@ -128,7 +143,7 @@ async function isSpara() {
           await bhMedOmforsok(() => apsSend('POST', `${sokvag}/comments`, { body: r.kommentar }));
           _is.kommentarer?.delete(r.id);
         }
-        r.faktisk = isFore({ ra: svar });
+        r.faktisk = isFore({ ra: svar }, Object.keys(r.efter));
         r.status  = Object.keys(r.efter).every(k => r.faktisk[k] === r.efter[k]) ? 'klar' : 'avviker';
         isUppdateraArende(r.projektId, svar);
       } catch (err) {
@@ -200,7 +215,7 @@ function isAterstall(id) {
     }
     _is.andringar.push({
       id: r.id, nr: r.nr, rubrik: r.rubrik, projekt: r.projekt, projektId: r.projektId, accId: r.accId,
-      fore: a ? isFore(a) : r.faktisk || r.efter, efter,
+      fore: a ? isFore(a, Object.keys(efter)) : r.faktisk || r.efter, efter,
     });
   }
   _is.aterstaller = id;
@@ -234,6 +249,15 @@ function isExporteraLogg() {
 }
 
 function isFaltNamn(k) {
+  if (k.startsWith('ca:')) {
+    for (const p of _is.projekt.values()) {
+      const d = p.faltDef?.find(f => f.id === k.slice(3));
+      if (d) return d.title;
+    }
+    return 'Eget fält';
+  }
+  if (k === 'locationId') return 'Plats';
+  if (k === 'locationDetails') return 'Platsbeskrivning';
   return { status: 'Status', assignedTo: 'Tilldelad', dueDate: 'Förfaller' }[k] || k;
 }
 
@@ -242,6 +266,20 @@ function isVardeText(k, v) {
   if (!v) return '–';
   if (k === 'status') return isStatusLabel(v.status);
   if (k === 'dueDate') return v.dueDate || '–';
+  if (k === 'locationDetails') return v.locationDetails || 'ingen';
+  if (k === 'locationId') {
+    if (!v.locationId) return 'ingen';
+    for (const p of _is.projekt.values()) {
+      const vag = isPlatsVag(p.platser, v.locationId);
+      if (vag.length) return vag.join(' › ');
+    }
+    return v.locationId;
+  }
+  if (k.startsWith('ca:')) {
+    if (v[k] == null || v[k] === '') return 'inget';
+    for (const p of _is.projekt.values()) if (p.listval?.has(v[k])) return p.listval.get(v[k]);
+    return String(v[k]);
+  }
   if (k === 'assignedTo') {
     if (!v.assignedTo) return 'ingen';
     for (const p of _is.projekt.values()) {
@@ -315,6 +353,7 @@ function isDialogHtml() {
   if (!_is.dialog) return '<div id="is-dialog"></div>';
   if (_is.dialog === 'vyer') return isDialogRam(isVyRedigerareHtml());
   if (_is.dialog === 'inst') return isDialogRam(isInstHtml());
+  if (_is.dialog === 'omrade') return isDialogRam(isTilldelaOmradeHtml());
 
   if (_is.dialog === 'granska') {
     const a = _is.andringar;

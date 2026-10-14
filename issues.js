@@ -31,6 +31,8 @@ const _is = {
   modellFilter: 'alla',
   omradeVald:   null,    // utfällt område i ytan Område, se issues-omrade.js
   omradeProjekt: 'alla',
+  tilldela:      new Map(), // ärende-id → valt område i "Tilldela område"
+  tilldelaValda: new Set(),
 
   vyer:        null,
   vyId:        'koordinator',
