@@ -91,27 +91,66 @@ async function isKontrolleraProjekt(projektId, ids, ut) {
       continue;
     }
 
-    const lage = new Map((await isMcLas(`Jämföra med körningen i "${ms.name}" (version ${test.modelSetVersion})`,
-      () => getAssignedClashState(projektId, test.id))).map(g => [g.id, g]));
+    // Jämför bara grupperna som hör till de slutförda ärendena, 20 åt gången.
+    // Att jämföra alla grupper i model setet på en gång tar för lång tid i stora
+    // projekt och ger 504.
+    const lage = new Map();
+    const omgangar = [];
+    for (let i = 0; i < grupper.length; i += 20) omgangar.push(grupper.slice(i, i + 20).map(g => g.id));
+    let klara = 0;
+    let n = 0;
+    const arbetare = async () => {
+      while (n < omgangar.length) {
+        const omgang = omgangar[n++];
+        const svar = await isMcLas(`Jämföra med körningen i "${ms.name}" (version ${test.modelSetVersion})`,
+          () => postAssignedClashState(projektId, test.id, omgang));
+        for (const s of svar) lage.set(s.id, s);
+        klara += omgang.length;
+        _is.modellStatus.text = `Jämför ${ms.name}: ${klara} av ${grupper.length} clashgrupper`;
+        isRitaModellStatus();
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, omgangar.length) }, arbetare));
+
     for (const g of grupper) {
       const s = lage.get(g.id);
-      const totalt = (g.clashes || []).length;
       if (!s) {
         isLaggTill(ut, g.issueId, { okandGrupp: true, modelSet: ms.name, version: test.modelSetVersion });
         continue;
       }
-      // Har ingen ny körning gjorts sedan gruppen skapades säger svaret inget.
-      const ingenNy = s.createdAtVersion != null && test.modelSetVersion <= s.createdAtVersion;
+      // Skapades gruppen från just den här körningen har ingen ny körning gjorts.
+      const ingenNy = g.clashTestId === test.id || (s.createdAtVersion != null && test.modelSetVersion <= s.createdAtVersion);
+      const { kvar, lost, totalt } = isRaknaClashar(g, s);
       isLaggTill(ut, g.issueId, {
-        kvar:   ingenNy ? 0 : (s.existing || []).length,
-        lost:   ingenNy ? 0 : (s.resolved || []).length,
-        totalt: totalt || (s.existing || []).length + (s.resolved || []).length,
+        kvar:   ingenNy ? 0 : kvar,
+        lost:   ingenNy ? 0 : lost,
+        totalt,
         ingenNy,
         modelSet: ms.name,
         version:  test.modelSetVersion,
       });
     }
   }
+}
+
+// Hur många av gruppens clashar som finns kvar i körningen. Svaret kan komma
+// i två former: existing/resolved (GET-varianten) eller clashData.clashes med
+// de clashar som finns i körningen (POST-varianten), som jämförs med gruppens
+// ursprungliga clashar.
+function isRaknaClashar(g, s) {
+  if (s.existing || s.resolved) {
+    const kvar = (s.existing || []).length, lost = (s.resolved || []).length;
+    return { kvar, lost, totalt: (g.clashes || []).length || kvar + lost };
+  }
+  const iKorningen = (s.clashData?.clashes || []).filter(c => !/resolv|closed/i.test(c.status || ''));
+  const ids = new Set(iKorningen.map(c => c.id));
+  const ursprung = g.clashes || [];
+  if (!ursprung.length) return { kvar: iKorningen.length, lost: 0, totalt: iKorningen.length };
+  let kvar = ursprung.filter(id => ids.has(id)).length;
+  // Matchar inga id alls men körningen har clashar i gruppen räknas de som kvar,
+  // hellre än att visa allt som löst.
+  if (!kvar && iKorningen.length) kvar = Math.min(iKorningen.length, ursprung.length);
+  return { kvar, lost: ursprung.length - kvar, totalt: ursprung.length };
 }
 
 // Senaste model set-versionen som har en lyckad clashkörning.

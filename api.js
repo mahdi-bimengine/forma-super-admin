@@ -471,6 +471,15 @@ async function listClashTests(projectId, modelSetId, version) {
 
 // De ärendekopplade clashgrupperna jämförda med en körning: per grupp vilka
 // clashar som finns kvar (existing) och vilka som är lösta (resolved).
+// Samma jämförelse för utvalda grupper, högst 20 per anrop. Räknar bara på de
+// angivna grupperna och klarar därför stora model set där GET-varianten ovan
+// inte hinner bli klar. Svaret har per grupp clashData.clashes: de clashar som
+// finns i körningen.
+async function postAssignedClashState(projectId, testId, gruppIds) {
+  const res = await apsSend('POST', `${CLASH_BASE}/${mcContainer(projectId)}/tests/${testId}/clashes/assigned`, gruppIds);
+  return Array.isArray(res) ? res : res?.groups || [];
+}
+
 async function getAssignedClashState(projectId, testId) {
   return mcSidor(`${CLASH_BASE}/${mcContainer(projectId)}/tests/${testId}/clashes/assigned`, res => res.groups || [], CLASH_SIDA);
 }
