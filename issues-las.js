@@ -38,7 +38,7 @@ function isAccId(projektId) {
 const IS_FALT_URVAL = [
   'displayId', 'title', 'issueTypeId', 'issueSubtypeId', 'status', 'assignedTo', 'assignedToType',
   'dueDate', 'createdBy', 'createdAt', 'closedAt', 'permittedStatuses', 'permittedAttributes',
-  'commentCount', 'updatedAt',
+  'commentCount', 'updatedAt', 'customAttributes', 'locationId', 'locationDetails',
 ].join(',');
 
 // Alla statusar utom stängd. Stängda ärenden hämtas först när de ska visas.
@@ -90,7 +90,7 @@ async function isLasProjekt(hubId, projekt) {
   const namn  = new Map();   // Autodesk-ID → { namn, typ, email }
   const varningar = [];
 
-  const [typer, arenden, , medlemmar] = await Promise.all([
+  const [typer, arenden, , medlemmar, faltDef, platser] = await Promise.all([
     bhMedOmforsok(() => listIssueTypes(projekt.id)),
     isListaArenden(accId, IS_EJ_STANGDA),
     isNamnFranMappar(hubId, projekt, accId, namn).catch(err => {
@@ -100,6 +100,9 @@ async function isLasProjekt(hubId, projekt) {
       varningar.push('Medlemslistan kunde inte läsas (kräver projektadmin). Personer utan mappbehörighet visas med id.');
       return [];
     }),
+    // Egna fält och platsträdet behövs för område per ärende. Båda är frivilliga.
+    isLasFaltDef(accId).catch(() => []),
+    isLasPlatser(accId).catch(() => new Map()),
   ]);
 
   // Medlemslistan har alla personer, även de utan mappbehörigheter, och går före.
@@ -116,17 +119,67 @@ async function isLasProjekt(hubId, projekt) {
     typNamn: isTypNamnKarta(typer),
     varningar,
     medStangda: false,
+    listval:  isListvalKarta(faltDef),
+    platser,
   };
-  p.arenden = arenden.map(a => isNormalisera(a, projekt, accId, p.typNamn, namn));
+  p.arenden = arenden.map(a => isNormalisera(a, p));
   return p;
 }
 
 // Hämtar de stängda ärendena till ett redan inläst projekt.
 async function isLasStangda(p) {
   const stangda = await isListaArenden(p.accId, 'closed');
-  const projekt = { id: p.id, attributes: { name: p.namn } };
-  p.arenden.push(...stangda.map(a => isNormalisera(a, projekt, p.accId, p.typNamn, p.namnRegister)));
+  p.arenden.push(...stangda.map(a => isNormalisera(a, p)));
   p.medStangda = true;
+}
+
+// Definitionerna för ärendenas egna fält. Behövs för att översätta valet i en
+// rullista från id till text.
+async function isLasFaltDef(accId) {
+  const ut = [];
+  for (let offset = 0; ; offset += 200) {
+    const res = await bhMedOmforsok(() => apsGet(
+      `/construction/issues/v1/projects/${accId}/issue-attribute-definitions?limit=200&offset=${offset}`));
+    ut.push(...(res.results || []));
+    if (ut.length >= (res.pagination?.totalResults ?? 0) || !(res.results || []).length) return ut;
+  }
+}
+
+function isListvalKarta(faltDef) {
+  const karta = new Map();
+  for (const f of faltDef) for (const o of f.metadata?.list?.options || []) karta.set(o.id, o.value);
+  return karta;
+}
+
+// ACC:s platsträd (Locations): id → { namn, foralder, typ }.
+async function isLasPlatser(accId) {
+  const karta = new Map();
+  for (let offset = 0; ; offset += 1000) {
+    const res = await bhMedOmforsok(() => apsGet(
+      `/construction/locations/v2/projects/${accId}/trees/default/nodes?limit=1000&offset=${offset}`));
+    for (const n of res.results || []) karta.set(n.id, { namn: n.name, foralder: n.parentId, typ: n.type });
+    if (karta.size >= (res.pagination?.totalResults ?? 0) || !(res.results || []).length) return karta;
+  }
+}
+
+// Platsens sökväg från toppen, utan trädets rot.
+function isPlatsVag(platser, id) {
+  const vag = [];
+  for (let n = platser?.get(id), varv = 0; n && varv < 50; n = platser.get(n.foralder), varv++) {
+    if (n.typ !== 'Root') vag.unshift(n.namn);
+  }
+  return vag;
+}
+
+// Ärendets egna fält som titel → text. Val i rullistor översätts till text.
+function isEgnaFalt(a, listval) {
+  const ut = {};
+  for (const f of a.customAttributes || []) {
+    if (!f.title) continue;
+    const v = Array.isArray(f.value) ? f.value.map(x => listval?.get(x) ?? x).join(', ') : (listval?.get(f.value) ?? f.value);
+    if (v != null && v !== '') ut[f.title] = String(v);
+  }
+  return ut;
 }
 
 function isTypNamnKarta(typer) {
@@ -138,19 +191,23 @@ function isTypNamnKarta(typer) {
   return karta;
 }
 
-function isNormalisera(a, projekt, accId, typNamn, namn) {
-  const tilldelad = a.assignedTo ? namn.get(a.assignedTo) : null;
-  const skapare   = namn.get(a.createdBy);
+// Ett ärende från API:et i den form fliken använder. p är det inlästa projektet.
+function isNormalisera(a, p) {
+  const tilldelad = a.assignedTo ? p.namnRegister.get(a.assignedTo) : null;
+  const skapare   = p.namnRegister.get(a.createdBy);
   return {
     ra:          a,
     id:          a.id,
     nr:          a.displayId,
-    projektId:   projekt.id,
-    accId,
-    projekt:     projekt.attributes?.name || accId,
+    projektId:   p.id,
+    accId:       p.accId,
+    projekt:     p.namn,
     rubrik:      a.title || '',
-    typ:         typNamn.get(a.issueTypeId) || '',
-    subtyp:      typNamn.get(a.issueSubtypeId) || '',
+    typ:         p.typNamn.get(a.issueTypeId) || '',
+    subtyp:      p.typNamn.get(a.issueSubtypeId) || '',
+    egnaFalt:    isEgnaFalt(a, p.listval),
+    platsVag:    a.locationId ? isPlatsVag(p.platser, a.locationId) : [],
+    platsText:   a.locationDetails || '',
     status:      a.status,
     tilldeladId: a.assignedTo || null,
     tilldeladTyp: a.assignedToType || null,
@@ -227,7 +284,33 @@ const IS_STANDARDINST = {
   offboarding: 'Offboarding',
   snartDagar:  2,
   veckaDagar:  7,
+  omradeKalla: 'auto',                     // auto | falt | plats
+  omradeFalt:  'Location, Plats, Område',  // namnet på det egna fältet
+  platsNiva:   0,                          // 0 = hela sökvägen, 1 = översta nivån osv.
+  gammalDagar: 30,                         // öppna ärenden äldre än så räknas som gamla
 };
+
+const IS_UTAN_OMRADE = '(utan område)';
+
+// Ärendets område. Det egna fältet går före platsträdet i läget auto, och
+// platsens fritext används om inget annat finns.
+function isOmrade(a) {
+  const inst = isInst();
+  const falt = () => {
+    const namn = isDelar(inst.omradeFalt);
+    const traff = Object.keys(a.egnaFalt || {}).find(t => namn.includes(t.toLowerCase()));
+    return traff ? a.egnaFalt[traff] : '';
+  };
+  const plats = () => {
+    if (!a.platsVag?.length) return '';
+    const n = Number(inst.platsNiva) || 0;
+    return (n > 0 ? a.platsVag.slice(0, n) : a.platsVag).join(' › ');
+  };
+  const varde = inst.omradeKalla === 'falt' ? falt()
+              : inst.omradeKalla === 'plats' ? plats()
+              : falt() || plats() || a.platsText;
+  return varde || IS_UTAN_OMRADE;
+}
 
 function isInst() {
   return _is.inst || IS_STANDARDINST;

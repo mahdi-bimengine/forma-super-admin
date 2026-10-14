@@ -67,7 +67,7 @@ function isStartHtml() {
   const filtreraTyp = text => `isOppnaAllaMedTyp(${isRef(text)})`;
 
   return `
-    <div class="px-5 py-5 grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+    <div class="px-5 py-5 grid md:grid-cols-2 xl:grid-cols-3 gap-4">
       ${kort("isSattYta('admin')", 'Admin · arbetsorder', rakna(oss, 'forfallet') + rakna(oss, 'snart'),
         `förfallna eller förfaller inom ${inst.snartDagar} dagar, tilldelat er`,
         rad(IS_BRADSKA.forfallet.farg, 'Förfallna', rakna(oss, 'forfallet')) +
@@ -82,6 +82,16 @@ function isStartHtml() {
             rad('#DC2626', 'Slutförda men clashen finns kvar', clash.filter(a => isModellLage(a) === 'kvar').length)
           : '') +
         (redo == null ? '<div class="text-[11px] text-ads-muted italic">Räknas när kommentarerna lästs in</div>' : ''))}
+      ${(() => {
+        const omraden = isOmradesTabell();
+        const slapar = omraden.filter(r => r.slapar);
+        return kort("isSattYta('omrade')", 'Clash · per område', slapar.length,
+          `släpande av ${omraden.length} områden`,
+          slapar.slice(0, 4).map(r => rad('#DC2626', vkEsc(r.omrade), r.oppna)).join('') +
+          (slapar.length > 4 ? `<div class="text-[11px] text-ads-muted">… och ${slapar.length - 4} till</div>` : '') +
+          (!slapar.length ? '<div class="text-[11px] text-ads-muted italic">Inga områden släpar</div>' : ''),
+          slapar.length ? 'border-l-4 !border-l-red-500' : '');
+      })()}
       ${kort(filtreraTyp(inst.onboarding), 'Onboarding', onb.length, 'öppna ärenden om nya medlemmar',
         rad(IS_BRADSKA.forfallet.farg, 'Förfallna', onb.filter(isArForfallet).length) +
         '<div class="text-[11px] text-ads-muted italic">Eget arbetskort kommer i fas 3</div>')}
@@ -436,6 +446,32 @@ function isInstHtml() {
         ${falt('offboarding', 'Ärendetyper för offboarding', '')}
         ${falt('snartDagar', 'Förfaller snart: inom antal dagar', '')}
         ${falt('veckaDagar', 'Denna vecka: inom antal dagar', '')}
+      </div>
+      <div class="md:col-span-2 mt-1 pt-3 border-t border-ads-border grid md:grid-cols-2 gap-x-6">
+        <div class="md:col-span-2 text-[10px] uppercase tracking-wider text-ads-muted mb-2">Område för clash per område</div>
+        <div>
+          <label class="block mb-3">
+            <span class="text-xs font-medium text-ads-text">Hämta området från</span>
+            <select onchange="isInstFalt('omradeKalla', this.value)" class="mt-1 w-full px-2 py-1.5 text-sm border border-ads-border rounded bg-white">
+              ${[['auto', 'Eget fält, annars platsträdet'], ['falt', 'Bara eget fält'], ['plats', 'Bara ACC:s platsträd (Locations)']].map(([v, t]) =>
+                `<option value="${v}" ${u.omradeKalla === v ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+          </label>
+          ${falt('omradeFalt', 'Det egna fältets namn', 'Till exempel Location. Flera namn separeras med komma.')}
+        </div>
+        <div>
+          ${falt('platsNiva', 'Nivå i platsträdet', '0 = hela sökvägen, 1 = översta nivån (t.ex. Block), 2 = två nivåer (Block › Plan).')}
+          ${falt('gammalDagar', 'Gamla ärenden: öppna längre än antal dagar', '')}
+        </div>
+        ${(() => {
+          const titlar = new Map();
+          for (const a of isAllaArenden()) for (const t of Object.keys(a.egnaFalt || {})) titlar.set(t, (titlar.get(t) || 0) + 1);
+          return titlar.size ? `
+            <div class="md:col-span-2 text-[11px] text-ads-muted mb-2">Egna fält i ärendena:
+              ${[...titlar.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) =>
+                `<span class="px-1.5 py-0.5 rounded bg-ads-gray text-ads-text">${vkEsc(t)} <span class="text-ads-muted">${n}</span></span>`).join(' ')}
+            </div>` : '';
+        })()}
       </div>
       ${typer.size ? `
         <div class="md:col-span-2 mt-2 pt-3 border-t border-ads-border">

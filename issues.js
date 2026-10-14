@@ -29,6 +29,8 @@ const _is = {
   modell:       new Map(), // ärende-id → modellkontroll, se issues-modell.js
   modellStatus: null,
   modellFilter: 'alla',
+  omradeVald:   null,    // utfällt område i ytan Område, se issues-omrade.js
+  omradeProjekt: 'alla',
 
   vyer:        null,
   vyId:        'koordinator',
@@ -121,7 +123,7 @@ async function isHamta() {
   await Promise.all([arbetare(), arbetare(), arbetare()]);
 
   Object.assign(_is, { projekt: nya, laddar: false, hamtad: new Date(), fel: fel.length ? fel : null, clashValda: new Set(),
-                       modell: new Map(), modellStatus: null });
+                       modell: new Map(), modellStatus: null, omradeVald: null, omradeProjekt: 'alla' });
   // Var "Visa stängda" påslaget hämtas de stängda direkt också.
   if (_is.visaStangda) { _is.visaStangda = false; return isVaxlaStangda(); }
   isRita();
@@ -414,7 +416,7 @@ function isHuvudHtml() {
       </div>
       ${_is.hamtad && !_is.valjProjekt ? `
         <nav class="flex items-center bg-ads-gray rounded p-0.5 ml-2">
-          ${[['start', 'Start'], ['admin', 'Admin'], ['clash', 'Clash'], ['alla', 'Alla ärenden']].map(([y, t]) => `
+          ${[['start', 'Start'], ['admin', 'Admin'], ['clash', 'Clash'], ['omrade', 'Område'], ['alla', 'Alla ärenden']].map(([y, t]) => `
             <button onclick="isSattYta('${y}')"
                     class="px-3 py-1 text-xs font-medium rounded ${_is.yta === y ? 'bg-white shadow-sm text-ads-text' : 'text-ads-muted hover:text-ads-text'}">${t}</button>`).join('')}
         </nav>` : ''}
@@ -436,7 +438,7 @@ function isKroppHtml() {
       ${_is.fel.map(f => `<div>${vkEsc(f)}</div>`).join('')}
     </div>` : '';
   if (_is.valjProjekt || !_is.hamtad) return fel + isProjektvalHtml();
-  const yta = { start: isStartHtml, admin: isAdminHtml, clash: isClashHtml, alla: isDashboardHtml }[_is.yta] || isStartHtml;
+  const yta = { start: isStartHtml, admin: isAdminHtml, clash: isClashHtml, omrade: isOmradeHtml, alla: isDashboardHtml }[_is.yta] || isStartHtml;
   return fel + isVarningarHtml() + yta();
 }
 

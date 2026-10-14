@@ -161,7 +161,7 @@ function isUppdateraArende(projektId, ra) {
   if (!p) return;
   const i = p.arenden.findIndex(a => a.id === ra.id);
   if (i < 0) return;
-  p.arenden[i] = isNormalisera(ra, { id: p.id, attributes: { name: p.namn } }, p.accId, p.typNamn, p.namnRegister);
+  p.arenden[i] = isNormalisera(ra, p);
 }
 
 // ── Logg och återställning ────────────────────────────────────────────────────
