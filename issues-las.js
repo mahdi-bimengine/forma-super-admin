@@ -166,6 +166,83 @@ async function isLasPlatser(accId) {
   }
 }
 
+// ── Platsnamn utan platsträdet ─────────────────────────────────────────────────
+// Autodesks Locations-API saknar CORS och kan inte anropas från webbläsaren.
+// Ärendena har ändå platsens id, så de grupperas på det, och namnet härleds ur
+// rubrikerna: den fras som står i de flesta av platsens rubriker men sällan hos
+// andra platser. Ett eget namn som satts i Område går före.
+
+function isPlatsnamn(p, id) {
+  if (!id) return '';
+  const eget = _is.platsNamn?.[p.id]?.[id];
+  if (eget) return eget;
+  return isHarleddaPlatsnamn(p).get(id) || `Plats ${String(id).slice(0, 8)}`;
+}
+
+function isHarleddaPlatsnamn(p) {
+  if (p._harledda?.antal === p.arenden.length) return p._harledda.karta;
+
+  const ordAv = rubrik => isNormText(rubrik).trim().split(' ').filter(Boolean);
+  const fraser = rubrik => {
+    const ord = ordAv(rubrik);
+    const ut = new Set();
+    for (let n = 1; n <= 4; n++) for (let i = 0; i + n <= ord.length; i++) ut.add(ord.slice(i, i + n).join(' '));
+    return ut;
+  };
+
+  const grupper = new Map();   // plats-id → rubriker
+  for (const a of p.arenden) {
+    if (!a.platsId) continue;
+    if (!grupper.has(a.platsId)) grupper.set(a.platsId, []);
+    grupper.get(a.platsId).push(a.rubrik);
+  }
+  const allaRubriker = [...grupper.values()].flat();
+  const totaltPerFras = new Map();
+  const ordTackning = new Map();   // ord → andel av alla rubriker som har ordet
+  for (const r of allaRubriker) {
+    for (const f of fraser(r)) totaltPerFras.set(f, (totaltPerFras.get(f) || 0) + 1);
+    for (const o of new Set(ordAv(r))) ordTackning.set(o, (ordTackning.get(o) || 0) + 1 / allaRubriker.length);
+  }
+
+  const karta = new Map();
+  for (const [id, rubriker] of grupper) {
+    const iGruppen = new Map();
+    for (const r of rubriker) for (const f of fraser(r)) iGruppen.set(f, (iGruppen.get(f) || 0) + 1);
+    const ovriga = allaRubriker.length - rubriker.length;
+    let bast = null;
+    for (const [f, antal] of iGruppen) {
+      const inne = antal / rubriker.length;
+      if (inne < 0.5) continue;
+      const ute = ovriga ? (totaltPerFras.get(f) - antal) / ovriga : 0;
+      const poang = inne - ute;
+      const ord = f.split(' ').length;
+      if (!bast || poang > bast.poang + 1e-9 || (Math.abs(poang - bast.poang) < 1e-9 && ord > bast.ord)) bast = { f, poang, ord };
+    }
+    if (!bast || bast.poang < 0.2) continue;
+    // Ord som står i de flesta rubrikerna i hela projektet (som "L1B1") skalas bort
+    // i kanterna, men bara så länge det som blir kvar är mer än en ensam bokstav
+    // eller siffra. Annars blir "Block E" bara "E".
+    const ord = bast.f.split(' ');
+    const kvarDuger = rest => rest.length > 1 || rest[0].length > 2;
+    while (ord.length > 1 && (ordTackning.get(ord[0]) || 0) > 0.5 && kvarDuger(ord.slice(1))) ord.shift();
+    while (ord.length > 1 && (ordTackning.get(ord[ord.length - 1]) || 0) > 0.5 && kvarDuger(ord.slice(0, -1))) ord.pop();
+    karta.set(id, isOriginalSkrivning(ord, rubriker) || ord.join(' '));
+  }
+  p._harledda = { antal: p.arenden.length, karta };
+  return karta;
+}
+
+// Frasen som den står skriven i en av rubrikerna, till exempel "Block E".
+function isOriginalSkrivning(ord, rubriker) {
+  const monster = new RegExp(ord.map(o => o.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^a-z0-9åäöéü]+'), 'i');
+  for (const r of rubriker) { const m = String(r).match(monster); if (m) return m[0]; }
+  return null;
+}
+
+function isNormText(s) {
+  return ' ' + String(s || '').toLowerCase().replace(/[^a-z0-9åäöéü]+/g, ' ').trim() + ' ';
+}
+
 // Platsens sökväg från toppen, utan trädets rot.
 function isPlatsVag(platser, id) {
   const vag = [];
@@ -307,7 +384,7 @@ function isOmrade(a) {
     return traff ? a.egnaFalt[traff] : '';
   };
   const plats = () => {
-    if (!a.platsVag?.length) return '';
+    if (!a.platsVag?.length) return a.platsId ? isPlatsnamn(_is.projekt.get(a.projektId), a.platsId) : '';
     const n = Number(inst.platsNiva) || 0;
     return (n > 0 ? a.platsVag.slice(0, n) : a.platsVag).join(' › ');
   };
@@ -326,11 +403,17 @@ function isOmradeKallor(arenden) {
 
   const djup = Math.max(0, ...arenden.map(a => a.platsVag?.length || 0));
   const medPlats = arenden.filter(a => a.platsVag?.length);
+  // Utan platsträdet: platsfältets id med härledda eller egna namn.
+  const medBaraId = arenden.filter(a => a.platsId && !a.platsVag?.length);
+  if (medBaraId.length) {
+    kallor.push({ kalla: 'plats', niva: 0, antal: medBaraId.length, text: 'Platsfältet (Location)',
+      exempel: exempel(medBaraId.map(a => isPlatsnamn(_is.projekt.get(a.projektId), a.platsId))) });
+  }
   for (let n = 1; n <= djup; n++) {
     kallor.push({ kalla: 'plats', niva: n, antal: medPlats.length,
       text: `Platsträdet, nivå ${n}`, exempel: exempel(medPlats.map(a => a.platsVag.slice(0, n).join(' › '))) });
   }
-  if (djup > 1) {
+  if (djup > 1 && !medBaraId.length) {
     kallor.push({ kalla: 'plats', niva: 0, antal: medPlats.length,
       text: 'Platsträdet, hela sökvägen', exempel: exempel(medPlats.map(a => a.platsVag.join(' › '))) });
   }

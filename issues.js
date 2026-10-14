@@ -62,11 +62,12 @@ function isOppnaFlik() {
     // Nytt konto: börja om, men behåll inget från det förra kontot.
     Object.assign(_is, { hubId: hub?.id, projekt: new Map(), valda: null, hamtad: null, fel: null,
                          andringar: [], dialog: null, kor: null, logg: null, vyer: null, inst: null,
-                         kommentarer: new Map(), clashValda: new Set(), yta: 'start' });
+                         kommentarer: new Map(), clashValda: new Set(), yta: 'start', platsNamn: null });
   }
   if (!_is.valda) _is.valda = isLasValda();
   if (!_is.vyer)  _is.vyer  = isLasVyer();
   if (!_is.inst)  _is.inst  = { ...IS_STANDARDINST, ...(isHamtaLagrat('is-inst') || {}) };
+  if (!_is.platsNamn) _is.platsNamn = isHamtaLagrat('is-platser') || {};
   if (!_is.hamtad && !_is.laddar) _is.valjProjekt = true;
   isRita();
   if (hub && !_projCache[hub.id]) {

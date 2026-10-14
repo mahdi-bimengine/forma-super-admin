@@ -22,8 +22,9 @@ function isOmradesTabell() {
     if (_is.omradeProjekt !== 'alla' && a.projektId !== _is.omradeProjekt) continue;
     const omrade = isOmrade(a);
     const nyckel = `${a.projektId}|${omrade}`;
-    if (!grupper.has(nyckel)) grupper.set(nyckel, { nyckel, omrade, projekt: a.projekt, visaProjekt: flera, arenden: [] });
+    if (!grupper.has(nyckel)) grupper.set(nyckel, { nyckel, omrade, projektId: a.projektId, projekt: a.projekt, visaProjekt: flera, arenden: [], platsIds: new Set() });
     grupper.get(nyckel).arenden.push(a);
+    if (a.platsId && !a.platsVag?.length) grupper.get(nyckel).platsIds.add(a.platsId);
   }
 
   const rader = [...grupper.values()].map(g => {
@@ -120,13 +121,23 @@ function isOmradeMal(p) {
     return { typ: 'falt', nyckel: `ca:${def.id}`, titel: `eget fält ${def.title}`, faltNamn: 'customAttributes', alternativ };
   };
   const platsMal = () => {
-    if (!p.platser?.size) return null;
     const alternativ = [];
-    for (const [id, n] of p.platser) {
-      if (n.typ === 'Root') continue;
-      const vag = isPlatsVag(p.platser, id);
-      alternativ.push({ varde: id, namn: vag.join(' › '), delar: vag });
+    if (p.platser?.size) {
+      for (const [id, n] of p.platser) {
+        if (n.typ === 'Root') continue;
+        const vag = isPlatsVag(p.platser, id);
+        alternativ.push({ varde: id, namn: vag.join(' › '), delar: vag });
+      }
+    } else {
+      // Utan platsträdet: de platser som redan används på projektets ärenden.
+      // Förslaget matchas mot det härledda namnet, som kommer ur rubrikerna.
+      const harledda = isHarleddaPlatsnamn(p);
+      for (const id of new Set(p.arenden.map(a => a.platsId).filter(Boolean))) {
+        const harlett = harledda.get(id);
+        alternativ.push({ varde: id, namn: isPlatsnamn(p, id), delar: harlett ? [harlett] : [] });
+      }
     }
+    if (!alternativ.length) return null;
     alternativ.sort((a, b) => a.namn.localeCompare(b.namn, 'sv', { numeric: true }));
     return { typ: 'plats', nyckel: 'locationId', titel: 'platsträdet', faltNamn: 'locationId', alternativ };
   };
@@ -140,15 +151,11 @@ function isOmradeMal(p) {
   if (inst.omradeKalla === 'text')  return textMal();
   // Automatiskt: den källa som redan används mest i projektets clashärenden.
   const iFalt  = def ? clash.filter(a => a.egnaFalt?.[def.title]).length : -1;
-  const iPlats = p.platser?.size ? clash.filter(a => a.platsVag?.length).length : -1;
+  const iPlats = p.platser?.size || p.arenden.some(a => a.platsId) ? clash.filter(a => a.platsId).length : -1;
   if (iFalt > iPlats) return faltMal();
   if (iPlats >= 0) return platsMal();
   if (def) return faltMal();
   return textMal();
-}
-
-function isNormText(s) {
-  return ' ' + String(s || '').toLowerCase().replace(/[^a-z0-9åäöéü]+/g, ' ').trim() + ' ';
 }
 
 // Det mest precisa området vars alla delar står i rubriken.
@@ -282,6 +289,21 @@ function isTilldelaOmradeHtml() {
     </div>`;
 }
 
+// Eget namn på en plats, för alla plats-id i områdets rad. Tomt namn går
+// tillbaka till det härledda. Sparas per konto och projekt.
+function isBytPlatsnamn(ref) {
+  const r = _is.ref[ref];
+  const namn = prompt('Namn på området (tomt = härlett ur rubrikerna):', r.omrade);
+  if (namn == null) return;
+  const projekt = (_is.platsNamn[r.projektId] ||= {});
+  for (const id of r.platsIds) {
+    if (namn.trim()) projekt[id] = namn.trim(); else delete projekt[id];
+  }
+  isLagra('is-platser', _is.platsNamn);
+  _is.omradeVald = null;
+  isRita();
+}
+
 // ── Händelser ─────────────────────────────────────────────────────────────────
 
 function isValjOmrade(ref) {
@@ -339,6 +361,8 @@ function isOmradeHtml() {
               <td class="px-3 py-2">
                 <span class="text-ads-muted text-xs mr-1">${vald ? '▾' : '▸'}</span>
                 <span class="font-medium ${r.omrade === IS_UTAN_OMRADE ? 'italic text-ads-muted' : ''}">${vkEsc(r.omrade)}</span>
+                ${r.platsIds.size ? `<button onclick="event.stopPropagation(); isBytPlatsnamn(${isRef(r)})" class="text-ads-muted hover:text-ads-blue text-xs ml-1"
+                    title="Byt namn. Namnet är härlett ur rubrikerna eftersom platsträdet inte kan läsas.">✎</button>` : ''}
                 ${r.visaProjekt ? `<div class="text-[10px] text-ads-muted ml-4">${vkEsc(r.projekt)}</div>` : ''}</td>
               <td class="px-2 py-2 w-48">
                 <div class="flex h-3 rounded overflow-hidden bg-ads-gray">
@@ -403,7 +427,9 @@ function isOmradeDiagnosHtml(utan, totalt) {
           ${rader.map(d => `
             <tr class="border-t border-amber-200">
               <td class="py-1 pr-3">${vkEsc(d.projekt)}</td>
-              <td class="pr-3">${d.platsFel ? `<span class="text-red-700">kunde inte läsas: ${vkEsc(d.platsFel)}</span>` : `${d.platser} platser`}</td>
+              <td class="pr-3">${!d.platsFel ? `${d.platser} platser`
+                : /failed to fetch/i.test(d.platsFel) ? '<span class="text-amber-800">kan inte läsas från webbläsaren, namnen härleds ur rubrikerna</span>'
+                : `<span class="text-red-700">kunde inte läsas: ${vkEsc(d.platsFel)}</span>`}</td>
               <td class="pr-3">${d.medPlatsId} av ${d.clash}</td>
               <td class="pr-3 ${d.utanTraff ? 'text-red-700 font-medium' : ''}">${d.utanTraff}</td>
               <td class="pr-3">${d.medText}</td>

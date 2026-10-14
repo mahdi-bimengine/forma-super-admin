@@ -273,6 +273,10 @@ function isVardeText(k, v) {
       const vag = isPlatsVag(p.platser, v.locationId);
       if (vag.length) return vag.join(' › ');
     }
+    // Utan platsträdet: det härledda eller egna namnet från projektets ärenden.
+    for (const p of _is.projekt.values()) {
+      if (p.arenden.some(a => a.platsId === v.locationId)) return isPlatsnamn(p, v.locationId);
+    }
     return v.locationId;
   }
   if (k.startsWith('ca:')) {
