@@ -155,6 +155,7 @@ function isNormalisera(a, projekt, accId, typNamn, namn) {
     tilldeladId: a.assignedTo || null,
     tilldeladTyp: a.assignedToType || null,
     tilldelad:   a.assignedTo ? (tilldelad?.namn || `${isTypNamn(a.assignedToType)} ${a.assignedTo}`) : '',
+    tilldeladEmail: tilldelad?.email || '',
     skapadAv:    skapare?.namn || a.createdBy || '',
     skapat:      (a.createdAt || '').slice(0, 10),
     forfaller:   a.dueDate ? a.dueDate.slice(0, 10) : '',
@@ -219,6 +220,7 @@ function isMatcharVy(a, vy) {
 
 const IS_STANDARDINST = {
   oss:         'BIM-Koordinator, BIM Engine',
+  ossDomaner:  'bimengine.se',
   adminTyp:    'Admin',
   clashTyp:    'Clash',
   onboarding:  'Onboarding',
@@ -239,6 +241,15 @@ function isArTyp(a, text) {
 function isArOss(text) {
   const t = String(text || '').toLowerCase();
   return isDelar(isInst().oss).some(d => t.includes(d));
+}
+
+// Tilldelat oss: en roll eller ett företag som matchar "vi", eller en person
+// med e-post på någon av våra domäner.
+function isTilldeladOss(a) {
+  if (isArOss(a.tilldelad)) return true;
+  const email = String(a.tilldeladEmail || '').toLowerCase();
+  return a.tilldeladTyp === 'user' && !!email &&
+    isDelar(isInst().ossDomaner).some(d => email.endsWith('@' + d.replace(/^@/, '')));
 }
 
 const isArAdmin = a => isArTyp(a, isInst().adminTyp);
@@ -303,14 +314,31 @@ function isKommentarFranProjektor(k) {
   return !isArOss(k.av) && !isArOss(k.foretag);
 }
 
-// Slutförda clashärenden: redo att stänga när ärendet är tilldelat oss och
-// senaste kommentaren är från projektören. Delvis när bara det ena gäller.
+// Slutförda clashärenden: redo att stänga när projektören tilldelat ärendet
+// till oss. Delvis när projektören kommenterat men inte tilldelat oss.
 function isClashLage(a) {
-  const tillOss = isArOss(a.tilldelad);
-  const kommentar = isKommentarFranProjektor(isSenasteKommentar(a));
-  if (tillOss && kommentar) return 'redo';
-  if (tillOss || kommentar) return 'delvis';
+  if (isTilldeladOss(a)) return 'redo';
+  if (isKommentarFranProjektor(isSenasteKommentar(a))) return 'delvis';
   return 'ovrigt';
+}
+
+// Taggningar i kommentarer lagras som @{"type": "user", "id": "…", "name": "…"}.
+// De visas som @Namn och resten av koden döljs.
+const IS_TAGG = /@\{[^{}]*\}/g;
+
+function isTaggNamn(tagg) {
+  try { return JSON.parse(tagg.slice(1)).name || null; } catch { return null; }
+}
+
+function isKommentarText(text) {
+  return String(text || '').replace(IS_TAGG, t => { const n = isTaggNamn(t); return n ? `@${n}` : t; });
+}
+
+function isKommentarHtml(text) {
+  return String(text || '').split(/(@\{[^{}]*\})/).map(del => {
+    const n = /^@\{[^{}]*\}$/.test(del) && isTaggNamn(del);
+    return n ? `<b>@${vkEsc(n)}</b>` : vkEsc(del);
+  }).join('');
 }
 
 // ── Sammanställning ───────────────────────────────────────────────────────────

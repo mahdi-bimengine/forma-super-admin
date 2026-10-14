@@ -18,8 +18,8 @@ const IS_BRADSKA = {
 };
 
 const IS_CLASH_LAGE = {
-  redo:   { titel: 'Redo att stänga', hjalp: 'Tilldelat er och senaste kommentaren är från projektören.', farg: 'bg-emerald-100 text-emerald-800' },
-  delvis: { titel: 'Delvis',          hjalp: 'Antingen tilldelat er eller kommenterat av projektören, inte båda.', farg: 'bg-amber-100 text-amber-900' },
+  redo:   { titel: 'Redo att stänga', hjalp: 'Tilldelat er: er roll, ert företag eller en person med e-post på er domän.', farg: 'bg-emerald-100 text-emerald-800' },
+  delvis: { titel: 'Kommenterade',    hjalp: 'Projektören har kommenterat men inte tilldelat ärendet till er.', farg: 'bg-amber-100 text-amber-900' },
   ovrigt: { titel: 'Ej markerade',    hjalp: 'Varken tilldelat er eller kommenterat av projektören.', farg: 'bg-ads-gray text-ads-muted' },
 };
 
@@ -44,7 +44,7 @@ function isClashSlutforda() {
 
 function isStartHtml() {
   const admin = isAdminOppna();
-  const oss   = admin.filter(a => isArOss(a.tilldelad));
+  const oss   = admin.filter(isTilldeladOss);
   const rakna = (lista, b) => lista.filter(a => isBradska(a) === b).length;
   const clash = isClashSlutforda();
   const lasta = clash.every(a => !a.antalKommentarer || _is.kommentarer.has(a.id));
@@ -110,14 +110,14 @@ function isAdminUrval() {
   const alla = isAdminOppna();
   const q = _is.sok.trim().toLowerCase();
   return alla.filter(a =>
-    (_is.adminVem === 'alla' || (_is.adminVem === 'oss') === isArOss(a.tilldelad)) &&
+    (_is.adminVem === 'alla' || (_is.adminVem === 'oss') === isTilldeladOss(a)) &&
     (!q || [a.rubrik, a.typ, a.subtyp, a.tilldelad, String(a.nr), a.projekt].some(s => (s || '').toLowerCase().includes(q))));
 }
 
 function isAdminHtml() {
   const alla = isAdminOppna();
   const lista = isAdminUrval();
-  const antalOss = alla.filter(a => isArOss(a.tilldelad)).length;
+  const antalOss = alla.filter(isTilldeladOss).length;
   const chip = (vem, text, n) => `
     <button onclick="isSattAdminVem('${vem}')"
             class="text-xs px-3 py-1 rounded-full border ${_is.adminVem === vem ? 'bg-be-charcoal text-white border-be-charcoal' : 'bg-white border-ads-border hover:border-ads-blue'}">
@@ -228,7 +228,7 @@ function isClashUrval() {
   const q = _is.sok.trim().toLowerCase();
   return isClashSlutforda().filter(a =>
     (_is.clashLage === 'alla' || isClashLage(a) === _is.clashLage) &&
-    (!q || [a.rubrik, a.tilldelad, String(a.nr), a.projekt, isSenasteKommentar(a)?.text, isSenasteKommentar(a)?.av]
+    (!q || [a.rubrik, a.tilldelad, String(a.nr), a.projekt, isKommentarText(isSenasteKommentar(a)?.text), isSenasteKommentar(a)?.av]
       .some(s => (s || '').toLowerCase().includes(q))));
 }
 
@@ -278,7 +278,7 @@ function isClashHtml() {
     <div class="px-5 py-4">
       <div class="flex items-center gap-2 flex-wrap mb-3">
         ${chip('redo', 'Redo att stänga', antal('redo'))}
-        ${chip('delvis', 'Delvis', antal('delvis'))}
+        ${chip('delvis', 'Kommenterade', antal('delvis'))}
         ${chip('ovrigt', 'Ej markerade', antal('ovrigt'))}
         ${chip('alla', 'Alla slutförda', alla.length)}
         <div class="flex-1"></div>
@@ -336,7 +336,7 @@ function isClashRadHtml(a) {
       <td class="px-2 py-2 text-xs">${vkEsc(a.tilldelad)}</td>
       <td class="px-2 py-2 text-xs max-w-[380px]">
         ${k ? `<div class="text-ads-muted text-[11px]">${vkEsc(k.av)} · ${k.tid}${a.antalKommentarer > 1 ? ` · ${a.antalKommentarer} kommentarer` : ''}</div>
-               <div class="line-clamp-2" title="${vkEsc(k.text)}">${vkEsc(k.text)}</div>`
+               <div class="line-clamp-2" title="${vkEsc(isKommentarText(k.text))}">${isKommentarHtml(k.text)}</div>`
             : a.antalKommentarer ? '<span class="text-ads-muted italic">läses in…</span>' : '<span class="text-ads-muted italic">Ingen kommentar</span>'}</td>
       <td class="px-2 py-2 pr-3 text-right whitespace-nowrap">
         ${vant ? `<button onclick="isAngra(${isRef(a.id)})" class="text-xs text-ads-muted hover:text-red-700">Ångra</button>`
@@ -350,7 +350,7 @@ function isExporteraClash() {
   for (const a of isClashUrval()) {
     const k = isSenasteKommentar(a);
     const v = isVantande(a);
-    aoa.push([IS_CLASH_LAGE[isClashLage(a)].titel, a.nr, a.rubrik, a.projekt, a.tilldelad, k?.av || '', k?.tid || '', k?.text || '',
+    aoa.push([IS_CLASH_LAGE[isClashLage(a)].titel, a.nr, a.rubrik, a.projekt, a.tilldelad, k?.av || '', k?.tid || '', isKommentarText(k?.text),
               v ? `${isStatusLabel(v.efter.status)}${v.kommentar ? `: ${v.kommentar}` : ''}` : '', isLank(a)]);
   }
   isSparaXlsx(aoa, 'Clash att godkänna', `clash_underlag_${new Date().toISOString().slice(0, 10)}.xlsx`,
@@ -394,7 +394,8 @@ function isInstHtml() {
     ${isDialogHuvud('Inställningar för arbetsytorna', 'Delar av namn räcker. Flera värden separeras med komma.')}
     <div class="flex-1 overflow-y-auto px-5 py-4 grid md:grid-cols-2 gap-x-6">
       <div>
-        ${falt('oss', 'Vi (tilldelning, roll eller företag)', 'Avgör "Tilldelat er" i Admin och "Redo att stänga" i Clash.')}
+        ${falt('oss', 'Vi (roll eller företag)', 'Avgör "Tilldelat er" i Admin och "Redo att stänga" i Clash.')}
+        ${falt('ossDomaner', 'Våra e-postdomäner', 'En person med e-post på någon av dessa räknas också som "er".')}
         ${falt('adminTyp', 'Ärendetyper som är admin', 'Matchas mot ärendetyp och subtyp.')}
         ${falt('clashTyp', 'Ärendetyper som är clash', 'Matchas mot ärendetyp och subtyp.')}
       </div>
