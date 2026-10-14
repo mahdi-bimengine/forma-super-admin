@@ -71,10 +71,20 @@ function isOppnaFlik() {
                          kommentarer: new Map(), clashValda: new Set(), yta: 'start', platsNamn: null,
                          medlem: isNyttMedlemTillstand() });
   }
-  if (!_is.valda) _is.valda = isLasValda();
   if (!_is.vyer)  _is.vyer  = isLasVyer();
   if (!_is.inst)  _is.inst  = { ...IS_STANDARDINST, ...(isHamtaLagrat('is-inst') || {}) };
   if (!_is.platsNamn) _is.platsNamn = isHamtaLagrat('is-platser') || {};
+
+  // Fliken visar projektet som är valt i sidomenyn. Är det inte inläst läses
+  // det in direkt, och fler projekt läggs till via "Projekt".
+  const aktuellt = _currentProject?.id;
+  if (aktuellt && !_is.projekt.has(aktuellt) && !_is.laddar) {
+    _is.valda = new Set([aktuellt]);
+    _is.valjProjekt = false;
+    isHamta();
+    return;
+  }
+  if (!_is.valda) _is.valda = new Set([aktuellt].filter(Boolean));
   if (!_is.hamtad && !_is.laddar) _is.valjProjekt = true;
   isRita();
   if (hub && !_projCache[hub.id]) {
@@ -96,11 +106,6 @@ function isHamtaLagrat(nyckel) {
   try { return JSON.parse(localStorage.getItem(`${nyckel}:${_is.hubId}`) || 'null'); } catch { return null; }
 }
 
-function isLasValda() {
-  const sparade = isHamtaLagrat('is-projekt');
-  return new Set(sparade?.length ? sparade : [_currentProject?.id].filter(Boolean));
-}
-
 function isLasVyer() {
   const sparade = isHamtaLagrat('is-vyer');
   return Array.isArray(sparade) && sparade.length ? sparade : IS_STANDARDVYER.map(v => ({ ...v }));
@@ -112,10 +117,13 @@ async function isHamta() {
   const hub = _hubs[_hubIdx];
   if (!_projCache[hub.id]) _projCache[hub.id] = await listProjects(hub.id);
   const projekt = _projCache[hub.id].filter(p => _is.valda.has(p.id));
-  if (!projekt.length) return;
-  if (_is.andringar.length && !confirm(`${_is.andringar.length} ändringar väntar och försvinner vid ny hämtning. Fortsätta?`)) return;
+  if (!projekt.length) return isRita();
+  if (_is.andringar.length && !confirm(`${_is.andringar.length} ändringar väntar och försvinner vid ny hämtning. Fortsätta?`)) {
+    // Behåll det som redan är inläst.
+    _is.valda = new Set(_is.projekt.keys());
+    return isRita();
+  }
 
-  isLagra('is-projekt', [..._is.valda]);
   Object.assign(_is, { laddar: true, fel: null, valjProjekt: false, andringar: [], framsteg: { klara: 0, totalt: projekt.length } });
   isRita();
 
@@ -138,7 +146,7 @@ async function isHamta() {
   // Var "Visa stängda" påslaget hämtas de stängda direkt också.
   if (_is.visaStangda) { _is.visaStangda = false; return isVaxlaStangda(); }
   isRita();
-  if (_is.yta === 'clash') { isLasClashKommentarer(); isKorModellkontroll(); }
+  if (_is.yta === 'clash') { isLasClashKommentarer(); if (isInst().modellAuto) isKorModellkontroll(); }
 }
 
 // ── Händelser ─────────────────────────────────────────────────────────────────
