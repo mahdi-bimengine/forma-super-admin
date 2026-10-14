@@ -426,6 +426,28 @@ async function updateModelSetViewDefinition(projectId, modelSetId, viewId, gamma
   return jobb;
 }
 
+// ── Clash ──
+// Clashtjänsten har egen adress men samma container-id och sidbrytning.
+
+const CLASH_BASE = '/bim360/clash/v3/containers';
+
+// Clashgrupper i ett model set som är kopplade till ärenden, med issueId och
+// vilka clashar gruppen bestod av när den skapades.
+async function listAssignedClashGroups(projectId, modelSetId) {
+  return mcSidor(`${CLASH_BASE}/${mcContainer(projectId)}/modelsets/${modelSetId}/clashes/assigned`, res => res.groups || []);
+}
+
+// Clashkörningarna för en model set-version. Tomt om ingen körning är klar.
+async function listClashTests(projectId, modelSetId, version) {
+  return mcSidor(`${CLASH_BASE}/${mcContainer(projectId)}/modelsets/${modelSetId}/versions/${version}/tests`, res => res.tests || []);
+}
+
+// De ärendekopplade clashgrupperna jämförda med en körning: per grupp vilka
+// clashar som finns kvar (existing) och vilka som är lösta (resolved).
+async function getAssignedClashState(projectId, testId) {
+  return mcSidor(`${CLASH_BASE}/${mcContainer(projectId)}/tests/${testId}/clashes/assigned`, res => res.groups || []);
+}
+
 // Model Coordination sidbryter med continuationToken. Samma token två gånger,
 // eller för många sidor, betyder att vi slutar hellre än att snurra vidare.
 async function mcSidor(path, plocka) {

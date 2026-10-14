@@ -27,7 +27,7 @@ function isSattYta(yta) {
   _is.yta = yta;
   _is.sok = '';
   isRita();
-  if (yta === 'clash') isLasClashKommentarer();
+  if (yta === 'clash') { isLasClashKommentarer(); isKorModellkontroll(); }
 }
 
 // ── Urval ─────────────────────────────────────────────────────────────────────
@@ -77,6 +77,10 @@ function isStartHtml() {
         rakna(oss, 'forfallet') ? 'border-l-4 !border-l-red-500' : '')}
       ${kort("isSattYta('clash')", 'Clash · att godkänna', clash.length, 'slutförda clashärenden att gå igenom',
         rad('#10B981', 'Redo att stänga', redo ?? '…') +
+        (_is.modellStatus?.klar
+          ? rad('#059669', 'Löst i modellen', clash.filter(a => isModellLage(a) === 'lost').length) +
+            rad('#DC2626', 'Slutförda men clashen finns kvar', clash.filter(a => isModellLage(a) === 'kvar').length)
+          : '') +
         (redo == null ? '<div class="text-[11px] text-ads-muted italic">Räknas när kommentarerna lästs in</div>' : ''))}
       ${kort(filtreraTyp(inst.onboarding), 'Onboarding', onb.length, 'öppna ärenden om nya medlemmar',
         rad(IS_BRADSKA.forfallet.farg, 'Förfallna', onb.filter(isArForfallet).length) +
@@ -228,6 +232,7 @@ function isClashUrval() {
   const q = _is.sok.trim().toLowerCase();
   return isClashSlutforda().filter(a =>
     (_is.clashLage === 'alla' || isClashLage(a) === _is.clashLage) &&
+    (_is.modellFilter === 'alla' || isModellLage(a) === _is.modellFilter) &&
     (!q || [a.rubrik, a.tilldelad, String(a.nr), a.projekt, isKommentarText(isSenasteKommentar(a)?.text), isSenasteKommentar(a)?.av]
       .some(s => (s || '').toLowerCase().includes(q))));
 }
@@ -287,6 +292,7 @@ function isClashHtml() {
         ${bhKnapp('isExporteraClash()', 'Underlag till möte')}
       </div>
       ${laddar}
+      ${isModellFilterHtml(alla)}
       <div class="bg-white border border-ads-border rounded">
         <div class="px-3 py-2 border-b border-ads-border flex items-center gap-3">
           <label class="flex items-center gap-1.5 text-xs cursor-pointer">
@@ -299,11 +305,11 @@ function isClashHtml() {
           <table class="w-full text-sm">
             <thead class="text-[11px] text-ads-muted text-left bg-ads-gray/60">
               <tr><th class="w-8"></th><th class="px-2 py-2">Ärende</th><th class="px-2">Läge</th><th class="px-2">Tilldelad till</th>
-                  <th class="px-2">Senaste kommentar</th><th class="px-2"></th></tr>
+                  <th class="px-2">Modell</th><th class="px-2">Senaste kommentar</th><th class="px-2"></th></tr>
             </thead>
             <tbody>
               ${lista.length ? lista.map(isClashRadHtml).join('')
-                : '<tr><td colspan="6" class="p-8 text-center text-sm text-ads-muted">Inga slutförda clashärenden här.</td></tr>'}
+                : '<tr><td colspan="7" class="p-8 text-center text-sm text-ads-muted">Inga slutförda clashärenden här.</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -334,6 +340,7 @@ function isClashRadHtml(a) {
       <td class="px-2 py-2"><span class="text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap ${lage.farg}" title="${lage.hjalp}">${lage.titel}</span>
         ${vant ? `<div class="mt-1">${isStatusTagg(vant.efter.status, true)}</div>` : ''}</td>
       <td class="px-2 py-2 text-xs">${vkEsc(a.tilldelad)}</td>
+      <td class="px-2 py-2">${isModellCellHtml(a)}</td>
       <td class="px-2 py-2 text-xs max-w-[380px]">
         ${k ? `<div class="text-ads-muted text-[11px]">${vkEsc(k.av)} · ${k.tid}${a.antalKommentarer > 1 ? ` · ${a.antalKommentarer} kommentarer` : ''}</div>
                <div class="line-clamp-2" title="${vkEsc(isKommentarText(k.text))}">${isKommentarHtml(k.text)}</div>`
@@ -346,15 +353,40 @@ function isClashRadHtml(a) {
 }
 
 function isExporteraClash() {
-  const aoa = [['Läge', 'Nr', 'Rubrik', 'Projekt', 'Tilldelad till', 'Senaste kommentar av', 'Kommenterat', 'Senaste kommentar', 'Väntande ändring', 'Länk']];
+  const aoa = [['Läge', 'Nr', 'Rubrik', 'Projekt', 'Tilldelad till', 'Modellkontroll', 'Clashar kvar', 'Senaste kommentar av', 'Kommenterat', 'Senaste kommentar', 'Väntande ändring', 'Länk']];
   for (const a of isClashUrval()) {
     const k = isSenasteKommentar(a);
     const v = isVantande(a);
-    aoa.push([IS_CLASH_LAGE[isClashLage(a)].titel, a.nr, a.rubrik, a.projekt, a.tilldelad, k?.av || '', k?.tid || '', isKommentarText(k?.text),
+    aoa.push([IS_CLASH_LAGE[isClashLage(a)].titel, a.nr, a.rubrik, a.projekt, a.tilldelad, IS_MODELL_LAGE[isModellLage(a)].titel, isModellResultat(a) ? isModellResultat(a).kvar : '', k?.av || '', k?.tid || '', isKommentarText(k?.text),
               v ? `${isStatusLabel(v.efter.status)}${v.kommentar ? `: ${v.kommentar}` : ''}` : '', isLank(a)]);
   }
   isSparaXlsx(aoa, 'Clash att godkänna', `clash_underlag_${new Date().toISOString().slice(0, 10)}.xlsx`,
-    [16, 7, 40, 26, 24, 22, 16, 60, 30, 60]);
+    [16, 7, 40, 26, 24, 18, 8, 22, 16, 60, 30, 60]);
+}
+
+// Filter på vad modellkontrollen visar, plus status för senaste kontrollen.
+function isSattModellFilter(f) {
+  _is.modellFilter = f;
+  isRita();
+}
+
+function isModellFilterHtml(alla) {
+  const antal = l => alla.filter(a => isModellLage(a) === l).length;
+  const chip = (f, text, n) => `
+    <button onclick="isSattModellFilter('${f}')"
+            class="text-[11px] px-2.5 py-0.5 rounded-full border ${_is.modellFilter === f ? 'bg-ads-blue text-white border-ads-blue' : 'bg-white border-ads-border hover:border-ads-blue'}">
+      ${text}${n != null ? ` <span class="font-mono opacity-70">${n}</span>` : ''}</button>`;
+  return `
+    <div class="flex items-center gap-1.5 flex-wrap mb-3 text-xs">
+      <span class="text-ads-muted mr-1">Modellkontroll:</span>
+      ${chip('alla', 'Alla')}
+      ${chip('lost', '✓ Löst i modellen', antal('lost'))}
+      ${chip('delvis', '◐ Delvis löst', antal('delvis'))}
+      ${chip('kvar', '✕ Finns kvar', antal('kvar'))}
+      ${chip('ingenNy', 'Ej omkörd', antal('ingenNy'))}
+      ${chip('okand', 'Ej kopplad', antal('okand'))}
+      <span id="is-modell-status" class="ml-2">${isModellStatusHtml()}</span>
+    </div>`;
 }
 
 // ── Inställningar ─────────────────────────────────────────────────────────────

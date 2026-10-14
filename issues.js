@@ -26,6 +26,9 @@ const _is = {
   clashLage:   'redo',     // redo | delvis | ovrigt | alla
   clashValda:  new Set(),
   clashLaddar: null,
+  modell:       new Map(), // ärende-id → modellkontroll, se issues-modell.js
+  modellStatus: null,
+  modellFilter: 'alla',
 
   vyer:        null,
   vyId:        'koordinator',
@@ -117,11 +120,12 @@ async function isHamta() {
   };
   await Promise.all([arbetare(), arbetare(), arbetare()]);
 
-  Object.assign(_is, { projekt: nya, laddar: false, hamtad: new Date(), fel: fel.length ? fel : null, clashValda: new Set() });
+  Object.assign(_is, { projekt: nya, laddar: false, hamtad: new Date(), fel: fel.length ? fel : null, clashValda: new Set(),
+                       modell: new Map(), modellStatus: null });
   // Var "Visa stängda" påslaget hämtas de stängda direkt också.
   if (_is.visaStangda) { _is.visaStangda = false; return isVaxlaStangda(); }
   isRita();
-  if (_is.yta === 'clash') isLasClashKommentarer();
+  if (_is.yta === 'clash') { isLasClashKommentarer(); isKorModellkontroll(); }
 }
 
 // ── Händelser ─────────────────────────────────────────────────────────────────
