@@ -27,7 +27,7 @@ function isSattYta(yta) {
   _is.yta = yta;
   _is.sok = '';
   isRita();
-  if (yta === 'clash') { isLasClashKommentarer(); isKorModellkontroll(); }
+  if (yta === 'clash') { isLasClashKommentarer(); if (isInst().modellAuto) isKorModellkontroll(); }
   if (yta === 'medlem') isLasMedlemData();
 }
 
@@ -311,11 +311,11 @@ function isClashHtml() {
           <table class="w-full text-sm">
             <thead class="text-[11px] text-ads-muted text-left bg-ads-gray/60">
               <tr><th class="w-8"></th><th class="px-2 py-2">Ärende</th><th class="px-2">Läge</th><th class="px-2">Tilldelad till</th>
-                  <th class="px-2">Modell</th><th class="px-2">Senaste kommentar</th><th class="px-2"></th></tr>
+                  ${isVisaModell() ? '<th class="px-2">Modell</th>' : ''}<th class="px-2">Senaste kommentar</th><th class="px-2"></th></tr>
             </thead>
             <tbody>
               ${lista.length ? lista.map(isClashRadHtml).join('')
-                : '<tr><td colspan="7" class="p-8 text-center text-sm text-ads-muted">Inga slutförda clashärenden här.</td></tr>'}
+                : `<tr><td colspan="${isVisaModell() ? 7 : 6}" class="p-8 text-center text-sm text-ads-muted">Inga slutförda clashärenden här.</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -346,7 +346,7 @@ function isClashRadHtml(a) {
       <td class="px-2 py-2"><span class="text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap ${lage.farg}" title="${lage.hjalp}">${lage.titel}</span>
         ${vant ? `<div class="mt-1">${isStatusTagg(vant.efter.status, true)}</div>` : ''}</td>
       <td class="px-2 py-2 text-xs">${vkEsc(a.tilldelad)}</td>
-      <td class="px-2 py-2">${isModellCellHtml(a)}</td>
+      ${isVisaModell() ? `<td class="px-2 py-2">${isModellCellHtml(a)}</td>` : ''}
       <td class="px-2 py-2 text-xs max-w-[380px]">
         ${k ? `<div class="text-ads-muted text-[11px]">${vkEsc(k.av)} · ${k.tid}${a.antalKommentarer > 1 ? ` · ${a.antalKommentarer} kommentarer` : ''}</div>
                <div class="line-clamp-2" title="${vkEsc(isKommentarText(k.text))}">${isKommentarHtml(k.text)}</div>`
@@ -376,7 +376,22 @@ function isSattModellFilter(f) {
   isRita();
 }
 
+// Modellkontrollen gäller bara ärenden skapade från clashgrupper i Model
+// Coordination. Den körs på begäran, eller automatiskt om det är valt i
+// Inställningar, och kolumnen syns först när den körts.
+function isVisaModell() {
+  return !!(_is.modellStatus?.laddar || _is.modellStatus?.klar);
+}
+
 function isModellFilterHtml(alla) {
+  if (!isVisaModell()) {
+    return `
+      <div class="flex items-center gap-2 flex-wrap mb-3 text-xs">
+        <button onclick="isKorModellkontroll(true)" class="border border-ads-border bg-white rounded px-2.5 py-1 hover:border-ads-blue">
+          Kontrollera mot clashkörningen</button>
+        <span class="text-[11px] text-ads-muted">Gäller ärenden skapade från clashgrupper i Model Coordination. Kan ta tid i stora model set.</span>
+      </div>`;
+  }
   const antal = l => alla.filter(a => isModellLage(a) === l).length;
   const chip = (f, text, n) => `
     <button onclick="isSattModellFilter('${f}')"
@@ -454,6 +469,12 @@ function isInstHtml() {
         </div>
         <div>
           ${falt('gammalDagar', 'Gamla ärenden: öppna längre än antal dagar', '')}
+          <label class="flex items-start gap-1.5 text-xs mt-1">
+            <input type="checkbox" class="accent-ads-blue mt-0.5" ${u.modellAuto ? 'checked' : ''}
+                   onchange="_is.instUtkast.modellAuto = this.checked" />
+            <span><span class="font-medium">Kör modellkontrollen automatiskt i Clash</span><br>
+              <span class="text-[11px] text-ads-muted">För projekt där clashärendena skapas från clashgrupper i Model Coordination.</span></span>
+          </label>
         </div>
       </div>
       ${typer.size ? `

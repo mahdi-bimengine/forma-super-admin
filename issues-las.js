@@ -372,6 +372,7 @@ const IS_STANDARDINST = {
   omradeFalt:  'Location, Plats, Område',  // namnet på det egna fältet
   platsNiva:   0,                          // 0 = hela sökvägen, 1 = översta nivån osv.
   gammalDagar: 30,                         // öppna ärenden äldre än så räknas som gamla
+  modellAuto:  false,                      // kör modellkontrollen när Clash öppnas
 };
 
 const IS_UTAN_OMRADE = '(utan område)';
