@@ -38,6 +38,7 @@ function isAccId(projektId) {
 const IS_FALT_URVAL = [
   'displayId', 'title', 'issueTypeId', 'issueSubtypeId', 'status', 'assignedTo', 'assignedToType',
   'dueDate', 'createdBy', 'createdAt', 'closedAt', 'permittedStatuses', 'permittedAttributes',
+  'commentCount', 'updatedAt',
 ].join(',');
 
 // Alla statusar utom stängd. Stängda ärenden hämtas först när de ska visas.
@@ -158,6 +159,8 @@ function isNormalisera(a, projekt, accId, typNamn, namn) {
     skapat:      (a.createdAt || '').slice(0, 10),
     forfaller:   a.dueDate ? a.dueDate.slice(0, 10) : '',
     stangt:      (a.closedAt || '').slice(0, 10),
+    uppdaterat:  a.updatedAt || '',
+    antalKommentarer: a.commentCount || 0,
     tillatnaStatusar: a.permittedStatuses || [],
     tillatnaFalt:     a.permittedAttributes || [],
     tillatnaHandl:    a.permittedActions || [],
@@ -208,6 +211,106 @@ function isMatcharVy(a, vy) {
   if (vem.length && !vem.some(t => a.tilldelad.toLowerCase().includes(t))) return false;
   if (vy.tilldeladTyp && a.tilldeladTyp !== vy.tilldeladTyp) return false;
   return true;
+}
+
+// ── Inställningar för arbetsytorna ────────────────────────────────────────────
+// Vilka som är "vi", och vilka ärendetyper som är admin respektive clash.
+// Textfälten matchas som delar av namn, flera värden separerade med komma.
+
+const IS_STANDARDINST = {
+  oss:         'BIM-Koordinator, BIM Engine',
+  adminTyp:    'Admin',
+  clashTyp:    'Clash',
+  onboarding:  'Onboarding',
+  offboarding: 'Offboarding',
+  snartDagar:  2,
+  veckaDagar:  7,
+};
+
+function isInst() {
+  return _is.inst || IS_STANDARDINST;
+}
+
+function isArTyp(a, text) {
+  const delar = isDelar(text);
+  return delar.length > 0 && delar.some(t => `${a.typ} ${a.subtyp}`.toLowerCase().includes(t));
+}
+
+function isArOss(text) {
+  const t = String(text || '').toLowerCase();
+  return isDelar(isInst().oss).some(d => t.includes(d));
+}
+
+const isArAdmin = a => isArTyp(a, isInst().adminTyp);
+const isArClash = a => isArTyp(a, isInst().clashTyp);
+
+// Hur bråttom ett ärende är, utifrån förfallodatum.
+function isBradska(a) {
+  const d = isDagarKvar(a.forfaller);
+  const inst = isInst();
+  if (d == null) return 'utan';
+  if (d < 0) return 'forfallet';
+  if (d <= inst.snartDagar) return 'snart';
+  if (d <= inst.veckaDagar) return 'vecka';
+  return 'senare';
+}
+
+// ── Kommentarer ───────────────────────────────────────────────────────────────
+// Bara den senaste kommentaren hämtas, ett anrop per ärende. Den sparas per
+// ärende och uppdateringstid, så att den inte hämtas igen i onödan.
+
+async function isLasSenasteKommentar(a) {
+  const res = await bhMedOmforsok(() => apsGet(
+    `/construction/issues/v1/projects/${a.accId}/issues/${a.id}/comments?sortBy=-createdAt&limit=1`));
+  const k = (res.results || [])[0];
+  if (!k) return null;
+  const reg  = _is.projekt.get(a.projektId)?.namnRegister;
+  const namn = reg?.get(k.createdBy);
+  return {
+    text:    k.body || '',
+    avId:    k.createdBy,
+    av:      namn?.namn || k.createdBy || '',
+    foretag: namn?.foretag || '',
+    email:   namn?.email || '',
+    tid:     (k.createdAt || '').slice(0, 16).replace('T', ' '),
+  };
+}
+
+// Läser senaste kommentaren för ärendena som saknar den. framsteg(klara, totalt).
+async function isLasKommentarer(arenden, framsteg) {
+  const saknas = arenden.filter(a => a.antalKommentarer > 0 && _is.kommentarer.get(a.id)?.uppdaterat !== a.uppdaterat);
+  let i = 0, klara = 0;
+  const arbetare = async () => {
+    while (i < saknas.length) {
+      const a = saknas[i++];
+      try { _is.kommentarer.set(a.id, { uppdaterat: a.uppdaterat, senaste: await isLasSenasteKommentar(a) }); }
+      catch { /* ärendet visas utan kommentar */ }
+      framsteg?.(++klara, saknas.length);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(6, saknas.length) }, arbetare));
+}
+
+function isSenasteKommentar(a) {
+  return _is.kommentarer.get(a.id)?.senaste || null;
+}
+
+// En kommentar räknas som från projektören om den inte är från den inloggade
+// och inte från någon vars namn eller företag matchar "vi" i inställningarna.
+function isKommentarFranProjektor(k) {
+  if (!k) return false;
+  if (k.email && k.email.toLowerCase() === String(_profile?.email || '').toLowerCase()) return false;
+  return !isArOss(k.av) && !isArOss(k.foretag);
+}
+
+// Slutförda clashärenden: redo att stänga när ärendet är tilldelat oss och
+// senaste kommentaren är från projektören. Delvis när bara det ena gäller.
+function isClashLage(a) {
+  const tillOss = isArOss(a.tilldelad);
+  const kommentar = isKommentarFranProjektor(isSenasteKommentar(a));
+  if (tillOss && kommentar) return 'redo';
+  if (tillOss || kommentar) return 'delvis';
+  return 'ovrigt';
 }
 
 // ── Sammanställning ───────────────────────────────────────────────────────────

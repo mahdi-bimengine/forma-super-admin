@@ -18,6 +18,15 @@ const _is = {
   fel:        null,
   hamtad:     null,
 
+  yta:         'start',    // start | admin | clash | alla, se issues-ytor.js
+  inst:        null,
+  instUtkast:  null,
+  kommentarer: new Map(),  // ärende-id → { uppdaterat, senaste }
+  adminVem:    'oss',      // oss | andra | alla
+  clashLage:   'redo',     // redo | delvis | ovrigt | alla
+  clashValda:  new Set(),
+  clashLaddar: null,
+
   vyer:        null,
   vyId:        'koordinator',
   visaStangda: false,
@@ -45,10 +54,12 @@ function isOppnaFlik() {
   if (_is.hubId !== hub?.id) {
     // Nytt konto: börja om, men behåll inget från det förra kontot.
     Object.assign(_is, { hubId: hub?.id, projekt: new Map(), valda: null, hamtad: null, fel: null,
-                         andringar: [], dialog: null, kor: null, logg: null, vyer: null });
+                         andringar: [], dialog: null, kor: null, logg: null, vyer: null, inst: null,
+                         kommentarer: new Map(), clashValda: new Set(), yta: 'start' });
   }
   if (!_is.valda) _is.valda = isLasValda();
   if (!_is.vyer)  _is.vyer  = isLasVyer();
+  if (!_is.inst)  _is.inst  = { ...IS_STANDARDINST, ...(isHamtaLagrat('is-inst') || {}) };
   if (!_is.hamtad && !_is.laddar) _is.valjProjekt = true;
   isRita();
   if (hub && !_projCache[hub.id]) {
@@ -106,10 +117,11 @@ async function isHamta() {
   };
   await Promise.all([arbetare(), arbetare(), arbetare()]);
 
-  Object.assign(_is, { projekt: nya, laddar: false, hamtad: new Date(), fel: fel.length ? fel : null });
+  Object.assign(_is, { projekt: nya, laddar: false, hamtad: new Date(), fel: fel.length ? fel : null, clashValda: new Set() });
   // Var "Visa stängda" påslaget hämtas de stängda direkt också.
   if (_is.visaStangda) { _is.visaStangda = false; return isVaxlaStangda(); }
   isRita();
+  if (_is.yta === 'clash') isLasClashKommentarer();
 }
 
 // ── Händelser ─────────────────────────────────────────────────────────────────
@@ -178,6 +190,8 @@ function isRitaRader() {
   const { html, fotHtml } = isRaderHtml();
   kropp.innerHTML = html;
   if (fot) fot.innerHTML = fotHtml;
+  const diagram = document.getElementById('is-diagram');
+  if (diagram) diagram.innerHTML = isDiagramHtml();
 }
 
 function isSortera(kol) {
@@ -225,6 +239,7 @@ function isVisaFler() {
 function isOppnaDialog(namn) {
   _is.dialog = namn;
   if (namn === 'vyer') _is.vyUtkast = _is.vyer.map(v => ({ ...v }));
+  if (namn === 'inst') _is.instUtkast = { ...isInst() };
   isRita();
 }
 
@@ -314,15 +329,21 @@ function isMatcharKolumner(a) {
   return true;
 }
 
-function isFiltrerade(arenden) {
-  const f = _is.filter;
+// Sökfältet och kolumnfiltren. Styr både tabellen och nyckeltalen.
+function isSokfiltrerade(arenden) {
   const q = _is.sok.trim().toLowerCase();
   return arenden.filter(a =>
-    (!f.status || a.status === f.status) &&
-    (f.forfallen == null || isArForfallet(a) === f.forfallen) &&
-    (!f.projekt || a.projekt === f.projekt) &&
     isMatcharKolumner(a) &&
     (!q || [a.rubrik, a.typ, a.subtyp, a.tilldelad, a.skapadAv, String(a.nr), a.projekt].some(s => (s || '').toLowerCase().includes(q))));
+}
+
+// Plus klicken i diagrammen, som bara styr tabellen.
+function isFiltrerade(arenden) {
+  const f = _is.filter;
+  return isSokfiltrerade(arenden).filter(a =>
+    (!f.status || a.status === f.status) &&
+    (f.forfallen == null || isArForfallet(a) === f.forfallen) &&
+    (!f.projekt || a.projekt === f.projekt));
 }
 
 function isSorterade(arenden) {
@@ -387,11 +408,18 @@ function isHuvudHtml() {
           ${_is.hamtad ? `${antalProjekt} projekt · hämtat ${_is.hamtad.toLocaleString('sv-SE')}` : 'Direkt från ACC, över valda projekt'}
         </p>
       </div>
+      ${_is.hamtad && !_is.valjProjekt ? `
+        <nav class="flex items-center bg-ads-gray rounded p-0.5 ml-2">
+          ${[['start', 'Start'], ['admin', 'Admin'], ['clash', 'Clash'], ['alla', 'Alla ärenden']].map(([y, t]) => `
+            <button onclick="isSattYta('${y}')"
+                    class="px-3 py-1 text-xs font-medium rounded ${_is.yta === y ? 'bg-white shadow-sm text-ads-text' : 'text-ads-muted hover:text-ads-text'}">${t}</button>`).join('')}
+        </nav>` : ''}
       <div class="flex-1"></div>
       ${_is.hamtad ? `
         ${bhKnapp('isVaxlaProjektval()', `Projekt (${_is.valda.size}) ▾`)}
         ${bhKnapp('isHamta()', 'Uppdatera', _is.laddar ? 'disabled' : '')}
-        ${bhKnapp('isOppnaDialog(\'vyer\')', 'Redigera vyer')}` : ''}
+        ${_is.yta === 'alla' ? bhKnapp('isOppnaDialog(\'vyer\')', 'Redigera vyer') : ''}
+        ${bhKnapp('isOppnaDialog(\'inst\')', 'Inställningar')}` : ''}
     </div>`;
 }
 
@@ -404,7 +432,8 @@ function isKroppHtml() {
       ${_is.fel.map(f => `<div>${vkEsc(f)}</div>`).join('')}
     </div>` : '';
   if (_is.valjProjekt || !_is.hamtad) return fel + isProjektvalHtml();
-  return fel + isVarningarHtml() + isDashboardHtml();
+  const yta = { start: isStartHtml, admin: isAdminHtml, clash: isClashHtml, alla: isDashboardHtml }[_is.yta] || isStartHtml;
+  return fel + isVarningarHtml() + yta();
 }
 
 function isProjektvalHtml() {
@@ -451,16 +480,7 @@ function isVarningarHtml() {
 }
 
 function isDashboardHtml() {
-  const vyArenden = isVyArenden();
-  const s = isSammanstall(vyArenden);
   const f = _is.filter;
-  const kort = (titel, antal, farg, filterNyckel, filterVarde) => `
-    <button onclick="isSattFilter('${filterNyckel}', ${filterVarde == null ? 'null' : isRef(filterVarde)})"
-            class="bg-white border rounded p-4 text-left transition-colors hover:border-ads-blue
-                   ${filterNyckel && f[filterNyckel] === filterVarde && filterVarde != null ? 'border-ads-blue ring-1 ring-ads-blue' : 'border-ads-border'}">
-      <div class="text-sm font-semibold" style="color:${farg}">${titel}</div>
-      <div class="text-3xl font-semibold text-ads-text mt-2">${antal}</div>
-    </button>`;
   const aktivaFilter = [
     f.status && `Status: ${isStatusLabel(f.status)}`,
     f.forfallen != null && (f.forfallen ? 'Förfallna' : 'Ej förfallna'),
@@ -477,6 +497,49 @@ function isDashboardHtml() {
       </div>
     </div>
 
+    <div id="is-diagram">${isDiagramHtml()}</div>
+
+    <div class="px-5 py-4">
+      <div class="bg-white border border-ads-border rounded">
+        <div class="px-4 py-2.5 border-b border-ads-border flex items-center gap-3 flex-wrap">
+          <h3 class="text-sm font-semibold text-ads-text">Ärenden</h3>
+          ${aktivaFilter.map(t => `<span class="text-[11px] px-2 py-0.5 rounded-full bg-ads-blue/10 text-ads-blue">${vkEsc(t)}</span>`).join('')}
+          <button onclick="isRensaFilter()" class="text-[11px] text-ads-muted hover:text-ads-text">Rensa alla filter ✕</button>
+          <div class="flex-1"></div>
+          <input type="search" placeholder="Sök rubrik, person, nr…" value="${vkEsc(_is.sok)}" oninput="isSok(this.value)"
+                 class="px-2.5 py-1 text-sm border border-ads-border rounded w-56 focus:outline-none focus:ring-1 focus:ring-ads-blue" />
+          <label class="flex items-center gap-1.5 text-xs text-ads-muted cursor-pointer">
+            <input type="checkbox" ${_is.visaStangda ? 'checked' : ''} onchange="isVaxlaStangda()" class="accent-ads-blue" /> Visa stängda</label>
+          ${bhKnapp('isVaxlaRedigera()', _is.redigera ? 'Klar med redigering' : 'Redigera')}
+          ${bhKnapp('isExportera()', 'Excel')}
+        </div>
+        <div id="is-tabell" class="overflow-x-auto">${isTabellHtml()}</div>
+      </div>
+    </div>`;
+}
+
+// Nyckeltal och diagram. De följer vyn, sökfältet och kolumnfiltren, så att
+// till exempel ett namn i "Tilldelad till" ger den personens siffror. Klick i
+// diagrammen filtrerar bara tabellen, annars skulle diagrammet krympa till
+// det man klickat på.
+function isDiagramHtml() {
+  const s = isSammanstall(isSokfiltrerade(isVyArenden()));
+  const f = _is.filter;
+  const kort = (titel, antal, farg, filterNyckel, filterVarde) => `
+    <button onclick="isSattFilter('${filterNyckel}', ${filterVarde == null ? 'null' : isRef(filterVarde)})"
+            class="bg-white border rounded p-4 text-left transition-colors hover:border-ads-blue
+                   ${filterNyckel && f[filterNyckel] === filterVarde && filterVarde != null ? 'border-ads-blue ring-1 ring-ads-blue' : 'border-ads-border'}">
+      <div class="text-sm font-semibold" style="color:${farg}">${titel}</div>
+      <div class="text-3xl font-semibold text-ads-text mt-2">${antal}</div>
+    </button>`;
+  const sokText = [_is.sok && `sök "${_is.sok}"`, ...Object.entries(_is.kolFilter).map(([k, v]) =>
+    `${{ nr: 'Nr', typ: 'Ärendetyp', rubrik: 'Rubrik', status: 'Status', tilldelad: 'Tilldelad', skapadAv: 'Skapad av',
+         skapat: 'Skapat', forfaller: 'Förfaller', dagar: 'Dagar', projekt: 'Projekt' }[k] || k}: ${
+      k === 'status' ? isStatusLabel(v) : k === 'dagar' ? IS_DAGAR_VAL[v]?.text : v}`)].filter(Boolean);
+
+  return `
+    ${sokText.length ? `
+      <div class="px-5 pt-3 text-xs text-ads-muted">Siffrorna gäller filtret: <span class="text-ads-blue">${vkEsc(sokText.join(' · '))}</span></div>` : ''}
     <div class="px-5 py-4 grid grid-cols-2 md:grid-cols-5 gap-3">
       ${kort(_is.visaStangda ? 'Ärenden' : 'Ej stängda ärenden', s.totalt, '#3d3d3d', 'status', null)}
       ${kort('Slutförda', s.perStatus.completed || 0, '#5c8a1e', 'status', 'completed')}
@@ -503,24 +566,6 @@ function isDashboardHtml() {
       <div class="bg-white border border-ads-border rounded p-4">
         <h3 class="text-sm font-semibold text-ads-text mb-3">Status per projekt</h3>
         ${isStapelHtml(s)}
-      </div>
-    </div>
-
-    <div class="px-5 py-4">
-      <div class="bg-white border border-ads-border rounded">
-        <div class="px-4 py-2.5 border-b border-ads-border flex items-center gap-3 flex-wrap">
-          <h3 class="text-sm font-semibold text-ads-text">Ärenden</h3>
-          ${aktivaFilter.map(t => `<span class="text-[11px] px-2 py-0.5 rounded-full bg-ads-blue/10 text-ads-blue">${vkEsc(t)}</span>`).join('')}
-          <button onclick="isRensaFilter()" class="text-[11px] text-ads-muted hover:text-ads-text">Rensa alla filter ✕</button>
-          <div class="flex-1"></div>
-          <input type="search" placeholder="Sök rubrik, person, nr…" value="${vkEsc(_is.sok)}" oninput="isSok(this.value)"
-                 class="px-2.5 py-1 text-sm border border-ads-border rounded w-56 focus:outline-none focus:ring-1 focus:ring-ads-blue" />
-          <label class="flex items-center gap-1.5 text-xs text-ads-muted cursor-pointer">
-            <input type="checkbox" ${_is.visaStangda ? 'checked' : ''} onchange="isVaxlaStangda()" class="accent-ads-blue" /> Visa stängda</label>
-          ${bhKnapp('isVaxlaRedigera()', _is.redigera ? 'Klar med redigering' : 'Redigera')}
-          ${bhKnapp('isExportera()', 'Excel')}
-        </div>
-        <div id="is-tabell" class="overflow-x-auto">${isTabellHtml()}</div>
       </div>
     </div>`;
 }

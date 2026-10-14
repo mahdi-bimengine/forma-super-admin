@@ -43,7 +43,42 @@ function isForesla(ref, falt, varde) {
   }
   // Ta bort fält som är tillbaka på sitt ursprungliga värde.
   for (const k of Object.keys(andring.efter)) if (andring.efter[k] === fore[k]) delete andring.efter[k];
-  if (!Object.keys(andring.efter).length) _is.andringar = _is.andringar.filter(x => x !== andring);
+  isRensaTom(andring);
+  isRita();
+}
+
+function isRensaTom(andring) {
+  if (!Object.keys(andring.efter).length && !andring.kommentar) _is.andringar = _is.andringar.filter(x => x !== andring);
+}
+
+function isHamtaAndring(a) {
+  let andring = _is.andringar.find(x => x.id === a.id);
+  if (!andring) {
+    andring = { id: a.id, nr: a.nr, rubrik: a.rubrik, projekt: a.projekt, projektId: a.projektId, accId: a.accId, fore: isFore(a), efter: {} };
+    _is.andringar.push(andring);
+  }
+  return andring;
+}
+
+// Sätter en status direkt, utan omritning. Används för bulkåtgärder.
+function isForeslaStatus(a, status) {
+  if (!a.tillatnaStatusar.includes(status) || !isFarAndra(a, 'status')) return false;
+  const andring = isHamtaAndring(a);
+  andring.efter.status = status;
+  return true;
+}
+
+// Skickar tillbaka ett slutfört ärende till projektören: ny status och en
+// kommentar som förklarar varför. Kommentaren kan inte återställas.
+function isSkickaTillbaka(ref) {
+  const a = _is.ref[ref];
+  const status = ['in_progress', 'open', 'pending'].find(s => a.tillatnaStatusar.includes(s));
+  if (!status || !isFarAndra(a, 'status')) { alert('ACC tillåter inte att du öppnar det här ärendet igen.'); return; }
+  const text = prompt(`Kommentar till projektören om ärende #${a.nr}:`, 'Ej godkänd vid samordning. Se över och slutför igen när det är åtgärdat.');
+  if (text == null) return;
+  const andring = isHamtaAndring(a);
+  andring.efter.status = status;
+  andring.kommentar = text.trim() || null;
   isRita();
 }
 
@@ -85,7 +120,14 @@ async function isSpara() {
           kropp.assignedTo     = r.efter.assignedTo;
           kropp.assignedToType = r.efter.assignedToType;
         }
-        const svar = await bhMedOmforsok(() => apsSend('PATCH', sokvag, kropp));
+        let svar = farsk;
+        if (Object.keys(kropp).length) svar = await bhMedOmforsok(() => apsSend('PATCH', sokvag, kropp));
+        // Kommentaren skrivs efter ändringen, så att den bara hamnar på ärenden
+        // som faktiskt ändrades.
+        if (r.kommentar) {
+          await bhMedOmforsok(() => apsSend('POST', `${sokvag}/comments`, { body: r.kommentar }));
+          _is.kommentarer?.delete(r.id);
+        }
         r.faktisk = isFore({ ra: svar });
         r.status  = Object.keys(r.efter).every(k => r.faktisk[k] === r.efter[k]) ? 'klar' : 'avviker';
         isUppdateraArende(r.projektId, svar);
@@ -222,7 +264,7 @@ function isAndringsradHtml() {
         <span class="text-sm text-amber-900"><b>${n}</b> ärende${n > 1 ? 'n' : ''} med ändringar väntar</span>
         <button onclick="isOppnaDialog('granska')" class="bg-be-charcoal hover:bg-black text-white text-xs font-medium py-1.5 px-3 rounded">Granska och spara</button>
         <button onclick="isTomAndringar()" class="text-xs text-ads-muted hover:text-ads-text">Töm listan</button>`
-        : `<span class="text-xs text-ads-muted">${_is.redigera ? 'Ändra status, tilldelning eller förfallodatum i tabellen. Inget sparas förrän du granskat.' : 'Slå på Redigera ovanför tabellen för att ändra ärenden.'}</span>`}
+        : `<span class="text-xs text-ads-muted">${_is.redigera || _is.yta !== 'alla' ? 'Ändringar samlas här och sparas först när du granskat dem.' : 'Slå på Redigera ovanför tabellen för att ändra ärenden.'}</span>`}
       <div class="flex-1"></div>
       <button onclick="isOppnaDialog('historik')" class="text-xs text-ads-blue hover:underline">Historik och återställning${logg ? ` (${logg})` : ''}</button>
     </div>`;
@@ -242,6 +284,7 @@ function isAndringsTabell(rader, medAngra, medStatus) {
             <td class="px-2 py-1.5 text-xs">
               ${Object.keys(r.efter).filter(k => k !== 'assignedToType').map(k => `
                 <div><span class="text-ads-muted">${isFaltNamn(k)}:</span> ${vkEsc(isVardeText(k, r.fore))} <span class="text-ads-muted">→</span> <b>${vkEsc(isVardeText(k, r.efter))}</b></div>`).join('')}
+              ${r.kommentar ? `<div><span class="text-ads-muted">Kommentar:</span> <i>${vkEsc(r.kommentar)}</i></div>` : ''}
             </td>
             ${medStatus ? `<td class="px-2 py-1.5 text-xs ${stil[r.status] || ''}">${r.status}
                 ${r.fel ? `<div class="text-[10px] text-red-700 max-w-[260px]">${vkEsc(r.fel)}</div>` : ''}</td>` : ''}
@@ -271,6 +314,7 @@ function isDialogHuvud(titel, under) {
 function isDialogHtml() {
   if (!_is.dialog) return '<div id="is-dialog"></div>';
   if (_is.dialog === 'vyer') return isDialogRam(isVyRedigerareHtml());
+  if (_is.dialog === 'inst') return isDialogRam(isInstHtml());
 
   if (_is.dialog === 'granska') {
     const a = _is.andringar;
@@ -329,11 +373,11 @@ function isDialogHtml() {
 }
 
 // Redigerbara celler i tabellen.
-function isStatusCell(a, ref) {
+function isStatusCell(a, ref, redigerbar = _is.redigera) {
   const vant = isVantande(a);
   const varde = vant?.efter.status ?? a.status;
   const val = [...new Set([a.status, ...a.tillatnaStatusar])];
-  if (!_is.redigera || val.length < 2 || !isFarAndra(a, 'status')) return isStatusTagg(varde, !!vant?.efter.status);
+  if (!redigerbar || val.length < 2 || !isFarAndra(a, 'status')) return isStatusTagg(varde, !!vant?.efter.status);
   return `<select onchange="isForesla(${ref}, 'status', this.value)"
                   class="text-xs border rounded px-1 py-0.5 ${vant?.efter.status ? 'border-amber-400 bg-amber-50' : 'border-ads-border bg-white'}">
             ${val.map(s => `<option value="${s}" ${s === varde ? 'selected' : ''}>${isStatusLabel(s)}</option>`).join('')}
@@ -347,12 +391,12 @@ function isStatusTagg(s, vantar) {
                 style="background:${f};color:${morkText ? '#1f2937' : '#fff'}">${isStatusLabel(s)}</span>`;
 }
 
-function isTilldeladCell(a, ref) {
+function isTilldeladCell(a, ref, redigerbar = _is.redigera) {
   const vant = isVantande(a);
   const harAndring = vant && 'assignedTo' in vant.efter;
   const id = harAndring ? vant.efter.assignedTo : a.tilldeladId;
   const typ = harAndring ? vant.efter.assignedToType : a.tilldeladTyp;
-  if (!_is.redigera || !isFarAndra(a, 'assignedTo')) {
+  if (!redigerbar || !isFarAndra(a, 'assignedTo')) {
     return `<span class="${harAndring ? 'bg-amber-50 px-1 rounded' : ''}">${vkEsc(harAndring ? isVardeText('assignedTo', vant.efter) : a.tilldelad)}</span>`;
   }
   const reg = _is.projekt.get(a.projektId)?.namnRegister || new Map();
@@ -372,11 +416,11 @@ function isTilldeladCell(a, ref) {
           </select>`;
 }
 
-function isForfallerCell(a, ref) {
+function isForfallerCell(a, ref, redigerbar = _is.redigera) {
   const vant = isVantande(a);
   const harAndring = vant && 'dueDate' in vant.efter;
   const varde = harAndring ? vant.efter.dueDate || '' : a.forfaller;
-  if (!_is.redigera || !isFarAndra(a, 'dueDate')) return `<span class="${harAndring ? 'bg-amber-50 px-1 rounded' : ''}">${varde || ''}</span>`;
+  if (!redigerbar || !isFarAndra(a, 'dueDate')) return `<span class="${harAndring ? 'bg-amber-50 px-1 rounded' : ''}">${varde || ''}</span>`;
   return `<input type="date" value="${varde}" onchange="isForesla(${ref}, 'dueDate', this.value)"
                  class="text-xs border rounded px-1 py-0.5 ${harAndring ? 'border-amber-400 bg-amber-50' : 'border-ads-border bg-white'}" />`;
 }
