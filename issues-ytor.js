@@ -99,7 +99,8 @@ function isStartHtml() {
           const lage = l => lista.filter(a => isMedlemLage(a).lage === l).length;
           return kort(`isOppnaMedlem('${flik}')`, titel, lista.length, under,
             rad(IS_BRADSKA.forfallet.farg, 'Förfallna', lista.filter(isArForfallet).length) +
-            (lasta ? rad('#9CA3AF', 'Att förbereda', lage('ny')) + rad('#D97706', 'Väntar på kontroll', lage('forberedd'))
+            (lasta ? rad('#9CA3AF', 'Att förbereda', lage('ny')) + rad('#D97706', 'Väntar på kontroll', lage('forberedd')) +
+                     (flik === 'onb' ? rad('#0284C7', 'Licenser kvar', lage('licenser')) : '')
                    : '<div class="text-[11px] text-ads-muted italic">Läget visas när Medlemmar har öppnats</div>'));
         }).join('')}
     </div>

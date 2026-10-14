@@ -31,6 +31,12 @@ const IS_PRODUKTER = {
   projectAdministration: 'Projektadministration', cost: 'Cost', insight: 'Insight', takeoff: 'Takeoff',
   autoSpecs: 'AutoSpecs', cloudWorksharing: 'Cloud Worksharing', capitalPlanning: 'Capital Planning',
 };
+// Licenser (Member subscription) sätts i Hub Admin och har inget API. De väljs
+// vid förberedelsen och bockas av efter att personen lagts till, eftersom
+// personen måste finnas i kontot innan en licens kan tilldelas.
+const IS_LICENSER = ['BIM Collaborate', 'BIM Collaborate Pro', 'Forma Build', 'Navisworks Manage', 'Revit', 'AutoCAD'];
+const IS_LICENS_FORSLAG = { build: 'Forma Build', designCollaboration: 'BIM Collaborate', modelCoordination: 'BIM Collaborate' };
+
 // Ger administratörsrätt och föreslås aldrig automatiskt.
 const IS_ADMIN_PRODUKTER = new Set(['projectAdministration', 'accountAdministration']);
 
@@ -106,7 +112,12 @@ function isMedlemLage(a) {
   const klar = markorer.find(m => m.steg === 'klar');
   const prep = markorer.find(m => m.steg === 'forberedd');
   const atertagen = markorer.find(m => m.steg === 'atertagen');
-  if (klar && (!atertagen || atertagen.tid < klar.tid)) return { lage: 'klar', klar, prep };
+  const licenser = markorer.find(m => m.steg === 'licenser');
+  if (klar && (!atertagen || atertagen.tid < klar.tid)) {
+    // Onboarding med licenser är klar först när licenserna bockats av.
+    if (klar.typ === 'onb' && prep?.licenser?.length && !(licenser && licenser.tid >= klar.tid)) return { lage: 'licenser', klar, prep };
+    return { lage: 'klar', klar, prep };
+  }
   if (prep && (!atertagen || atertagen.tid < prep.tid)) return { lage: 'forberedd', prep };
   return { lage: 'ny' };
 }
@@ -215,7 +226,8 @@ function isNyttUtkast(a, flik) {
     .filter(p => p.access && p.access !== 'none' && !IS_ADMIN_PRODUKTER.has(p.key))
     .map(p => ({ key: p.key, access: p.access === 'administrator' ? 'member' : p.access }))
     .sort((x, y) => x.key.localeCompare(y.key)))) || [];
-  return { projektId, email: data.email, companyId: foretag?.id || '', roleIds: roller, products: produkter };
+  const licenser = [...new Set(produkter.map(p => IS_LICENS_FORSLAG[p.key]).filter(Boolean))];
+  return { projektId, email: data.email, companyId: foretag?.id || '', roleIds: roller, products: produkter, licenser, licensAnnan: '' };
 }
 
 // ── Händelser ─────────────────────────────────────────────────────────────────
@@ -330,6 +342,35 @@ function isUtkastLista(ref, falt, varde, pa) {
   if (falt === 'roleIds') u.roleIds = pa ? [...new Set([...u.roleIds, varde])] : u.roleIds.filter(x => x !== varde);
   if (falt === 'products') u.products = pa ? [...u.products.filter(p => p.key !== varde), { key: varde, access: 'member' }]
                                            : u.products.filter(p => p.key !== varde);
+  if (falt === 'licenser') u.licenser = pa ? [...new Set([...u.licenser, varde])] : u.licenser.filter(x => x !== varde);
+}
+
+function isUtkastLicensAnnan(ref, varde) {
+  const u = _is.medlem.utkast.get(_is.ref[ref]);
+  if (u) u.licensAnnan = varde;
+}
+
+// Licenserna är tilldelade i Hub Admin. Ärendet kommenteras och slutförs.
+async function isLicenserKlara(ref) {
+  const a = _is.ref[ref];
+  const { prep } = isMedlemLage(a);
+  if (!document.getElementById(`is-licenser-${a.id}`)?.checked) return alert('Kryssa i att licenserna är tilldelade i Hub Admin.');
+  try {
+    await isKommentera(a, [`${IS_MARKOR} Licenser tilldelade i Hub Admin av ${_profile?.name || isJag()}: ${(prep?.licenser || []).join(', ')}.`],
+      { steg: 'licenser', av: isJag(), licenser: prep?.licenser || [] });
+    let slutfort = false;
+    if (a.tillatnaStatusar.includes('completed') && isFarAndra(a, 'status')) {
+      try {
+        const svar = await bhMedOmforsok(() => apsSend('PATCH', `/construction/issues/v1/projects/${a.accId}/issues/${a.id}`, { status: 'completed' }));
+        isUppdateraArende(a.projektId, svar);
+        slutfort = true;
+      } catch { /* slutförs i ACC */ }
+    }
+    _is.medlem.meddelande = { id: a.id, text: `Licenserna är avbockade.${slutfort ? ' Ärendet är slutfört.' : ' Slutför ärendet i ACC.'}` };
+  } catch (err) {
+    _is.medlem.meddelande = { id: a.id, fel: true, text: `Det gick inte: ${bhKortFel(err)}` };
+  }
+  isRita();
 }
 
 function isAvbrytForbered() {
@@ -359,10 +400,13 @@ async function isSparaForberedelse(ref) {
   if (flik === 'onb') {
     const foretag = (_is.medlem.foretag || []).find(f => f.id === u.companyId);
     const roller = isRollNamn(u.projektId, u.roleIds);
-    data = { steg: 'forberedd', typ: 'onb', av: isJag(), projektId: u.projektId, email: u.email, companyId: u.companyId, roleIds: u.roleIds, products: u.products };
+    const licenser = [...u.licenser, ...String(u.licensAnnan || '').split(',').map(s => s.trim()).filter(Boolean)];
+    data = { steg: 'forberedd', typ: 'onb', av: isJag(), projektId: u.projektId, email: u.email, companyId: u.companyId,
+             roleIds: u.roleIds, products: u.products, licenser };
     text = [`${IS_MARKOR} Onboarding förberedd av ${_profile?.name || isJag()}`,
       `Projekt: ${projekt}`, `E-post: ${u.email}`, `Företag: ${foretag?.name || u.companyId}`,
       `Roller: ${roller.join(', ') || 'inga'}`, `Produkter: ${u.products.map(p => IS_PRODUKTER[p.key] || p.key).join(', ') || 'standard'}`,
+      `Licenser att tilldela i Hub Admin: ${licenser.join(', ') || 'inga'}`,
       'Väntar på kontroll av en andra person i Forma Console.'];
   } else {
     const m = medlemmar.find(x => x.id === u.userId);
@@ -437,8 +481,10 @@ async function isBekrafta(ref) {
       { steg: 'klar', typ: prep.typ, av: isJag(), forberedd: prep.av, projektId: prep.projektId, email: prep.email, userId });
 
     // Slutför ärendet om det går. Misslyckas det är medlemsändringen ändå gjord.
+    // Återstår licenser väntar slutförandet tills de är avbockade.
     let slutfort = false;
-    if (a.tillatnaStatusar.includes('completed') && isFarAndra(a, 'status')) {
+    const licenserKvar = prep.typ === 'onb' && prep.licenser?.length;
+    if (!licenserKvar && a.tillatnaStatusar.includes('completed') && isFarAndra(a, 'status')) {
       try {
         const svar = await bhMedOmforsok(() => apsSend('PATCH', `/construction/issues/v1/projects/${a.accId}/issues/${a.id}`, { status: 'completed' }));
         isUppdateraArende(a.projektId, svar);
@@ -454,7 +500,9 @@ async function isBekrafta(ref) {
     // Läs om medlemmarna efteråt.
     if (p) p.medlemmar = await bhMedOmforsok(() => listProjectUsers(acc)).catch(() => p.medlemmar);
     else _is.medlem.projektMedlemmar.delete(prep.projektId);
-    _is.medlem.meddelande = { id: a.id, text: `${handling}: ${prep.email}.${slutfort ? ' Ärendet är slutfört.' : ' Slutför ärendet i ACC.'}` };
+    _is.medlem.meddelande = { id: a.id, text: `${handling}: ${prep.email}.` + (licenserKvar
+      ? ` Tilldela nu licenserna i Hub Admin (${prep.licenser.join(', ')}) och bocka av nedan.`
+      : slutfort ? ' Ärendet är slutfört.' : ' Slutför ärendet i ACC.') };
   } catch (err) {
     _is.medlem.meddelande = { id: a.id, fel: true, text: `Det gick inte: ${bhKortFel(err)}` };
   }
@@ -607,6 +655,7 @@ async function isAterstallMedlem(id) {
 const IS_MEDLEM_LAGE = {
   ny:        { text: 'Att förbereda',        farg: 'bg-ads-gray text-ads-text' },
   forberedd: { text: 'Väntar på kontroll',   farg: 'bg-amber-100 text-amber-900' },
+  licenser:  { text: 'Licenser kvar',        farg: 'bg-sky-100 text-sky-800' },
   klar:      { text: 'Genomförd',            farg: 'bg-emerald-100 text-emerald-800' },
 };
 
@@ -677,6 +726,19 @@ function isMedlemKortHtml(a, flik) {
     atgard = `<button onclick="isBorjaForbered(${ref})" class="bg-be-charcoal hover:bg-black text-white text-xs font-medium py-1.5 px-3 rounded">Förbered…</button>`;
   } else if (lage === 'forberedd') {
     atgard = isBekraftaHtml(a, ref, prep);
+  } else if (lage === 'licenser') {
+    atgard = `
+      <p class="text-xs text-emerald-800 mb-2">✓ Tillagd i projektet av ${vkEsc(klar.av)}, förberedd av ${vkEsc(klar.forberedd)}.</p>
+      <div class="p-2.5 rounded border border-sky-200 bg-sky-50 text-xs">
+        <div class="font-medium mb-1">Tilldela licenser i Hub Admin</div>
+        <p class="text-[11px] text-ads-muted mb-1.5">Hub Admin → Members → ${vkEsc(klar.email || prep.email)} → Member subscription. Licenser kan inte sättas via API:et.</p>
+        <ul class="mb-2 list-disc ml-4">${(prep.licenser || []).map(l => `<li>${vkEsc(l)}</li>`).join('')}</ul>
+        <div class="flex items-center gap-3 flex-wrap">
+          <label class="flex items-center gap-1.5 cursor-pointer"><input id="is-licenser-${a.id}" type="checkbox" class="accent-ads-blue" />
+            Licenserna är tilldelade</label>
+          <button onclick="isLicenserKlara(${ref})" class="bg-be-charcoal hover:bg-black text-white text-xs font-medium py-1.5 px-3 rounded">Licenser tilldelade</button>
+        </div>
+      </div>`;
   } else if (lage === 'klar') {
     atgard = `<p class="text-xs text-emerald-800">Genomförd av ${vkEsc(klar.av)}, förberedd av ${vkEsc(klar.forberedd)} · ${(klar.tid || '').slice(0, 10)}.
       ${IS_KLARA.has(a.status) ? '' : 'Ärendet är inte slutfört i ACC än.'}</p>`;
@@ -811,6 +873,14 @@ function isForberedFormHtml(a, ref, flik) {
               ${vkEsc(IS_PRODUKTER[k] || k)}${IS_ADMIN_PRODUKTER.has(k) ? ' <span class="text-amber-700">(admin)</span>' : ''}</label>`).join('')}
         </div>
         <p class="text-[10px] text-ads-muted mt-1">Förifyllt efter befintliga medlemmar från samma företag.</p>
+        <div class="text-ads-muted mt-2 mb-0.5">Licenser att tilldela i Hub Admin (Member subscription)</div>
+        <div class="flex flex-wrap gap-x-3 gap-y-1">
+          ${IS_LICENSER.map(l => `<label class="flex items-center gap-1"><input type="checkbox" class="accent-ads-blue"
+              ${u.licenser.includes(l) ? 'checked' : ''} onchange="isUtkastLista(${ref}, 'licenser', '${l}', this.checked)" /> ${vkEsc(l)}</label>`).join('')}
+        </div>
+        <input value="${vkEsc(u.licensAnnan || '')}" oninput="isUtkastLicensAnnan(${ref}, this.value)" placeholder="Annan licens, flera med komma"
+               class="mt-1 w-full border border-ads-border rounded px-2 py-0.5 text-xs" />
+        <p class="text-[10px] text-ads-muted mt-0.5">Bockas av efter att personen lagts till. Ärendet slutförs först då.</p>
       </div>
     </div>${knappar}`;
 }
@@ -826,7 +896,8 @@ function isBekraftaHtml(a, ref, prep) {
       ${rad('Projekt', projekt)}${rad('E-post', prep.email)}
       ${prep.typ === 'onb'
         ? rad('Företag', foretag?.name || prep.companyId || '–') + rad('Roller', isRollNamn(prep.projektId, prep.roleIds).join(', ') || 'inga') +
-          rad('Produkter', (prep.products || []).map(p => IS_PRODUKTER[p.key] || p.key).join(', ') || 'standard')
+          rad('Produkter', (prep.products || []).map(p => IS_PRODUKTER[p.key] || p.key).join(', ') || 'standard') +
+          rad('Licenser (Hub Admin, efteråt)', (prep.licenser || []).join(', ') || 'inga')
         : rad('Tas bort', `${prep.namn || ''} (${prep.email})`) +
           rad('Ärenden som styrs om', String((prep.omtilldela || []).length)) +
           ((prep.omtilldela || []).length ? `<div class="md:col-span-2 text-[11px] text-ads-muted">${(prep.omtilldela || []).slice(0, 20)
