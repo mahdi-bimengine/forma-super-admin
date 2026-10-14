@@ -27,7 +27,75 @@ function storeToken(token) {
 function logout() {
   sessionStorage.removeItem('aps_token');
   sessionStorage.removeItem('aps_id_token');
+  sessionStorage.removeItem('aps_refresh_token');
+  sessionStorage.removeItem('aps_expires_at');
   window.location.href = window.location.pathname;
+}
+
+// ── Förnyelse av inloggningen ──────────────────────────────────────────────────
+// Autodesks token gäller i en timme. Med refresh token från inloggningen
+// förnyas den i bakgrunden strax innan den går ut, och igen om ett anrop ändå
+// får 401. Går det inte (till exempel för den som loggade in innan refresh token
+// sparades) visas en ruta med "Logga in igen".
+
+let _fornyelseTimer = null;
+
+function sparaTokenSvar(data) {
+  storeToken(data.access_token);
+  if (data.refresh_token) sessionStorage.setItem('aps_refresh_token', data.refresh_token);
+  if (data.expires_in)    sessionStorage.setItem('aps_expires_at', String(Date.now() + data.expires_in * 1000));
+}
+
+async function fornyaToken() {
+  const refresh = sessionStorage.getItem('aps_refresh_token');
+  if (!refresh) return null;
+  try {
+    const res = await fetch(APS_TOKEN_URL, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body:    new URLSearchParams({ grant_type: 'refresh_token', client_id: CLIENT_ID, refresh_token: refresh }).toString(),
+    });
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    sparaTokenSvar(data);
+    setToken(data.access_token);
+    schemalaggFornyelse();
+    return data.access_token;
+  } catch (err) {
+    console.warn('[Inloggning] Kunde inte förnya:', err.message);
+    // En refresh token kan bara användas en gång. Misslyckas den finns inget
+    // att försöka med igen.
+    sessionStorage.removeItem('aps_refresh_token');
+    return null;
+  }
+}
+
+function schemalaggFornyelse() {
+  clearTimeout(_fornyelseTimer);
+  const utgar = Number(sessionStorage.getItem('aps_expires_at'));
+  if (!utgar || !sessionStorage.getItem('aps_refresh_token')) return;
+  const om = Math.max(10_000, utgar - Date.now() - 5 * 60_000);
+  _fornyelseTimer = setTimeout(fornyaToken, om);
+}
+
+// Anropas av api.js när ett anrop fått 401 och förnyelsen inte gick.
+function inloggningUtgangen() {
+  if (document.getElementById('inloggning-utgangen')) return;
+  const ruta = document.createElement('div');
+  ruta.id = 'inloggning-utgangen';
+  ruta.className = 'fixed inset-0 z-[100] bg-black/40 flex items-center justify-center p-4';
+  ruta.innerHTML = `
+    <div class="bg-white rounded shadow-xl max-w-sm w-full p-6 text-center">
+      <img src="logo.png" alt="BIM Engine" class="h-12 w-auto mx-auto mb-4" />
+      <h3 class="font-semibold text-ads-text">Inloggningen har gått ut</h3>
+      <p class="text-sm text-ads-muted mt-1.5">
+        Autodesk-inloggningen gäller en begränsad tid och kunde inte förnyas automatiskt.
+        Logga in igen för att fortsätta. Osparade ändringar i den här vyn försvinner.
+      </p>
+      <button onclick="login()" class="mt-5 w-full bg-be-charcoal hover:bg-black text-white text-sm font-medium py-2.5 rounded">
+        Logga in igen</button>
+    </div>`;
+  document.body.appendChild(ruta);
 }
 
 function decodeIdToken(idToken) {
@@ -88,6 +156,7 @@ async function exchangeCodeForToken(code) {
   if (!res.ok) throw new Error(`Token exchange failed (${res.status}): ${await res.text()}`);
   const data = await res.json();
   if (data.id_token) sessionStorage.setItem('aps_id_token', data.id_token);
+  sparaTokenSvar(data);
   return data.access_token;
 }
 
@@ -126,6 +195,8 @@ async function boot() {
   }
 
   setToken(token);
+  setTokenFornyare(fornyaToken, inloggningUtgangen);
+  schemalaggFornyelse();
 
   const profile = decodeIdToken(sessionStorage.getItem('aps_id_token'));
   showApp(profile);

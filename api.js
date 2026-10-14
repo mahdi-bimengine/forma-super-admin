@@ -6,6 +6,36 @@ function setToken(token) {
   _token = token;
 }
 
+// Sätts av app.js: hur token förnyas, och vad som händer om det inte går.
+let _tokenFornyare = null;
+let _tokenUtgangen = null;
+let _pagaendeFornyelse = null;
+
+function setTokenFornyare(fornya, utgangen) {
+  _tokenFornyare = fornya;
+  _tokenUtgangen = utgangen;
+}
+
+// Flera anrop kan få 401 samtidigt. De väntar då på samma förnyelse.
+async function apsFornyaToken() {
+  if (!_tokenFornyare) return false;
+  if (!_pagaendeFornyelse) {
+    _pagaendeFornyelse = _tokenFornyare().finally(() => { _pagaendeFornyelse = null; });
+  }
+  return !!(await _pagaendeFornyelse);
+}
+
+// Alla anrop mot APS med den inloggades token går hit. Får anropet 401 förnyas
+// token och anropet görs om en gång. Går det inte visas "Logga in igen".
+async function apsFetch(url, opt = {}) {
+  if (!_token) throw new Error('No APS token set. Call setToken() first.');
+  const gor = () => fetch(url, { ...opt, headers: { ...(opt.headers || {}), Authorization: `Bearer ${_token}` } });
+  let res = await gor();
+  if (res.status === 401 && await apsFornyaToken()) res = await gor();
+  if (res.status === 401) _tokenUtgangen?.();
+  return res;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function toSafeBase64(str) {
@@ -257,11 +287,10 @@ async function getFolderPermissions(accProjectId, folderId) {
 // { subjectId, subjectType, actions }. Kräver Hantera (CONTROL) på mappen.
 // batch-delete svarar utan innehåll, så svaret läses som text.
 async function changeFolderPermissions(accProjectId, folderId, op, poster) {
-  if (!_token) throw new Error('No APS token set. Call setToken() first.');
-  const res = await fetch(
+  const res = await apsFetch(
     `${APS_BASE}/bim360/docs/v1/projects/${accProjectId}/folders/${encodeURIComponent(folderId)}/permissions:batch-${op}`, {
       method:  'POST',
-      headers: { Authorization: `Bearer ${_token}`, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(poster),
     });
   const text = await res.text();
@@ -282,11 +311,8 @@ async function listProjectUsers(accProjectId) {
 // ── Model Derivative ──────────────────────────────────────────────────────────
 
 async function getManifest(urn) {
-  if (!_token) throw new Error('No APS token set.');
   const encoded = toSafeBase64(urn);
-  const res = await fetch(`${APS_BASE}/modelderivative/v2/designdata/${encoded}/manifest`, {
-    headers: { Authorization: `Bearer ${_token}` }
-  });
+  const res = await apsFetch(`${APS_BASE}/modelderivative/v2/designdata/${encoded}/manifest`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);
   return res.json();
@@ -324,9 +350,7 @@ async function getModelPropertyFields(projectId, versionUrn) {
     throw new Error(`Egenskapskatalogen kunde inte byggas (${idx?.state || 'inget svar'}).`);
   }
 
-  const res = await fetch(`${APS_BASE}${base}/indexes/${idx.indexId}/fields`, {
-    headers: { Authorization: `Bearer ${_token}` }
-  });
+  const res = await apsFetch(`${APS_BASE}${base}/indexes/${idx.indexId}/fields`);
   if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);
   return (await res.text()).split('\n').filter(l => l.trim()).map(l => JSON.parse(l));
 }
@@ -505,10 +529,7 @@ async function apsGet(path) {
 
 // Samma som apsGet men med absolut adress, för att kunna följa next-länkar.
 async function apsGetUrl(url) {
-  if (!_token) throw new Error('No APS token set. Call setToken() first.');
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${_token}` }
-  });
+  const res = await apsFetch(url);
   if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);
   return res.json();
 }
@@ -516,10 +537,9 @@ async function apsGetUrl(url) {
 // Data Management kräver Content-Type application/vnd.api+json för sina
 // POST-anrop, till skillnad från OSS som vill ha vanlig application/json.
 async function apsPostJsonApi(path, body) {
-  if (!_token) throw new Error('No APS token set. Call setToken() first.');
-  const res = await fetch(`${APS_BASE}${path}`, {
+  const res = await apsFetch(`${APS_BASE}${path}`, {
     method:  'POST',
-    headers: { Authorization: `Bearer ${_token}`, 'Content-Type': 'application/vnd.api+json' },
+    headers: { 'Content-Type': 'application/vnd.api+json' },
     body:    JSON.stringify(body)
   });
   if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);
@@ -531,10 +551,9 @@ async function apsPost(path, body) {
 }
 
 async function apsSend(method, path, body) {
-  if (!_token) throw new Error('No APS token set. Call setToken() first.');
-  const res = await fetch(`${APS_BASE}${path}`, {
+  const res = await apsFetch(`${APS_BASE}${path}`, {
     method,
-    headers: { Authorization: `Bearer ${_token}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(body)
   });
   if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);
