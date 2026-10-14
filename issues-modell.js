@@ -45,7 +45,7 @@ async function isKorModellkontroll(tvinga = false) {
     try {
       await isKontrolleraProjekt(projektId, ids, nya);
     } catch (err) {
-      _is.modellStatus.fel.push(`${_is.projekt.get(projektId)?.namn || projektId}: ${bhKortFel(err)}`);
+      _is.modellStatus.fel.push(`${_is.projekt.get(projektId)?.namn || projektId}: ${String(err.message || err).slice(0, 300)}`);
     }
     _is.modellStatus.klara++;
     isRitaModellStatus();
@@ -56,20 +56,43 @@ async function isKorModellkontroll(tvinga = false) {
   if (_is.yta === 'clash') isRita();
 }
 
+// Model Coordination svarar ibland 502/503/504 när ett anrop tar för lång tid.
+// Läsningar görs därför om även vid serverfel, inte bara vid 429.
+async function isMcLas(steg, fn) {
+  for (let forsok = 0; ; forsok++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const status = Number(String(err.message).match(/APS error (\d+)/)?.[1]);
+      const igen = status === 429 || (status >= 500 && status <= 504);
+      if (!igen || forsok >= 3) {
+        const forklaring = { 403: 'ingen åtkomst till Model Coordination', 404: 'hittades inte', 429: 'för många anrop',
+                             500: 'serverfel', 502: 'serverfel', 503: 'tjänsten är inte tillgänglig', 504: 'tog för lång tid' }[status];
+        const detalj = String(err.message).replace(/^APS error \d+:\s*/, '').slice(0, 140);
+        throw new Error(`${steg}: ${forklaring ? `${forklaring} (${status}) ` : ''}${detalj}`);
+      }
+      await new Promise(r => setTimeout(r, 1500 * 2 ** forsok));
+    }
+  }
+}
+
 async function isKontrolleraProjekt(projektId, ids, ut) {
-  const set = await bhMedOmforsok(() => listModelSets(projektId));
+  const set = await isMcLas('Läsa model set', () => listModelSets(projektId));
   for (const ms of set) {
-    const grupper = (await bhMedOmforsok(() => listAssignedClashGroups(projektId, ms.id)))
+    _is.modellStatus.text = `Kontrollerar ${ms.name || 'model set'}…`;
+    isRitaModellStatus();
+    const grupper = (await isMcLas(`Läsa ärendekopplade clashgrupper i "${ms.name}"`, () => listAssignedClashGroups(projektId, ms.id)))
       .filter(g => ids.has(g.issueId));
     if (!grupper.length) continue;
 
-    const test = await isSenasteLyckadeKorning(projektId, ms.id);
+    const test = await isSenasteLyckadeKorning(projektId, ms);
     if (!test) {
       for (const g of grupper) isLaggTill(ut, g.issueId, { ingenKorning: true, modelSet: ms.name });
       continue;
     }
 
-    const lage = new Map((await bhMedOmforsok(() => getAssignedClashState(projektId, test.id))).map(g => [g.id, g]));
+    const lage = new Map((await isMcLas(`Jämföra med körningen i "${ms.name}" (version ${test.modelSetVersion})`,
+      () => getAssignedClashState(projektId, test.id))).map(g => [g.id, g]));
     for (const g of grupper) {
       const s = lage.get(g.id);
       const totalt = (g.clashes || []).length;
@@ -92,10 +115,10 @@ async function isKontrolleraProjekt(projektId, ids, ut) {
 }
 
 // Senaste model set-versionen som har en lyckad clashkörning.
-async function isSenasteLyckadeKorning(projektId, modelSetId) {
-  const versioner = await bhMedOmforsok(() => getModelSetVersions(projektId, modelSetId));
+async function isSenasteLyckadeKorning(projektId, ms) {
+  const versioner = await isMcLas(`Läsa versioner i "${ms.name}"`, () => getModelSetVersions(projektId, ms.id));
   for (const v of versioner.slice(0, IS_MAX_VERSIONER)) {
-    const tester = await bhMedOmforsok(() => listClashTests(projektId, modelSetId, v.version));
+    const tester = await isMcLas(`Läsa clashkörningar för version ${v.version} i "${ms.name}"`, () => listClashTests(projektId, ms.id, v.version));
     const ok = tester.find(t => /^succe/i.test(t.status || ''));
     if (ok) return { ...ok, modelSetVersion: ok.modelSetVersion ?? v.version };
   }
@@ -135,8 +158,8 @@ function isModellStatusHtml() {
   if (!s) return '';
   if (s.laddar) return `<span class="text-ads-muted">${s.text} ${s.klara} av ${s.totalt} projekt</span>`;
   const fel = s.fel?.length
-    ? `<details class="inline"><summary class="cursor-pointer text-amber-700 inline">${s.fel.length} projekt kunde inte kontrolleras</summary>
-         <div class="text-[11px] text-amber-800">${s.fel.map(f => `<div>${vkEsc(f)}</div>`).join('')}</div></details>` : '';
+    ? `<div class="mt-1 text-[11px] text-amber-800">${s.fel.length} projekt kunde inte kontrolleras:
+         ${s.fel.map(f => `<div class="font-mono">${vkEsc(f)}</div>`).join('')}</div>` : '';
   return `
     <span class="text-ads-muted">Modellkontroll mot senaste clashkörningen, ${s.tid?.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' }) || ''}.</span>
     <button onclick="isKorModellkontroll(true)" class="text-ads-blue hover:underline ml-1">Kör igen</button>
