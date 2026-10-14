@@ -204,7 +204,7 @@ function isNyttUtkast(a, flik) {
   const medlemmar = isMedlemmarFor(projektId);
   if (flik === 'off') {
     const m = medlemmar.find(x => String(x.email || '').toLowerCase() === data.email);
-    return { projektId, email: data.email, userId: m?.id || null };
+    return { projektId, email: data.email, userId: m?.id || null, omtilldela: null, paminnelser: { moten: false, teams: false } };
   }
   const foretag = isMatchaForetag(data.foretag);
   const sammaForetag = foretag ? medlemmar.filter(m => m.companyId === foretag.id) : [];
@@ -236,6 +236,7 @@ async function isBorjaForbered(ref) {
   _is.medlem.oppen = a.id;
   _is.medlem.utkast.set(a.id, isNyttUtkast(a, _is.medlem.flik));
   isRita();
+  if (_is.medlem.flik === 'off') isLasOmtilldela(a.id);
 }
 
 async function isUtkastProjekt(ref, projektId) {
@@ -244,14 +245,83 @@ async function isUtkastProjekt(ref, projektId) {
   const ny = isNyttUtkast({ ...a, projektId }, _is.medlem.flik);
   _is.medlem.utkast.set(a.id, { ...ny, email: _is.medlem.utkast.get(a.id)?.email || ny.email });
   isRita();
+  if (_is.medlem.flik === 'off') isLasOmtilldela(a.id);
 }
 
 function isUtkastFalt(ref, falt, varde) {
-  const u = _is.medlem.utkast.get(_is.ref[ref]);
+  const id = _is.ref[ref];
+  const u = _is.medlem.utkast.get(id);
   if (!u) return;
   if (falt === 'email') u.email = String(varde).trim().toLowerCase();
   if (falt === 'companyId') u.companyId = varde;
-  if (falt === 'userId') u.userId = varde;
+  if (falt === 'userId') { u.userId = varde; isLasOmtilldela(id); }
+}
+
+// ── Offboarding: ärenden som måste styras om ──────────────────────────────────
+// Ärenden som är tilldelade personen får inte bli liggande utan ansvarig. Varje
+// ärende föreslås gå tillbaka till den som skapade det. Är skaparen personen
+// själv, eller inte längre medlem, föreslås vår roll eller vårt företag.
+
+async function isLasOmtilldela(arendeId) {
+  const u = _is.medlem.utkast.get(arendeId);
+  if (!u) return;
+  const m = isMedlemmarFor(u.projektId).find(x => x.id === u.userId);
+  u.omtilldela = null;
+  u.omtilldelaFel = null;
+  if (!m) { u.omtilldela = []; isRita(); return; }
+  if (!m.autodeskId) { u.omtilldela = []; u.omtilldelaFel = 'Medlemmens Autodesk-ID saknas, så tilldelade ärenden kan inte sökas fram.'; isRita(); return; }
+  isRita();
+  try {
+    const lista = await isListaArenden(isAccId(u.projektId), IS_EJ_STANGDA, `&filter[assignedTo]=${encodeURIComponent(m.autodeskId)}`);
+    u.omtilldela = lista.filter(x => x.assignedTo === m.autodeskId).map(x => ({
+      id: x.id, nr: x.displayId, rubrik: x.title || '', status: x.status, skapare: x.createdBy,
+      till: isForeslaMottagare(u.projektId, x.createdBy, m.autodeskId),
+    })).sort((x, y) => x.nr - y.nr);
+  } catch (err) {
+    u.omtilldela = [];
+    u.omtilldelaFel = `Tilldelade ärenden kunde inte läsas: ${bhKortFel(err)}`;
+  }
+  u.franAdsk = m.autodeskId;
+  u.franNamn = m.name || m.email;
+  if (_is.medlem.utkast.get(arendeId) === u) isRita();
+}
+
+// Vilka som kan ta över ärenden i projektet: våra roller och företag först,
+// sedan medlemmarna. Den som offboardas tas inte med.
+function isMottagare(projektId, utom) {
+  const ut = [];
+  const reg = _is.projekt.get(projektId)?.namnRegister;
+  if (reg) {
+    for (const [id, n] of reg) if (n.typ !== 'user') ut.push({ id, typ: n.typ, namn: n.namn, oss: isArOss(n.namn) });
+  }
+  for (const m of isMedlemmarFor(projektId)) {
+    if (!m.autodeskId || m.autodeskId === utom || /deleted|inactive/i.test(m.status || '')) continue;
+    ut.push({ id: m.autodeskId, typ: 'user', namn: m.name || m.email, oss: false });
+  }
+  return ut.sort((a, b) => (b.oss - a.oss) || (a.typ === 'user') - (b.typ === 'user') || a.namn.localeCompare(b.namn, 'sv'));
+}
+
+function isForeslaMottagare(projektId, skapare, utom) {
+  const kandidater = isMottagare(projektId, utom);
+  const s = skapare && skapare !== utom && kandidater.find(k => k.typ === 'user' && k.id === skapare);
+  if (s) return { ...s, kalla: 'skapare' };
+  const reserv = kandidater.find(k => k.oss);
+  return reserv ? { ...reserv, kalla: 'reserv' } : null;
+}
+
+function isOmtilldelaVal(ref, index, varde) {
+  const u = _is.medlem.utkast.get(_is.ref[ref]);
+  const rad = u?.omtilldela?.[index];
+  if (!rad) return;
+  const [typ, ...rest] = String(varde).split(':');
+  const id = rest.join(':');
+  const k = isMottagare(u.projektId, u.franAdsk).find(x => x.typ === typ && x.id === id);
+  rad.till = k ? { ...k, kalla: k.id === rad.skapare ? 'skapare' : 'vald' } : null;
+}
+
+function isPaminnelse(ref, nyckel, pa) {
+  const u = _is.medlem.utkast.get(_is.ref[ref]);
+  if (u) u.paminnelser[nyckel] = pa;
 }
 
 function isUtkastLista(ref, falt, varde, pa) {
@@ -275,6 +345,13 @@ async function isSparaForberedelse(ref) {
   if (!u?.email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(u.email)) return alert('Ange en giltig e-postadress.');
   if (flik === 'onb' && !u.companyId) return alert('Välj företag.');
   if (flik === 'off' && !u.userId) return alert('Välj vilken medlem som ska tas bort.');
+  if (flik === 'off') {
+    if (u.omtilldela == null) return alert('Vänta tills personens ärenden har lästs in.');
+    if (u.omtilldelaFel) return alert(u.omtilldelaFel);
+    const utan = u.omtilldela.filter(r => !r.till);
+    if (utan.length) return alert(`Välj vem som tar över ${utan.length} ärende${utan.length > 1 ? 'n' : ''} (${utan.map(r => `#${r.nr}`).join(', ')}).`);
+    if (!u.paminnelser.moten || !u.paminnelser.teams) return alert('Bocka av påminnelserna om möteskallelser och Teams-chattar.');
+  }
 
   const projekt = _is.projekt.get(u.projektId)?.namn || isProjektNamn(u.projektId);
   const medlemmar = isMedlemmarFor(u.projektId);
@@ -291,10 +368,18 @@ async function isSparaForberedelse(ref) {
     const m = medlemmar.find(x => x.id === u.userId);
     const ogonblick = m ? { email: m.email, companyId: m.companyId || null, roleIds: (m.roles || []).map(r => r.id),
       products: (m.products || []).filter(p => p.access && p.access !== 'none').map(p => ({ key: p.key, access: p.access })) } : null;
-    data = { steg: 'forberedd', typ: 'off', av: isJag(), projektId: u.projektId, email: u.email, userId: u.userId, namn: m?.name || '', ogonblick };
+    // Planen lagras kompakt: [ärende-id, nr, typ, mottagar-id, mottagarnamn].
+    const plan = u.omtilldela.map(r => [r.id, r.nr, r.till.typ, r.till.id, r.till.namn]);
+    data = { steg: 'forberedd', typ: 'off', av: isJag(), projektId: u.projektId, email: u.email, userId: u.userId, namn: m?.name || '',
+             ogonblick, franAdsk: u.franAdsk, omtilldela: plan, paminnelser: true };
     text = [`${IS_MARKOR} Offboarding förberedd av ${_profile?.name || isJag()}`,
       `Projekt: ${projekt}`, `Tas bort: ${m?.name || ''} (${u.email})${m?.companyName ? `, ${m.companyName}` : ''}`,
+      plan.length ? `Ärenden som styrs om innan personen tas bort: ${plan.length}` : 'Inga ärenden är tilldelade personen.',
+      ...plan.slice(0, 15).map(r => `  #${r[1]} → ${r[4]}`),
+      ...(plan.length > 15 ? [`  … och ${plan.length - 15} till`] : []),
+      'Avbockat: borttagen från möteskallelser och Teams-chattar.',
       'Väntar på kontroll av en andra person i Forma Console.'];
+    if (JSON.stringify(data).length > 8500) return alert(`För många ärenden (${plan.length}) för att spara förberedelsen i en kommentar. Styr om en del av dem i ACC först.`);
   }
   try {
     await isKommentera(a, text, data);
@@ -341,6 +426,8 @@ async function isBekrafta(ref) {
       userId = svar?.id || null;
     } else {
       if (!medlemmar.some(m => m.id === prep.userId)) throw new Error('Personen är inte längre medlem i projektet.');
+      // Styr om ärendena först. Lyckas inte alla tas personen inte bort.
+      await isStyrOm(prep, acc);
       await removeProjectUser(acc, prep.userId);
     }
 
@@ -362,7 +449,7 @@ async function isBekrafta(ref) {
     isSparaMedlemLogg({ id: Date.now(), tid: new Date().toISOString(), typ: prep.typ, arendeId: a.id, nr: a.nr, rubrik: a.rubrik,
       arendeProjektId: a.projektId, accId: a.accId, projektId: prep.projektId, email: prep.email, userId,
       ogonblick: prep.typ === 'onb' ? { email: prep.email, companyId: prep.companyId, roleIds: prep.roleIds, products: prep.products } : prep.ogonblick,
-      forberedd: prep.av, utford: isJag() });
+      forberedd: prep.av, utford: isJag(), franAdsk: prep.franAdsk || null, omtilldela: prep.omtilldela || [], namn: prep.namn || '' });
 
     // Läs om medlemmarna efteråt.
     if (p) p.medlemmar = await bhMedOmforsok(() => listProjectUsers(acc)).catch(() => p.medlemmar);
@@ -373,6 +460,44 @@ async function isBekrafta(ref) {
   }
   _is.medlem.kor = null;
   isRita();
+}
+
+// Styr om personens ärenden enligt planen. Har nya ärenden tilldelats sedan
+// förberedelsen stoppas det, så att inget ärende blir kvar hos en borttagen.
+async function isStyrOm(prep, acc) {
+  const plan = prep.omtilldela || [];
+  if (!prep.franAdsk) return;
+  const nu = (await isListaArenden(acc, IS_EJ_STANGDA, `&filter[assignedTo]=${encodeURIComponent(prep.franAdsk)}`))
+    .filter(x => x.assignedTo === prep.franAdsk);
+  const iPlan = new Set(plan.map(r => r[0]));
+  const nya = nu.filter(x => !iPlan.has(x.id));
+  if (nya.length) {
+    throw new Error(`${nya.length} ärende${nya.length > 1 ? 'n' : ''} har tilldelats personen sedan förberedelsen ` +
+      `(${nya.map(x => `#${x.displayId}`).join(', ')}). Förbered om, så att de också styrs om.`);
+  }
+  const misslyckade = [];
+  for (const [id, nr, typ, tillId, tillNamn] of plan) {
+    if (!nu.some(x => x.id === id)) continue;   // redan omstyrt eller stängt
+    const sokvag = `/construction/issues/v1/projects/${acc}/issues/${id}`;
+    try {
+      const svar = await bhMedOmforsok(() => apsSend('PATCH', sokvag, { assignedTo: tillId, assignedToType: typ }));
+      if (svar.assignedTo !== tillId) throw new Error('ACC behöll den gamla tilldelningen');
+      const projektId = `b.${acc}`;
+      if (_is.projekt.has(projektId)) isUpdateraOmStyrt(projektId, svar);
+      await bhMedOmforsok(() => apsSend('POST', `${sokvag}/comments`, { body:
+        `${IS_MARKOR} Omtilldelat till ${tillNamn} eftersom ${prep.namn || prep.email} tas bort ur projektet. ` +
+        `Kontrollera om ärendet fortfarande är aktuellt.` })).catch(() => {});
+    } catch (err) {
+      misslyckade.push(`#${nr}: ${bhKortFel(err)}`);
+    }
+  }
+  if (misslyckade.length) {
+    throw new Error(`Personen togs inte bort, eftersom ${misslyckade.length} ärende${misslyckade.length > 1 ? 'n' : ''} inte kunde styras om: ${misslyckade.join('; ')}`);
+  }
+}
+
+function isUpdateraOmStyrt(projektId, svar) {
+  try { isUppdateraArende(projektId, svar); } catch { /* ärendet visas uppdaterat efter nästa hämtning */ }
 }
 
 // Person 1 kan ta tillbaka sin förberedelse innan den bekräftats.
@@ -427,7 +552,10 @@ function isSparaMedlemLogg(post) {
 async function isAterstallMedlem(id) {
   const post = isMedlemLogg().find(p => p.id === id);
   if (!post || post.aterstalld) return;
-  const vad = post.typ === 'onb' ? `ta bort ${post.email} ur projektet igen` : `lägga till ${post.email} i projektet igen med samma företag, roller och produkter`;
+  const antalArenden = (post.omtilldela || []).length;
+  const vad = post.typ === 'onb' ? `ta bort ${post.email} ur projektet igen`
+    : `lägga till ${post.email} i projektet igen med samma företag, roller och produkter` +
+      (antalArenden ? ` och styra tillbaka ${antalArenden} ärende${antalArenden > 1 ? 'n' : ''}` : '');
   if (!confirm(`Återställ: ${vad}?`)) return;
   const acc = isAccId(post.projektId);
   try {
@@ -442,6 +570,23 @@ async function isAterstallMedlem(id) {
     } else {
       const o = post.ogonblick || { email: post.email };
       await addProjectUser(acc, { email: o.email, companyId: o.companyId || null, roleIds: o.roleIds || [], ...(o.products?.length ? { products: o.products } : {}) });
+      // Styr tillbaka ärendena som fortfarande ligger hos den de styrdes om till.
+      const ejTillbaka = [];
+      for (const [id, nr, , tillId] of post.omtilldela || []) {
+        if (!post.franAdsk) break;
+        const sokvag = `/construction/issues/v1/projects/${acc}/issues/${id}`;
+        try {
+          const nu = await bhMedOmforsok(() => apsGet(sokvag));
+          if (nu.assignedTo !== tillId) { ejTillbaka.push(`#${nr} (har ändrats sedan dess)`); continue; }
+          const svar = await bhMedOmforsok(() => apsSend('PATCH', sokvag, { assignedTo: post.franAdsk, assignedToType: 'user' }));
+          if (_is.projekt.has(post.projektId)) isUpdateraOmStyrt(post.projektId, svar);
+          await bhMedOmforsok(() => apsSend('POST', `${sokvag}/comments`, { body:
+            `${IS_MARKOR} Tilldelat tillbaka till ${post.namn || post.email} eftersom offboardingen återställdes.` })).catch(() => {});
+        } catch (err) {
+          ejTillbaka.push(`#${nr} (${bhKortFel(err)})`);
+        }
+      }
+      if (ejTillbaka.length) alert(`Personen är tillagd igen, men ${ejTillbaka.length} ärenden styrdes inte tillbaka: ${ejTillbaka.join(', ')}`);
     }
     post.aterstalld = new Date().toISOString();
     try { localStorage.setItem(isMedlemLoggNyckel(), JSON.stringify(_is.medlem.logg)); } catch { /* inte kritiskt */ }
@@ -561,6 +706,43 @@ function isMedlemKortHtml(a, flik) {
     </div>`;
 }
 
+// Personens tilldelade ärenden med vem som tar över varje.
+function isOmtilldelaHtml(u, ref) {
+  if (!u.userId) return '';
+  if (u.omtilldela == null) return '<p class="mt-3 text-xs text-ads-muted">Söker ärenden som är tilldelade personen…</p>';
+  if (u.omtilldelaFel) return `<p class="mt-3 text-xs text-red-700">${vkEsc(u.omtilldelaFel)}</p>`;
+  if (!u.omtilldela.length) return '<p class="mt-3 text-xs text-emerald-800">✓ Inga ej stängda ärenden är tilldelade personen.</p>';
+  const mottagare = isMottagare(u.projektId, u.franAdsk);
+  const grupper = [['role', 'Roller'], ['company', 'Företag'], ['user', 'Personer']];
+  return `
+    <div class="mt-3 p-2.5 rounded border border-amber-200 bg-amber-50/60 text-xs">
+      <div class="font-medium mb-1">${u.omtilldela.length} ärende${u.omtilldela.length > 1 ? 'n' : ''} är tilldelade personen och styrs om innan hen tas bort</div>
+      <p class="text-[11px] text-ads-muted mb-2">Förslaget är den som skapade ärendet. Är det personen själv, eller någon som inte längre är medlem, föreslås er roll eller ert företag.</p>
+      <table class="w-full">
+        <tbody>
+          ${u.omtilldela.map((r, i) => {
+            const valt = r.till ? `${r.till.typ}:${r.till.id}` : '';
+            return `
+              <tr class="border-t border-amber-200/70">
+                <td class="py-1 pr-2 whitespace-nowrap font-mono">#${r.nr}</td>
+                <td class="py-1 pr-2">${vkEsc(r.rubrik)} <span class="text-ads-muted">· ${isStatusLabel(r.status)}</span></td>
+                <td class="py-1 w-64">
+                  <select onchange="isOmtilldelaVal(${ref}, ${i}, this.value)"
+                          class="w-full border rounded px-1 py-0.5 bg-white ${r.till ? 'border-ads-border' : 'border-red-400'}">
+                    <option value="">– välj vem som tar över –</option>
+                    ${grupper.map(([t, rubrik]) => {
+                      const lista = mottagare.filter(k => k.typ === t);
+                      return lista.length ? `<optgroup label="${rubrik}">${lista.map(k =>
+                        `<option value="${t}:${vkEsc(k.id)}" ${`${t}:${k.id}` === valt ? 'selected' : ''}>${vkEsc(k.namn)}${k.id === r.skapare ? ' (skapare)' : ''}</option>`).join('')}</optgroup>` : '';
+                    }).join('')}
+                  </select></td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
 function isForberedFormHtml(a, ref, flik) {
   const u = _is.medlem.utkast.get(a.id);
   const projekt = (_projCache[_is.hubId] || []).filter(p => !String(p.attributes?.status || '').match(/archived/i));
@@ -590,6 +772,16 @@ function isForberedFormHtml(a, ref, flik) {
             <option value="">– välj medlem –</option>
             ${medlemmar.map(m => `<option value="${m.id}" ${m.id === u.userId ? 'selected' : ''}>${vkEsc(m.name || m.email)} · ${vkEsc(m.email)}${m.companyName ? ` · ${vkEsc(m.companyName)}` : ''}</option>`).join('')}
           </select></label>
+      </div>
+      ${isOmtilldelaHtml(u, ref)}
+      <div class="mt-3 p-2.5 rounded border border-ads-border bg-white text-xs">
+        <div class="font-medium mb-1">Påminnelser, görs utanför konsolen</div>
+        <label class="flex items-start gap-1.5 mb-1"><input type="checkbox" class="accent-ads-blue mt-0.5" ${u.paminnelser.moten ? 'checked' : ''}
+            onchange="isPaminnelse(${ref}, 'moten', this.checked)" />
+          <span>Borttagen från möteskallelser: återkommande samordningsmöten och andra serier i Outlook${u.email ? ` (${vkEsc(u.email)})` : ''}</span></label>
+        <label class="flex items-start gap-1.5"><input type="checkbox" class="accent-ads-blue mt-0.5" ${u.paminnelser.teams ? 'checked' : ''}
+            onchange="isPaminnelse(${ref}, 'teams', this.checked)" />
+          <span>Borttagen från Teams-chattar och kanaler för projektet</span></label>
       </div>${knappar}`;
   }
 
@@ -635,7 +827,11 @@ function isBekraftaHtml(a, ref, prep) {
       ${prep.typ === 'onb'
         ? rad('Företag', foretag?.name || prep.companyId || '–') + rad('Roller', isRollNamn(prep.projektId, prep.roleIds).join(', ') || 'inga') +
           rad('Produkter', (prep.products || []).map(p => IS_PRODUKTER[p.key] || p.key).join(', ') || 'standard')
-        : rad('Tas bort', `${prep.namn || ''} (${prep.email})`)}
+        : rad('Tas bort', `${prep.namn || ''} (${prep.email})`) +
+          rad('Ärenden som styrs om', String((prep.omtilldela || []).length)) +
+          ((prep.omtilldela || []).length ? `<div class="md:col-span-2 text-[11px] text-ads-muted">${(prep.omtilldela || []).slice(0, 20)
+            .map(r => `#${r[1]} → ${vkEsc(r[4])}`).join(' · ')}${prep.omtilldela.length > 20 ? ' …' : ''}</div>` : '') +
+          `<div class="md:col-span-2 text-amber-900">${prep.paminnelser ? '✓ Förberedaren har bockat av möteskallelser och Teams-chattar.' : '⚠ Påminnelserna är inte avbockade.'}</div>`}
     </div>
     ${egen ? `
       <div class="flex items-center gap-3">

@@ -47,10 +47,11 @@ const IS_EJ_STANGDA = IS_STATUS_ORDNING.filter(s => s !== 'closed').join(',');
 const IS_PARALLELLA_SIDOR = 4;
 
 // Första sidan ger antalet. Resten av sidorna hämtas sedan parallellt.
-async function isListaArenden(accId, statusar) {
+// extra är ytterligare filter, till exempel &filter[assignedTo]=<Autodesk-ID>.
+async function isListaArenden(accId, statusar, extra = '') {
   const sida = offset => bhMedOmforsok(() => apsGet(
     `/construction/issues/v1/projects/${accId}/issues?limit=100&offset=${offset}` +
-    `&fields=${IS_FALT_URVAL}&filter[status]=${statusar}`));
+    `&fields=${IS_FALT_URVAL}&filter[status]=${statusar}${extra}`));
 
   const forsta = await sida(0);
   const ut     = [...(forsta.results || [])];
