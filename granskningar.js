@@ -5,9 +5,9 @@
 // bläddras sedan i webbläsaren. Det är det som gör att filtret i del 2 kan
 // kombinera villkor med OCH, ELLER och XOR, vilket ACC:s egna filter inte kan.
 //
-// Byggs i tre delar: 1 tabellen och 2 filtret (klara), 3 spara filter och
-// export. Filtret ligger i granskningar-filter.js. Fliken läser bara, inget
-// ändras i ACC.
+// Byggd i tre delar: 1 tabellen, 2 filtret (granskningar-filter.js) och 3
+// sparade filter och Excel-export (granskningar-spara.js). Granskningarna läses
+// bara. Det enda fliken skriver i ACC är filen med de sparade filtren.
 //
 // Delar vkEsc, vkKortDatum och vkLaddarKort med Veckokontroll.
 
@@ -73,6 +73,7 @@ function gkReset() {
   // Filtrets värden är namn och arbetsflöden i projektet, så det börjar om.
   _gk.filter  = null;
   _gk.visaBortfiltrerade = false;
+  gkNollstallSparade();
 }
 
 function gkOppnaFlik() {
@@ -281,7 +282,7 @@ function renderGranskningar() {
       <div class="mb-6">
         <h2 class="text-lg font-semibold text-ads-text">Granskningar</h2>
         <p class="text-ads-muted text-sm mt-0.5">
-          Projektets granskningar från ACC. Fliken läser bara, inget ändras i ACC.
+          Projektets granskningar från ACC. Granskningarna ändras aldrig härifrån.
         </p>
       </div>
       <div id="gk-innehall">${gkKropp()}</div>
@@ -320,6 +321,13 @@ function gkKropp() {
                       focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
       </div>
       ${gkfKnapp()}
+      <button onclick="gkExportera()" title="Laddar ned de granskningar som syns, med sökning och filter"
+              class="inline-flex items-center gap-1.5 text-sm border border-ads-border rounded px-3 py-1.5 bg-white
+                     text-ads-text hover:border-ads-blue">
+        <svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10 3v10m0 0l-4-4m4 4l4-4M3 15v1.5A1.5 1.5 0 0 0 4.5 18h11a1.5 1.5 0 0 0 1.5-1.5V15"/></svg>
+        Exportera till Excel
+      </button>
       ${!_gk.floden ? `<span class="text-xs text-amber-600">
         Arbetsflödena gick inte att läsa, så kolumnerna Arbetsflöde och Steg är tomma.</span>` : ''}
       ${!_gk.medlemmar ? `<span class="text-xs text-amber-600" title="Kräver behörighet att se projektets medlemmar">
@@ -330,12 +338,19 @@ function gkKropp() {
     <div id="gk-tabell">${gkTabell()}</div>`;
 }
 
+// Granskningarna efter sökning och sortering, var och en prövad mot filtret.
+// Delas av tabellen och Excel-exporten.
+function gkUrval() {
+  const aktivt  = gkfAktivt();
+  const villkor = aktivt ? gkfVillkorslista().filter(gkfKomplett) : [];
+  const provade = gkSorterade(gkSokta()).map(r => ({ r, ...(aktivt ? gkfUtvardera(r) : { ok: true, traffar: {} }) }));
+  return { aktivt, villkor, provade };
+}
+
 function gkTabell() {
   // Sökningen gäller alltid. Filtret tar bort de som inte uppfyller det, eller
   // tonar ned dem när de bortfiltrerade ska synas.
-  const aktivt   = gkfAktivt();
-  const villkor  = aktivt ? gkfVillkorslista().filter(gkfKomplett) : [];
-  const provade  = gkSorterade(gkSokta()).map(r => ({ r, ...(aktivt ? gkfUtvardera(r) : { ok: true, traffar: {} }) }));
+  const { aktivt, villkor, provade } = gkUrval();
   const borta    = provade.filter(x => !x.ok).length;
   const rader    = _gk.visaBortfiltrerade ? provade : provade.filter(x => x.ok);
   const sidor    = Math.max(1, Math.ceil(rader.length / GK_PER_SIDA));

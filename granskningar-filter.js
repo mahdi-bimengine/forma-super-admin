@@ -172,6 +172,16 @@ function gkfUtvardera(r) {
   return { ok: ga(gkfRot()) !== false, traffar };
 }
 
+// Ett villkor i ord, till exempel "Förfaller inom 7 dagar".
+function gkfBeskrivning(v) {
+  const f  = GK_FALT[v.falt];
+  const op = (GK_OPERATORER[f.typ].find(([o]) => o === v.op) || [null, v.op])[1];
+  if (v.op === 'kommande') return `${f.namn} inom ${v.varde} dagar`;
+  if (v.op === 'senaste')  return `${f.namn} de senaste ${v.varde} dagarna`;
+  if (v.op === 'passerat' || v.op === 'saknas') return `${f.namn} ${op}`;
+  return `${f.namn} ${op} ${v.varde}`;
+}
+
 // Filtret som en rad text, till exempel "A och exakt en av (B, C)".
 function gkfFormel(g = gkfRot(), yttersta = true) {
   const delar = g.delar
@@ -189,6 +199,8 @@ function gkfFormel(g = gkfRot(), yttersta = true) {
 
 function gkfVaxla() {
   _gk.filterOppet = !_gk.filterOppet;
+  // De sparade filtren letas fram först när någon öppnar filtret.
+  if (_gk.filterOppet && !_gk.sparade.laddade && !_gk.sparade.fel) gkLasSparade();
   gkfUppdatera();
 }
 
@@ -248,6 +260,7 @@ function gkfSkriv(id, varde) {
   if (el) el.outerHTML = gkfBokstavHtml(v);
   gkfRitaFormel();
   gkfRitaKnapp();
+  gkRitaSparade();
   gkRitaTabell();
 }
 
@@ -296,6 +309,7 @@ function gkfKort() {
 
   return `
     <div class="bg-white border border-ads-border rounded p-4 mb-3">
+      ${gkSparadeHtml()}
       ${gkfGruppHtml(rot, 0)}
       ${!rot.delar.length ? `<p class="text-xs text-ads-muted mt-2">Inga villkor ännu. Lägg till ett villkor för att filtrera listan.</p>` : ''}
       <div class="flex items-center gap-4 mt-3 pt-3 border-t border-ads-border text-xs text-ads-muted flex-wrap">
@@ -397,7 +411,7 @@ function gkfVardeHtml(v, ruta) {
 
 function gkfTraffHtml(villkor, traffar) {
   return villkor.map(v => `
-    <span title="${traffar[v.id] ? 'Uppfyller' : 'Uppfyller inte'} ${v.bokstav}"
+    <span title="${traffar[v.id] ? 'Uppfyller' : 'Uppfyller inte'} ${v.bokstav}: ${vkEsc(gkfBeskrivning(v))}"
           class="w-5 h-5 inline-flex items-center justify-center rounded-full text-[10px] font-semibold mr-0.5
                  ${traffar[v.id] ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'}">${v.bokstav}</span>`).join('');
 }
