@@ -58,7 +58,7 @@ function isRef(x) {
 }
 
 function isNyttMedlemTillstand() {
-  return { flik: 'onb', foretag: null, kommentarer: new Map(), laddar: false, fel: null, oppen: null,
+  return { flik: 'onb', foretag: null, steg: null, klistra: null, laddar: false, fel: null, oppen: null,
            utkast: new Map(), projektMedlemmar: new Map(), kor: null, logg: null, meddelande: null };
 }
 

@@ -5,15 +5,17 @@
 // utlästa och kontroller av e-post, företag och befintligt medlemskap.
 //
 // Fyrögonsprincipen: person 1 förbereder (projekt, e-post, företag, roller,
-// produkter) och förberedelsen sparas som en kommentar på ärendet i ACC, så att
-// alla ser den. Person 2, en annan inloggad, granskar och bekräftar. Först då
-// läggs medlemmen till eller tas bort, ärendet kommenteras och sätts till
-// Slutförd. Kommentarerna bär data på en rad som börjar med "fc-data:".
+// produkter) och får en överlämningskod som skickas till person 2, till
+// exempel i Teams. Person 2, en annan inloggad, klistrar in koden, granskar och
+// bekräftar. Först då läggs medlemmen till eller tas bort och ärendet sätts
+// till Slutförd.
+//
+// Konsolen skriver aldrig kommentarer eller annan text i ACC. Stegen sparas
+// bara i webbläsaren (localStorage), och koden är det enda som delas.
 //
 // Kräver account:write och projektadministratör i målprojektet.
 
-const IS_MARKOR = '[Forma Console]';
-const IS_DATA_PREFIX = 'fc-data:';
+const IS_KOD_PREFIX = 'FC1:';
 
 // Fälten i beställningsformuläret, igenkända på titeln.
 const IS_FORM_FALT = [
@@ -63,52 +65,90 @@ function isFormData(a) {
   return ut;
 }
 
-// Läser kontots företag, och kommentarerna på medlemsärendena.
-async function isLasMedlemData(tvinga = false) {
-  if (_is.medlem.laddar) return;
-  const arenden = [...isMedlemArenden('onb'), ...isMedlemArenden('off')];
-  const saknas = arenden.filter(a => tvinga || !_is.medlem.kommentarer.has(a.id));
-  if (_is.medlem.foretag && !saknas.length) return;
-
+// Läser kontots företag.
+async function isLasMedlemData() {
+  if (_is.medlem.laddar || _is.medlem.foretag) return;
   _is.medlem.laddar = true;
   _is.medlem.fel = null;
   isRita();
   try {
-    if (!_is.medlem.foretag) {
-      _is.medlem.foretag = (await bhMedOmforsok(() => listAccountCompanies(String(_is.hubId).replace(/^b\./, ''))))
-        .filter(f => f.status !== 'inactive').sort((x, y) => x.name.localeCompare(y.name, 'sv'));
-    }
+    _is.medlem.foretag = (await bhMedOmforsok(() => listAccountCompanies(String(_is.hubId).replace(/^b\./, ''))))
+      .filter(f => f.status !== 'inactive').sort((x, y) => x.name.localeCompare(y.name, 'sv'));
   } catch (err) {
     _is.medlem.fel = `Kontots företag kunde inte läsas: ${bhKortFel(err)}`;
     _is.medlem.foretag = [];
   }
-  let i = 0;
-  const arbetare = async () => {
-    while (i < saknas.length) {
-      const a = saknas[i++];
-      try {
-        const res = await bhMedOmforsok(() => apsGet(`/construction/issues/v1/projects/${a.accId}/issues/${a.id}/comments?sortBy=-createdAt&limit=50`));
-        _is.medlem.kommentarer.set(a.id, res.results || []);
-      } catch { _is.medlem.kommentarer.set(a.id, []); }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(5, saknas.length) }, arbetare));
   _is.medlem.laddar = false;
   if (_is.yta === 'medlem' || _is.yta === 'start') isRita();
 }
 
-// Data i en konsolkommentar, eller null.
-function isTolkaMarkor(k) {
-  const text = String(k?.body || '');
-  if (!text.startsWith(IS_MARKOR)) return null;
-  const rad = text.split('\n').find(r => r.startsWith(IS_DATA_PREFIX));
-  try { return rad ? { ...JSON.parse(rad.slice(IS_DATA_PREFIX.length)), tid: k.createdAt } : null; } catch { return null; }
+// ── Steg och överlämningskod ──────────────────────────────────────────────────
+// Stegen (forberedd, klar, licenser, atertagen) sparas per ärende i den här
+// webbläsaren, nyast först.
+
+function isStegNyckel() { return `is-medlemssteg:${_is.hubId}`; }
+
+function isAllaSteg() {
+  if (!_is.medlem.steg) {
+    try { _is.medlem.steg = JSON.parse(localStorage.getItem(isStegNyckel()) || '{}'); } catch { _is.medlem.steg = {}; }
+  }
+  return _is.medlem.steg;
+}
+
+function isStegFor(a) {
+  return isAllaSteg()[a.id] || [];
+}
+
+function isSparaSteg(a, data) {
+  const alla = isAllaSteg();
+  alla[a.id] = [{ ...data, tid: data.tid || new Date().toISOString() }, ...(alla[a.id] || [])].slice(0, 20);
+  try { localStorage.setItem(isStegNyckel(), JSON.stringify(alla)); } catch { /* inte kritiskt */ }
+}
+
+function isKodFran(data) {
+  const b = new TextEncoder().encode(JSON.stringify(data));
+  let s = '';
+  for (const x of b) s += String.fromCharCode(x);
+  return IS_KOD_PREFIX + btoa(s);
+}
+
+function isDataFranKod(kod) {
+  const ren = String(kod || '').replace(/\s+/g, '');
+  if (!ren.startsWith(IS_KOD_PREFIX)) throw new Error('Koden ska börja med FC1:');
+  const s = atob(ren.slice(IS_KOD_PREFIX.length));
+  return JSON.parse(new TextDecoder().decode(Uint8Array.from(s, c => c.charCodeAt(0))));
+}
+
+// Person 2 klistrar in koden från person 1.
+function isLasKod(ref) {
+  const a = _is.ref[ref];
+  let data;
+  try { data = isDataFranKod(document.getElementById(`is-kod-${a.id}`)?.value); }
+  catch { return alert('Koden kunde inte läsas. Kopiera hela koden igen.'); }
+  if (data.steg !== 'forberedd' || data.arendeId !== a.id) return alert(`Koden hör inte till ärende #${a.nr}.`);
+  isSparaSteg(a, data);
+  _is.medlem.klistra = null;
+  isRita();
+}
+
+function isVisaKlistra(ref, pa) {
+  _is.medlem.klistra = pa ? _is.ref[ref].id : null;
+  isRita();
+}
+
+async function isKopieraKod(ref) { return isKopieraKodFor(_is.ref[ref]); }
+
+async function isKopieraKodFor(a) {
+  const prep = isStegFor(a).find(m => m.steg === 'forberedd');
+  if (!prep) return;
+  const kod = isKodFran(prep);
+  try { await navigator.clipboard.writeText(kod); alert('Koden är kopierad. Skicka den till personen som ska kontrollera.'); }
+  catch { prompt('Kopiera koden och skicka den till personen som ska kontrollera:', kod); }
 }
 
 // Var ärendet står: ny, förberedd (väntar på kontroll) eller klar.
 function isMedlemLage(a) {
-  const markorer = (_is.medlem.kommentarer.get(a.id) || []).map(isTolkaMarkor).filter(Boolean);
-  // Kommentarerna kommer nyast först.
+  const markorer = isStegFor(a);
   const klar = markorer.find(m => m.steg === 'klar');
   const prep = markorer.find(m => m.steg === 'forberedd');
   const atertagen = markorer.find(m => m.steg === 'atertagen');
@@ -118,7 +158,11 @@ function isMedlemLage(a) {
     if (klar.typ === 'onb' && prep?.licenser?.length && !(licenser && licenser.tid >= klar.tid)) return { lage: 'licenser', klar, prep };
     return { lage: 'klar', klar, prep };
   }
-  if (prep && (!atertagen || atertagen.tid < prep.tid)) return { lage: 'forberedd', prep };
+  if (prep && (!atertagen || atertagen.tid < prep.tid)) {
+    // Har någon annan genomfört förberedelsen syns det på ärendets status.
+    if (IS_KLARA.has(a.status)) return { lage: 'klar', klar: { av: 'en annan person', forberedd: prep.av, email: prep.email }, prep };
+    return { lage: 'forberedd', prep };
+  }
   return { lage: 'ny' };
 }
 
@@ -261,7 +305,7 @@ async function isUtkastProjekt(ref, projektId) {
 }
 
 function isUtkastFalt(ref, falt, varde) {
-  const id = _is.ref[ref];
+  const id = _is.ref[ref]?.id;
   const u = _is.medlem.utkast.get(id);
   if (!u) return;
   if (falt === 'email') u.email = String(varde).trim().toLowerCase();
@@ -322,7 +366,7 @@ function isForeslaMottagare(projektId, skapare, utom) {
 }
 
 function isOmtilldelaVal(ref, index, varde) {
-  const u = _is.medlem.utkast.get(_is.ref[ref]);
+  const u = _is.medlem.utkast.get(_is.ref[ref]?.id);
   const rad = u?.omtilldela?.[index];
   if (!rad) return;
   const [typ, ...rest] = String(varde).split(':');
@@ -332,12 +376,12 @@ function isOmtilldelaVal(ref, index, varde) {
 }
 
 function isPaminnelse(ref, nyckel, pa) {
-  const u = _is.medlem.utkast.get(_is.ref[ref]);
+  const u = _is.medlem.utkast.get(_is.ref[ref]?.id);
   if (u) u.paminnelser[nyckel] = pa;
 }
 
 function isUtkastLista(ref, falt, varde, pa) {
-  const u = _is.medlem.utkast.get(_is.ref[ref]);
+  const u = _is.medlem.utkast.get(_is.ref[ref]?.id);
   if (!u) return;
   if (falt === 'roleIds') u.roleIds = pa ? [...new Set([...u.roleIds, varde])] : u.roleIds.filter(x => x !== varde);
   if (falt === 'products') u.products = pa ? [...u.products.filter(p => p.key !== varde), { key: varde, access: 'member' }]
@@ -346,18 +390,17 @@ function isUtkastLista(ref, falt, varde, pa) {
 }
 
 function isUtkastLicensAnnan(ref, varde) {
-  const u = _is.medlem.utkast.get(_is.ref[ref]);
+  const u = _is.medlem.utkast.get(_is.ref[ref]?.id);
   if (u) u.licensAnnan = varde;
 }
 
-// Licenserna är tilldelade i Hub Admin. Ärendet kommenteras och slutförs.
+// Licenserna är tilldelade i Hub Admin. Ärendet slutförs.
 async function isLicenserKlara(ref) {
   const a = _is.ref[ref];
   const { prep } = isMedlemLage(a);
   if (!document.getElementById(`is-licenser-${a.id}`)?.checked) return alert('Kryssa i att licenserna är tilldelade i Hub Admin.');
   try {
-    await isKommentera(a, [`${IS_MARKOR} Licenser tilldelade i Hub Admin av ${_profile?.name || isJag()}: ${(prep?.licenser || []).join(', ')}.`],
-      { steg: 'licenser', av: isJag(), licenser: prep?.licenser || [] });
+    isSparaSteg(a, { steg: 'licenser', av: isJag(), licenser: prep?.licenser || [] });
     let slutfort = false;
     if (a.tillatnaStatusar.includes('completed') && isFarAndra(a, 'status')) {
       try {
@@ -378,7 +421,7 @@ function isAvbrytForbered() {
   isRita();
 }
 
-// Sparar förberedelsen som en kommentar på ärendet.
+// Sparar förberedelsen i webbläsaren och kopierar överlämningskoden.
 async function isSparaForberedelse(ref) {
   const a = _is.ref[ref];
   const flik = _is.medlem.flik;
@@ -394,20 +437,12 @@ async function isSparaForberedelse(ref) {
     if (!u.paminnelser.moten || !u.paminnelser.teams) return alert('Bocka av påminnelserna om möteskallelser och Teams-chattar.');
   }
 
-  const projekt = _is.projekt.get(u.projektId)?.namn || isProjektNamn(u.projektId);
   const medlemmar = isMedlemmarFor(u.projektId);
-  let data, text;
+  let data;
   if (flik === 'onb') {
-    const foretag = (_is.medlem.foretag || []).find(f => f.id === u.companyId);
-    const roller = isRollNamn(u.projektId, u.roleIds);
     const licenser = [...u.licenser, ...String(u.licensAnnan || '').split(',').map(s => s.trim()).filter(Boolean)];
     data = { steg: 'forberedd', typ: 'onb', av: isJag(), projektId: u.projektId, email: u.email, companyId: u.companyId,
              roleIds: u.roleIds, products: u.products, licenser };
-    text = [`${IS_MARKOR} Onboarding förberedd av ${_profile?.name || isJag()}`,
-      `Projekt: ${projekt}`, `E-post: ${u.email}`, `Företag: ${foretag?.name || u.companyId}`,
-      `Roller: ${roller.join(', ') || 'inga'}`, `Produkter: ${u.products.map(p => IS_PRODUKTER[p.key] || p.key).join(', ') || 'standard'}`,
-      `Licenser att tilldela i Hub Admin: ${licenser.join(', ') || 'inga'}`,
-      'Väntar på kontroll av en andra person i Forma Console.'];
   } else {
     const m = medlemmar.find(x => x.id === u.userId);
     const ogonblick = m ? { email: m.email, companyId: m.companyId || null, roleIds: (m.roles || []).map(r => r.id),
@@ -416,34 +451,18 @@ async function isSparaForberedelse(ref) {
     const plan = u.omtilldela.map(r => [r.id, r.nr, r.till.typ, r.till.id, r.till.namn]);
     data = { steg: 'forberedd', typ: 'off', av: isJag(), projektId: u.projektId, email: u.email, userId: u.userId, namn: m?.name || '',
              ogonblick, franAdsk: u.franAdsk, omtilldela: plan, paminnelser: true };
-    text = [`${IS_MARKOR} Offboarding förberedd av ${_profile?.name || isJag()}`,
-      `Projekt: ${projekt}`, `Tas bort: ${m?.name || ''} (${u.email})${m?.companyName ? `, ${m.companyName}` : ''}`,
-      plan.length ? `Ärenden som styrs om innan personen tas bort: ${plan.length}` : 'Inga ärenden är tilldelade personen.',
-      ...plan.slice(0, 15).map(r => `  #${r[1]} → ${r[4]}`),
-      ...(plan.length > 15 ? [`  … och ${plan.length - 15} till`] : []),
-      'Avbockat: borttagen från möteskallelser och Teams-chattar.',
-      'Väntar på kontroll av en andra person i Forma Console.'];
-    if (JSON.stringify(data).length > 8500) return alert(`För många ärenden (${plan.length}) för att spara förberedelsen i en kommentar. Styr om en del av dem i ACC först.`);
   }
-  try {
-    await isKommentera(a, text, data);
-    _is.medlem.oppen = null;
-    isRita();
-  } catch (err) {
-    alert(`Förberedelsen kunde inte sparas: ${bhKortFel(err)}`);
-  }
+  data.arendeId = a.id;
+  data.nr = a.nr;
+  data.tid = new Date().toISOString();
+  isSparaSteg(a, data);
+  _is.medlem.oppen = null;
+  isRita();
+  await isKopieraKodFor(a);
 }
 
-async function isKommentera(a, rader, data) {
-  const body = [...rader, `${IS_DATA_PREFIX}${JSON.stringify(data)}`].join('\n');
-  await bhMedOmforsok(() => apsSend('POST', `/construction/issues/v1/projects/${a.accId}/issues/${a.id}/comments`, { body }));
-  // Kommentaren läggs först i listan direkt, så att läget syns utan omläsning.
-  const lista = _is.medlem.kommentarer.get(a.id) || [];
-  _is.medlem.kommentarer.set(a.id, [{ body, createdAt: new Date().toISOString(), createdBy: '' }, ...lista]);
-}
-
-// Andra personen bekräftar. Medlemmen läggs till eller tas bort, ärendet
-// kommenteras och sätts till Slutförd om ACC tillåter det.
+// Andra personen bekräftar. Medlemmen läggs till eller tas bort och ärendet
+// sätts till Slutförd om ACC tillåter det.
 async function isBekrafta(ref) {
   const a = _is.ref[ref];
   const { prep } = isMedlemLage(a);
@@ -476,9 +495,7 @@ async function isBekrafta(ref) {
     }
 
     const handling = prep.typ === 'onb' ? `Tillagd i ${projekt}` : `Borttagen ur ${projekt}`;
-    await isKommentera(a, [`${IS_MARKOR} ${prep.typ === 'onb' ? 'Onboarding' : 'Offboarding'} genomförd. ${handling}: ${prep.email}`,
-      `Förberedd av ${prep.av}, kontrollerad och genomförd av ${isJag()}.`],
-      { steg: 'klar', typ: prep.typ, av: isJag(), forberedd: prep.av, projektId: prep.projektId, email: prep.email, userId });
+    isSparaSteg(a, { steg: 'klar', typ: prep.typ, av: isJag(), forberedd: prep.av, projektId: prep.projektId, email: prep.email, userId });
 
     // Slutför ärendet om det går. Misslyckas det är medlemsändringen ändå gjord.
     // Återstår licenser väntar slutförandet tills de är avbockade.
@@ -532,9 +549,6 @@ async function isStyrOm(prep, acc) {
       if (svar.assignedTo !== tillId) throw new Error('ACC behöll den gamla tilldelningen');
       const projektId = `b.${acc}`;
       if (_is.projekt.has(projektId)) isUpdateraOmStyrt(projektId, svar);
-      await bhMedOmforsok(() => apsSend('POST', `${sokvag}/comments`, { body:
-        `${IS_MARKOR} Omtilldelat till ${tillNamn} eftersom ${prep.namn || prep.email} tas bort ur projektet. ` +
-        `Kontrollera om ärendet fortfarande är aktuellt.` })).catch(() => {});
     } catch (err) {
       misslyckade.push(`#${nr}: ${bhKortFel(err)}`);
     }
@@ -551,11 +565,9 @@ function isUpdateraOmStyrt(projektId, svar) {
 // Person 1 kan ta tillbaka sin förberedelse innan den bekräftats.
 async function isAtertaForberedelse(ref) {
   const a = _is.ref[ref];
-  if (!confirm('Ta tillbaka förberedelsen? Den finns kvar som kommentar men räknas inte längre.')) return;
-  try {
-    await isKommentera(a, [`${IS_MARKOR} Förberedelsen togs tillbaka av ${_profile?.name || isJag()}.`], { steg: 'atertagen', av: isJag() });
-    isRita();
-  } catch (err) { alert(`Det gick inte: ${bhKortFel(err)}`); }
+  if (!confirm('Ta tillbaka förberedelsen? En kod som redan skickats räknas fortfarande hos mottagaren, så meddela hen.')) return;
+  isSparaSteg(a, { steg: 'atertagen', av: isJag() });
+  isRita();
 }
 
 function isProjektNamn(projektId) {
@@ -628,8 +640,6 @@ async function isAterstallMedlem(id) {
           if (nu.assignedTo !== tillId) { ejTillbaka.push(`#${nr} (har ändrats sedan dess)`); continue; }
           const svar = await bhMedOmforsok(() => apsSend('PATCH', sokvag, { assignedTo: post.franAdsk, assignedToType: 'user' }));
           if (_is.projekt.has(post.projektId)) isUpdateraOmStyrt(post.projektId, svar);
-          await bhMedOmforsok(() => apsSend('POST', `${sokvag}/comments`, { body:
-            `${IS_MARKOR} Tilldelat tillbaka till ${post.namn || post.email} eftersom offboardingen återställdes.` })).catch(() => {});
         } catch (err) {
           ejTillbaka.push(`#${nr} (${bhKortFel(err)})`);
         }
@@ -639,7 +649,7 @@ async function isAterstallMedlem(id) {
     post.aterstalld = new Date().toISOString();
     try { localStorage.setItem(isMedlemLoggNyckel(), JSON.stringify(_is.medlem.logg)); } catch { /* inte kritiskt */ }
     const a = isHittaArende(post.arendeProjektId, post.arendeId);
-    if (a) await isKommentera(a, [`${IS_MARKOR} Återställt av ${_profile?.name || isJag()}: ${vad}.`], { steg: 'atertagen', av: isJag() }).catch(() => {});
+    if (a) isSparaSteg(a, { steg: 'atertagen', av: isJag() });
     const p = _is.projekt.get(post.projektId);
     if (p) p.medlemmar = await bhMedOmforsok(() => listProjectUsers(acc)).catch(() => p.medlemmar);
     _is.medlem.projektMedlemmar.delete(post.projektId);
@@ -675,13 +685,13 @@ function isMedlemHtml() {
       <div class="flex items-center gap-2 flex-wrap mb-3">
         ${chip('onb', 'Onboarding')}${chip('off', 'Offboarding')}
         <div class="flex-1"></div>
-        ${m.laddar ? '<span class="text-xs text-ads-muted">Läser företag och kommentarer…</span>'
-          : `<button onclick="isLasMedlemData(true)" class="text-xs text-ads-blue hover:underline">Läs om kommentarer</button>`}
+        ${m.laddar ? '<span class="text-xs text-ads-muted">Läser företag…</span>' : ''}
       </div>
       ${m.fel ? `<div class="mb-3 p-2.5 rounded border border-amber-200 bg-amber-50 text-xs text-amber-900">${vkEsc(m.fel)}</div>` : ''}
       <p class="text-[11px] text-ads-muted mb-3">
-        Person 1 förbereder, och förberedelsen sparas som kommentar på ärendet. Person 2, en annan inloggad, kontrollerar och bekräftar.
-        Först då ${flik === 'onb' ? 'läggs medlemmen till' : 'tas medlemmen bort'}. Kräver att du är projektadministratör.
+        Person 1 förbereder och skickar överlämningskoden till person 2, till exempel i Teams. Person 2, en annan inloggad, klistrar in koden,
+        kontrollerar och bekräftar. Först då ${flik === 'onb' ? 'läggs medlemmen till' : 'tas medlemmen bort'}. Inget skrivs som kommentar i ACC.
+        Kräver att du är projektadministratör.
       </p>
       <div class="space-y-3">
         ${lista.length ? lista.map(a => isMedlemKortHtml(a, flik)).join('')
@@ -722,8 +732,20 @@ function isMedlemKortHtml(a, flik) {
     atgard = '<p class="text-sm text-ads-muted">Genomför…</p>';
   } else if (_is.medlem.oppen === a.id) {
     atgard = isForberedFormHtml(a, ref, flik);
+  } else if (lage === 'ny' && _is.medlem.klistra === a.id) {
+    atgard = `
+      <label class="block text-xs mb-2"><span class="text-ads-muted">Överlämningskod från den som förberedde</span>
+        <textarea id="is-kod-${a.id}" rows="3" placeholder="FC1:…" class="mt-0.5 w-full border border-ads-border rounded px-2 py-1 font-mono text-[11px]"></textarea></label>
+      <div class="flex items-center gap-2">
+        <button onclick="isLasKod(${ref})" class="bg-be-charcoal hover:bg-black text-white text-xs font-medium py-1.5 px-3 rounded">Läs koden</button>
+        <button onclick="isVisaKlistra(${ref}, false)" class="text-xs text-ads-muted hover:text-ads-text px-2">Avbryt</button>
+      </div>`;
   } else if (lage === 'ny') {
-    atgard = `<button onclick="isBorjaForbered(${ref})" class="bg-be-charcoal hover:bg-black text-white text-xs font-medium py-1.5 px-3 rounded">Förbered…</button>`;
+    atgard = `
+      <div class="flex items-center gap-2">
+        <button onclick="isBorjaForbered(${ref})" class="bg-be-charcoal hover:bg-black text-white text-xs font-medium py-1.5 px-3 rounded">Förbered…</button>
+        <button onclick="isVisaKlistra(${ref}, true)" class="border border-ads-border bg-white hover:border-ads-blue text-xs py-1.5 px-3 rounded">Kontrollera med kod…</button>
+      </div>`;
   } else if (lage === 'forberedd') {
     atgard = isBekraftaHtml(a, ref, prep);
   } else if (lage === 'licenser') {
@@ -821,7 +843,7 @@ function isForberedFormHtml(a, ref, flik) {
     <div class="flex items-center gap-2 mt-3">
       <button onclick="isSparaForberedelse(${ref})" class="bg-be-charcoal hover:bg-black text-white text-xs font-medium py-1.5 px-3 rounded">Spara förberedelse</button>
       <button onclick="isAvbrytForbered()" class="text-xs text-ads-muted hover:text-ads-text px-2">Avbryt</button>
-      <span class="text-[11px] text-ads-muted">Sparas som kommentar på ärendet. Inget ändras i projektet förrän en annan person bekräftat.</span>
+      <span class="text-[11px] text-ads-muted">Ger en kod att skicka till den som kontrollerar. Inget ändras i projektet förrän en annan person bekräftat.</span>
     </div>`;
 
   if (flik === 'off') {
@@ -906,7 +928,8 @@ function isBekraftaHtml(a, ref, prep) {
     </div>
     ${egen ? `
       <div class="flex items-center gap-3">
-        <p class="text-xs text-amber-900">Du förberedde detta. En annan person behöver kontrollera och bekräfta.</p>
+        <p class="text-xs text-amber-900">Du förberedde detta. Skicka koden till en annan person som kontrollerar och bekräftar.</p>
+        <button onclick="isKopieraKod(${ref})" class="border border-ads-border bg-white hover:border-ads-blue text-xs py-1 px-2.5 rounded">Kopiera kod</button>
         <button onclick="isAtertaForberedelse(${ref})" class="text-xs text-ads-muted hover:text-red-700">Ta tillbaka</button>
       </div>` : `
       <div class="flex items-center gap-3 flex-wrap">

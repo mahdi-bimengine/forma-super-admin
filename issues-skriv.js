@@ -85,7 +85,7 @@ function isSkickaTillbaka(ref) {
   const a = _is.ref[ref];
   const status = ['in_progress', 'open', 'pending'].find(s => a.tillatnaStatusar.includes(s));
   if (!status || !isFarAndra(a, 'status')) { alert('ACC tillåter inte att du öppnar det här ärendet igen.'); return; }
-  const text = prompt(`Kommentar till projektören om ärende #${a.nr}:`, 'Ej godkänd vid samordning. Se över och slutför igen när det är åtgärdat.');
+  const text = prompt(`Kommentar till projektören om ärende #${a.nr}:`, '');
   if (text == null) return;
   const andring = isHamtaAndring(a);
   andring.efter.status = status;

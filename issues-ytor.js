@@ -94,14 +94,12 @@ function isStartHtml() {
       })()}
       ${[['onb', 'Onboarding', onb, 'öppna ärenden om nya medlemmar'], ['off', 'Offboarding', offb, 'öppna ärenden om medlemmar som ska bort']]
         .map(([flik, titel, lista, under]) => {
-          // Lägena kräver kommentarerna, som läses när ytan Medlemmar öppnas.
-          const lasta = lista.every(a => _is.medlem.kommentarer.has(a.id));
+          // Lägena kommer från stegen som sparats i den här webbläsaren.
           const lage = l => lista.filter(a => isMedlemLage(a).lage === l).length;
           return kort(`isOppnaMedlem('${flik}')`, titel, lista.length, under,
             rad(IS_BRADSKA.forfallet.farg, 'Förfallna', lista.filter(isArForfallet).length) +
-            (lasta ? rad('#9CA3AF', 'Att förbereda', lage('ny')) + rad('#D97706', 'Väntar på kontroll', lage('forberedd')) +
-                     (flik === 'onb' ? rad('#0284C7', 'Licenser kvar', lage('licenser')) : '')
-                   : '<div class="text-[11px] text-ads-muted italic">Läget visas när Medlemmar har öppnats</div>'));
+            rad('#9CA3AF', 'Att förbereda', lage('ny')) + rad('#D97706', 'Väntar på kontroll', lage('forberedd')) +
+            (flik === 'onb' ? rad('#0284C7', 'Licenser kvar', lage('licenser')) : ''));
         }).join('')}
     </div>
     <p class="px-5 text-[11px] text-ads-muted">
