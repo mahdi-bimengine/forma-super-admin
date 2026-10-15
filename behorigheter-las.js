@@ -198,14 +198,71 @@ function bhMappnamn(f) {
   return String(f.attributes?.displayName || f.attributes?.name || '?').replace(/\//g, '∕');
 }
 
-function bhModellFranAcc(projektNamn, mappar) {
+// ── Sparad hämtning ───────────────────────────────────────────────────────────
+// Mappträdet med behörigheter och medlemslistan sparas per projekt i
+// webbläsarens IndexedDB, så att fliken öppnas direkt nästa gång. En ny
+// hämtning från ACC görs bara när man ber om det.
+
+const BH_CACHE_DB = 'forma-console';
+const BH_CACHE_STORE = 'bh-mappar';
+
+function bhCacheDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(BH_CACHE_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(BH_CACHE_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror   = () => reject(req.error);
+  });
+}
+
+async function bhCacheGor(lage, fn) {
+  const db = await bhCacheDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const req = fn(db.transaction(BH_CACHE_STORE, lage).objectStore(BH_CACHE_STORE));
+      req.onsuccess = () => resolve(req.result);
+      req.onerror   = () => reject(req.error);
+    });
+  } finally { db.close(); }
+}
+
+// { hamtad, projektNamn, mappar, medlemmar } eller null.
+async function bhCacheLas(projektId) {
+  try { return (await bhCacheGor('readonly', s => s.get(projektId))) || null; } catch { return null; }
+}
+
+// Sparar modellen som den ser ut nu. Efter en ändring är de ändrade mapparna
+// redan omlästa, så hämtningstiden behålls.
+async function bhCacheSpara(projektId, data, medlemmar) {
+  if (data?.meta?.kalla !== 'ACC' || !data.mappId) return;
+  const olasta = new Map((data.meta.olasta || []).map(o => [o.path, o.fel]));
+  const post = {
+    hamtad:      data.meta.hamtad,
+    projektNamn: data.meta.projectName,
+    mappar:      [...data.mappId].map(([path, id]) => ({ id, path, beh: data.ra.get(path) || [], ...(olasta.has(path) ? { fel: olasta.get(path) } : {}) })),
+    medlemmar:   medlemmar || null,
+  };
+  try { await bhCacheGor('readwrite', s => s.put(post, projektId)); } catch { /* inte kritiskt */ }
+}
+
+function bhModellFranCache(post) {
+  return bhModellFranAcc(post.projektNamn, post.mappar, post.hamtad);
+}
+
+function bhHamtadText(iso) {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString('sv-SE', { day: 'numeric', month: 'long', year: 'numeric' })} kl. ${d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function bhModellFranAcc(projektNamn, mappar, hamtad = new Date().toISOString()) {
   const folders = new Map();
   for (const m of mappar) folders.set(m.path, bhNyMapp(m.path));
 
   const meta = {
     projectName: projektNamn,
     kalla:       'ACC',
-    exportDate:  new Date().toLocaleString('sv-SE'),
+    hamtad,
+    exportDate:  new Date(hamtad).toLocaleString('sv-SE'),
     createdBy:   'Hämtat direkt från ACC',
     olasta:      mappar.filter(m => m.fel).map(m => ({ path: m.path, fel: m.fel })),
   };

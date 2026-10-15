@@ -84,8 +84,31 @@ function bhStangOversikt() {
   _bh.markerade     = new Set();
 }
 
-function bhOppnaFlik() {
+// Finns en sparad hämtning för projektet öppnas den direkt.
+async function bhOppnaFlik() {
   bhRita();
+  if (_bh.perm || _bh.acc?.laddar || !_currentProject) return;
+  const projektId = _currentProject.id;
+  const post = await bhCacheLas(projektId);
+  _bh.sparad = post ? { projektId, hamtad: post.hamtad } : null;
+  if (!post || _currentProject?.id !== projektId || _bh.perm || _bh.acc?.laddar) return bhRita();
+  bhOppnaSparad(post);
+}
+
+async function bhOppnaSparad(post) {
+  post = post || await bhCacheLas(_currentProject?.id);
+  if (!post) return;
+  _bh.perm = { data: bhModellFranCache(post), filnamn: 'ACC' };
+  _bh.medl = post.medlemmar ? { data: post.medlemmar, filnamn: 'ACC' } : null;
+  _bh.acc  = { laddar: false };
+  bhOppnaOversikt();
+}
+
+// Ny hämtning från ACC, från översikten.
+function bhHamtaOm() {
+  if (_bh.andringar.length && !confirm(`${_bh.andringar.length} ändringar väntar och försvinner. Hämta om från ACC ändå?`)) return;
+  bhStangOversikt();
+  bhHamtaFranAcc();
 }
 
 document.addEventListener('keydown', e => {
@@ -128,6 +151,8 @@ async function bhHamtaFranAcc() {
   }
 
   _bh.acc = { laddar: false };
+  await bhCacheSpara(_currentProject.id, _bh.perm.data, _bh.medl?.data);
+  _bh.sparad = { projektId: _currentProject.id, hamtad: _bh.perm.data.meta.hamtad };
   bhOppnaOversikt();
 }
 
@@ -419,10 +444,16 @@ function bhStartHtml() {
         med roller och företag. Stora projekt kan ta någon minut.
       </p>
       ${acc.fel ? `<p class="text-sm text-red-600 mb-3">Det gick inte att hämta: ${vkEsc(acc.fel)}</p>` : ''}
-      <button onclick="bhHamtaFranAcc()"
-              class="bg-be-charcoal hover:bg-black text-white text-sm font-medium py-2 px-4 rounded transition-colors">
-        Hämta från ACC
-      </button>`;
+      <div class="flex items-center gap-3 flex-wrap">
+        <button onclick="bhHamtaFranAcc()"
+                class="bg-be-charcoal hover:bg-black text-white text-sm font-medium py-2 px-4 rounded transition-colors">
+          Hämta från ACC
+        </button>
+        ${_bh.sparad && _bh.sparad.projektId === _currentProject?.id ? `
+          <button onclick="bhOppnaSparad()" class="border border-ads-border bg-white hover:border-ads-blue text-sm py-2 px-4 rounded">
+            Öppna sparad, hämtad ${vkEsc(bhHamtadText(_bh.sparad.hamtad))}
+          </button>` : ''}
+      </div>`;
 
   return `
     <div class="max-w-5xl mx-auto px-6 py-8">
@@ -492,8 +523,11 @@ function bhOversiktHtml() {
         <div class="min-w-0">
           <div class="font-semibold text-sm text-ads-text leading-tight truncate">${vkEsc(d.meta.projectName)}</div>
           <div class="text-[10px] text-ads-muted leading-tight">
-            ${d.meta.kalla === 'ACC' ? 'Från ACC' : 'Från Excel'}
-            ${d.meta.exportDate ? ` · ${vkEsc(d.meta.exportDate)}` : ''}${d.meta.createdBy && d.meta.kalla !== 'ACC' ? ` · ${vkEsc(d.meta.createdBy)}` : ''}
+            ${d.meta.kalla === 'ACC' && d.meta.hamtad
+              ? `Mappstruktur hämtad ${vkEsc(bhHamtadText(d.meta.hamtad))} ·
+                 <button onclick="bhHamtaOm()" class="text-ads-blue hover:underline">Hämta om från ACC</button>`
+              : `${d.meta.kalla === 'ACC' ? 'Från ACC' : 'Från Excel'}
+                 ${d.meta.exportDate ? ` · ${vkEsc(d.meta.exportDate)}` : ''}${d.meta.createdBy && d.meta.kalla !== 'ACC' ? ` · ${vkEsc(d.meta.createdBy)}` : ''}`}
           </div>
         </div>
         <div class="hidden lg:flex items-center gap-3 pl-4 border-l border-ads-border text-xs text-ads-muted">

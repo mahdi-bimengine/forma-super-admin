@@ -364,10 +364,37 @@ function renderProjectGrid(projects, query = '') {
     return;
   }
 
-  gridEl.innerHTML = `
+  const fav    = favoriter();
+  const favs   = visible.filter(p => fav.has(p.id));
+  const ovriga = visible.filter(p => !fav.has(p.id));
+  const grid   = lista => `
     <div class="grid gap-4" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
-      ${visible.map(projectCard).join('')}
+      ${lista.map(projectCard).join('')}
     </div>`;
+  const rubrik = text => `<h2 class="text-xs font-semibold uppercase tracking-wide text-ads-muted mb-2">${text}</h2>`;
+
+  gridEl.innerHTML = favs.length
+    ? `${rubrik('Favoriter')}${grid(favs)}${ovriga.length ? `<div class="mt-8">${rubrik('Alla projekt')}${grid(ovriga)}</div>` : ''}`
+    : grid(ovriga);
+}
+
+// ── Favoritprojekt ─────────────────────────────────────────────────────────────
+// Sparas per konto i den här webbläsaren.
+
+function favoritNyckel() {
+  return `fc-favoriter:${_hubs[_hubIdx]?.id || ''}`;
+}
+
+function favoriter() {
+  try { return new Set(JSON.parse(localStorage.getItem(favoritNyckel()) || '[]')); } catch { return new Set(); }
+}
+
+function toggleFavorit(event, projectId) {
+  event.stopPropagation();
+  const fav = favoriter();
+  if (fav.has(projectId)) fav.delete(projectId); else fav.add(projectId);
+  try { localStorage.setItem(favoritNyckel(), JSON.stringify([...fav])); } catch { /* inte kritiskt */ }
+  filterProjects();
 }
 
 const STATUS_MAP = {
@@ -396,8 +423,16 @@ function projectCard(p) {
   const { label, dot, pill } = STATUS_MAP[status];
   const tags   = inferModules(p);
   const safeId = p.id.replace(/'/g, "\\'");
+  const fav    = favoriter().has(p.id);
+  const favTxt = fav ? 'Ta bort från favoriter' : 'Lägg till som favorit';
 
   return `
+    <div class="relative">
+    <button
+      onclick="toggleFavorit(event, '${safeId}')"
+      title="${favTxt}" aria-label="${favTxt}" aria-pressed="${fav}"
+      class="absolute top-3 right-3 z-10 p-1 rounded hover:bg-ads-gray ${fav ? 'text-amber-500' : 'text-slate-300 hover:text-amber-500'}"
+    ><svg class="w-4 h-4" viewBox="0 0 24 24" fill="${fav ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.8"><path stroke-linejoin="round" d="M11.48 3.5a.56.56 0 0 1 1.04 0l2.13 5.11a.56.56 0 0 0 .47.35l5.52.44c.5.04.7.66.32.99l-4.2 3.6a.56.56 0 0 0-.18.56l1.28 5.39a.56.56 0 0 1-.84.61l-4.72-2.88a.56.56 0 0 0-.59 0l-4.72 2.88a.56.56 0 0 1-.84-.61l1.28-5.39a.56.56 0 0 0-.18-.56l-4.2-3.6a.56.56 0 0 1 .32-.99l5.52-.44a.56.56 0 0 0 .47-.35z"/></svg></button>
     <button
       onclick="selectProject('${safeId}')"
       class="group w-full bg-white border border-ads-border rounded-lg p-5 text-left
@@ -405,7 +440,7 @@ function projectCard(p) {
              focus:outline-none focus:ring-2 focus:ring-ads-blue focus:ring-offset-1"
       aria-label="${name}"
     >
-      <h3 class="font-semibold text-ads-text text-sm leading-snug mb-2 line-clamp-2">${name}</h3>
+      <h3 class="font-semibold text-ads-text text-sm leading-snug mb-2 line-clamp-2 pr-6">${name}</h3>
       <div class="mb-3">
         <span class="inline-flex items-center gap-1.5 ${pill} text-xs px-2 py-0.5 rounded-full font-medium">
           <span class="${dot} w-1.5 h-1.5 rounded-full shrink-0"></span>${label}
@@ -417,7 +452,8 @@ function projectCard(p) {
       <div class="flex justify-end border-t border-ads-border pt-3">
         <span class="inline-flex items-center gap-1 text-ads-blue text-xs font-medium group-hover:underline">Öppna <svg class="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/></svg></span>
       </div>
-    </button>`;
+    </button>
+    </div>`;
 }
 
 function toggleAccountMenu(event) {

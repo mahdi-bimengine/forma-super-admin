@@ -483,8 +483,10 @@ function isProjektvalHtml() {
 function isProjektlistaHtml() {
   const alla = _projCache[_is.hubId] || [];
   const q = _is.projektSok.trim().toLowerCase();
+  const fav = favoriter();
   const lista = alla.filter(p => !q || (p.attributes?.name || '').toLowerCase().includes(q))
-    .sort((a, b) => (_is.valda.has(b.id) - _is.valda.has(a.id)) || (a.attributes?.name || '').localeCompare(b.attributes?.name || '', 'sv'));
+    .sort((a, b) => (_is.valda.has(b.id) - _is.valda.has(a.id)) || (fav.has(b.id) - fav.has(a.id))
+      || (a.attributes?.name || '').localeCompare(b.attributes?.name || '', 'sv'));
   if (!lista.length) return '<p class="p-4 text-sm text-ads-muted text-center">Inga projekt</p>';
   return lista.map(p => `
     <label class="flex items-center gap-2 px-3 py-1.5 border-b border-ads-border/60 last:border-b-0 text-sm cursor-pointer hover:bg-ads-gray">

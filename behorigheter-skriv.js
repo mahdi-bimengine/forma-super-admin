@@ -296,6 +296,7 @@ async function bhSpara() {
   _bh.andringar   = rader.filter(r => r.status === 'fel').map(r => ({ ...r, status: undefined }));
   _bh.kor.klar    = true;
   bhRaknaOm(d);
+  bhCacheSpara(_currentProject?.id, d, _bh.medl?.data);
   bhAterkoppla();
   bhRita();
 }
