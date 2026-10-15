@@ -548,6 +548,49 @@ async function createIssue(projectId, payload) {
   return apsPost(`/construction/issues/v1/projects/${issuesProjektId(projectId)}/issues`, payload);
 }
 
+// ── Reviews ───────────────────────────────────────────────────────────────────
+// Granskningsverktyget i ACC. Finns inte i BIM 360-projekt. Projekt-id går
+// bra med eller utan b.-prefix. Listorna sidbryts med limit/offset, högst 50.
+
+const REVIEWS_BASE = '/construction/reviews/v1/projects';
+
+// Alla aktiva (ej arkiverade) granskningar. onProgress(hämtade, totalt) anropas
+// efter varje sida, så att fliken kan visa hur långt läsningen kommit.
+async function listReviews(projectId, onProgress) {
+  return reviewSidor(`${REVIEWS_BASE}/${projectId}/reviews`, {}, onProgress);
+}
+
+// Utan filter ger API:t bara aktiva arbetsflöden, men en äldre granskning kan
+// använda ett som sedan stängts av. Därför hämtas båda.
+async function listReviewWorkflows(projectId) {
+  const bas = `${REVIEWS_BASE}/${projectId}/workflows`;
+  const [aktiva, inaktiva] = await Promise.all([
+    reviewSidor(bas, { 'filter[status]': 'ACTIVE' }),
+    reviewSidor(bas, { 'filter[status]': 'INACTIVE' }),
+  ]);
+  return [...aktiva, ...inaktiva];
+}
+
+// Det arbetsflöde en granskning faktiskt följer. Det kan ha andra steg än
+// projektets sparade arbetsflöde med samma id, om det ändrats sedan dess.
+async function getReviewWorkflow(projectId, reviewId) {
+  return apsGet(`${REVIEWS_BASE}/${projectId}/reviews/${reviewId}/workflow`);
+}
+
+async function reviewSidor(path, params, onProgress) {
+  const alla = [];
+  for (let sida = 0; sida < 100; sida++) {
+    const q   = new URLSearchParams({ ...params, limit: '50', offset: String(alla.length) });
+    const res = await apsGet(`${path}?${q}`);
+    const rader  = res.results || [];
+    alla.push(...rader);
+    const totalt = res.pagination?.totalResults ?? alla.length;
+    onProgress?.(alla.length, totalt);
+    if (!rader.length || alla.length >= totalt) break;
+  }
+  return alla;
+}
+
 // ── GitHub ────────────────────────────────────────────────────────────────────
 
 // Repot är publikt, så en läsning fungerar utan token. Token skickas när den

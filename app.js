@@ -532,6 +532,7 @@ function renderProjectView(project) {
   vkReset();
   vhReset();
   bhReset();
+  gkReset();
   renderSidebar('overview');
   renderOverview();
 }
@@ -556,6 +557,7 @@ function renderSidebar(activeTab) {
     views:  `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="3" width="15" height="14" rx="1.5"/><path stroke-linecap="round" d="M2.5 8h15M8 8v9"/></svg>`,
     lock:   `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="9" width="12" height="9" rx="1.5"/><path stroke-linecap="round" d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg>`,
     week:   `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="4" width="15" height="13.5" rx="1.5"/><path stroke-linecap="round" d="M2.5 8h15M6.5 2.5v3M13.5 2.5v3"/><path stroke-linecap="round" stroke-linejoin="round" d="M7 12.5l1.8 1.8L13 10"/></svg>`,
+    review: `<svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 2.5h5.5l4 4V16a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 16V4A1.5 1.5 0 0 1 6 2.5z"/><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 11.5l1.8 1.8L13 9.5"/></svg>`,
   };
 
   const navItem = (tab, label, icon) => {
@@ -590,6 +592,7 @@ function renderSidebar(activeTab) {
       ${navItem('overview',        'Översikt',        ICONS.grid)}
       ${navItem('data-management', 'Data Management', ICONS.folder)}
       ${navItem('issues',          'Issues',          ICONS.clock)}
+      ${navItem('granskningar',    'Granskningar',    ICONS.review)}
       ${navItem('modelldata',      'Modellkontroll',  ICONS.cube)}
       ${navItem('ritningsgranskning', 'Ritningsgranskning', ICONS.sheet)}
       ${navItem('veckokontroll',   'Veckokontroll',   ICONS.week)}
@@ -616,6 +619,7 @@ function showTab(tab) {
   if (tab === 'veckokontroll')   vkOppnaFlik();
   if (tab === 'vyhantering')     vhOppnaFlik();
   if (tab === 'behorigheter')    bhOppnaFlik();
+  if (tab === 'granskningar')    gkOppnaFlik();
   if (tab === 'data-management') renderPlaceholder('Data Management');
   if (tab === 'issues')          isOppnaFlik();
   if (tab === 'assets')          renderPlaceholder('Assets');
