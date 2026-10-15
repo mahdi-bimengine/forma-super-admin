@@ -577,6 +577,12 @@ async function getReviewWorkflow(projectId, reviewId) {
   return apsGet(`${REVIEWS_BASE}/${projectId}/reviews/${reviewId}/workflow`);
 }
 
+// Vad som hänt i granskningens steg i den aktuella rundan: en post per
+// deltagare och steg, med status CLAIMED, UNCLAIMED, SUBMITTED eller VOID.
+async function getReviewProgress(projectId, reviewId) {
+  return reviewSidor(`${REVIEWS_BASE}/${projectId}/reviews/${reviewId}/progress`, {});
+}
+
 async function reviewSidor(path, params, onProgress) {
   const alla = [];
   for (let sida = 0; sida < 100; sida++) {

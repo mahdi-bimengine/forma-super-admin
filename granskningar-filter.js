@@ -31,6 +31,10 @@ const GK_FALT = {
   skapad:      { namn: 'Skapad',            typ: 'datum', datum: r => r.skapad },
   slutford:    { namn: 'Slutförd',          typ: 'datum', datum: r => r.slutford },
   namn:        { namn: 'Namn',              typ: 'text',  text: r => r.namn },
+  // Personerna att välja bland är de som kan agera eller redan har agerat i
+  // ett aktuellt steg. Statusen kommer från förloppet, se gkLasForlopp.
+  deltagare:   { namn: 'Aktuell stegdeltagare', typ: 'deltagare',
+                 varden: r => [...(r.deltagare || []).map(d => d.namn), ...r.nastaAlla.filter(n => !/ \((roll|företag)\)$/.test(n))] },
 };
 
 const GK_OPERATORER = {
@@ -43,6 +47,12 @@ const GK_OPERATORER = {
     ['fore',     'före'],
     ['efter',    'efter'],
     ['saknas',   'saknas'],
+  ],
+  deltagare: [
+    ['paborjat',   'har påbörjat'],
+    ['inlamnat',   'har lämnat in'],
+    ['agerat',     'har påbörjat eller lämnat in'],
+    ['inteAgerat', 'har inte påbörjat eller lämnat in'],
   ],
 };
 
@@ -71,7 +81,7 @@ function gkfStandard(v) {
 
 function gkfStandardvarde(v) {
   const f = GK_FALT[v.falt];
-  if (f.typ === 'lista') {
+  if (f.typ === 'lista' || f.typ === 'deltagare') {
     const varden = gkfVarden(v.falt);
     return v.falt === 'status' && varden.includes('Öppen') ? 'Öppen' : varden[0] || '';
   }
@@ -123,7 +133,13 @@ function gkfKomplett(v) {
     if (v.op === 'fore' || v.op === 'efter')     return /^\d{4}-\d{2}-\d{2}$/.test(v.varde);
     return Number(v.varde) > 0;
   }
+  // Ett villkor på stegdeltagare räknas först när förloppet är inläst.
+  if (GK_FALT[v.falt].typ === 'deltagare' && !_gk.forlopp.laddat) return false;
   return String(v.varde ?? '').trim() !== '';
+}
+
+function gkfBehoverForlopp() {
+  return gkfVillkorslista().some(v => GK_FALT[v.falt].typ === 'deltagare');
 }
 
 function gkfAktivt() {
@@ -136,6 +152,15 @@ function gkfTestaVillkor(v, r) {
   if (f.typ === 'text') {
     const finns = f.text(r).toLowerCase().includes(v.varde.trim().toLowerCase());
     return v.op === 'innehaller' ? finns : !finns;
+  }
+  if (f.typ === 'deltagare') {
+    // Gäller bara pågående granskningar vars förlopp gick att läsa.
+    if (r.status !== 'OPEN' || !r.deltagare) return false;
+    const status = r.deltagare.find(d => d.namn === v.varde)?.status;
+    if (v.op === 'paborjat') return status === 'paborjat';
+    if (v.op === 'inlamnat') return status === 'inlamnat';
+    if (v.op === 'agerat')   return !!status;
+    return !status;
   }
   const finns = f.varden(r).includes(v.varde);
   return v.op === 'ar' ? finns : !finns;
@@ -179,6 +204,7 @@ function gkfBeskrivning(v) {
   if (v.op === 'kommande') return `${f.namn} inom ${v.varde} dagar`;
   if (v.op === 'senaste')  return `${f.namn} de senaste ${v.varde} dagarna`;
   if (v.op === 'passerat' || v.op === 'saknas') return `${f.namn} ${op}`;
+  if (f.typ === 'deltagare') return `${v.varde} ${op} i aktuellt steg`;
   return `${f.namn} ${op} ${v.varde}`;
 }
 
@@ -278,6 +304,18 @@ function gkfUppdatera() {
   gkfRitaKnapp();
   _gk.sida = 0;
   gkRitaTabell();
+  // Ett nytt eller inläst villkor på stegdeltagare sätter igång läsningen.
+  const f = _gk.forlopp;
+  if (_gk.laddad && !f.laddat && !f.laddar && gkfBehoverForlopp()) gkLasForlopp();
+}
+
+function gkfForloppText() {
+  const f = _gk.forlopp;
+  return f.laddar ? `Läser vem som påbörjat och lämnat in… ${f.hamtade} av ${f.totalt}` : '';
+}
+
+function gkfRitaForlopp() {
+  document.querySelectorAll('.gkf-forlopp').forEach(el => { el.textContent = gkfForloppText(); });
 }
 
 function gkfRitaKnapp() {
@@ -312,6 +350,9 @@ function gkfKort() {
       ${gkSparadeHtml()}
       ${gkfGruppHtml(rot, 0)}
       ${!rot.delar.length ? `<p class="text-xs text-ads-muted mt-2">Inga villkor ännu. Lägg till ett villkor för att filtrera listan.</p>` : ''}
+      ${_gk.forlopp.misslyckade ? `<p class="text-xs text-amber-700 mt-2">
+        Förloppet gick inte att läsa för ${_gk.forlopp.misslyckade} granskning${_gk.forlopp.misslyckade === 1 ? '' : 'ar'}.
+        ${_gk.forlopp.misslyckade === 1 ? 'Den uppfyller' : 'De uppfyller'} inga villkor om stegdeltagare.</p>` : ''}
       <div class="flex items-center gap-4 mt-3 pt-3 border-t border-ads-border text-xs text-ads-muted flex-wrap">
         ${gkfFormelHtml()}
         <label class="ml-auto flex items-center gap-1.5 cursor-pointer">
@@ -355,7 +396,7 @@ function gkfGruppHtml(g, djup) {
 function gkfBokstavHtml(v) {
   const klar = gkfKomplett(v);
   return `
-    <span id="gkf-bokstav-${v.id}" title="${klar ? '' : 'Inte ifyllt, räknas inte'}"
+    <span id="gkf-bokstav-${v.id}" title="${klar ? '' : GK_FALT[v.falt].typ === 'deltagare' && !_gk.forlopp.laddat ? 'Räknas när förloppet är läst' : 'Inte ifyllt, räknas inte'}"
           class="w-6 h-6 shrink-0 rounded-full inline-flex items-center justify-center text-[11px] font-semibold
                  ${klar ? 'bg-ads-blue/10 text-ads-blue' : 'border border-dashed border-ads-border text-ads-muted'}">${v.bokstav}</span>`;
 }
@@ -366,16 +407,23 @@ function gkfVillkorHtml(v) {
   const val   = (lista, vald) => lista.map(([k, text]) =>
     `<option value="${vkEsc(k)}" ${k === vald ? 'selected' : ''}>${vkEsc(text)}</option>`).join('');
 
+  const operator = `
+      <select onchange="gkfAndra(${v.id}, 'op', this.value)" class="${ruta} ${f.typ === 'deltagare' ? 'w-60' : 'w-36'}">
+        ${val(GK_OPERATORER[f.typ], v.op)}
+      </select>`;
+  // Stegdeltagare läses "Adrian har påbörjat", så personen står före.
+  const deltagare = f.typ === 'deltagare';
+
   return `
     <div class="flex items-center gap-2 flex-wrap">
       ${gkfBokstavHtml(v)}
-      <select onchange="gkfAndra(${v.id}, 'falt', this.value)" class="${ruta} w-40">
+      <select onchange="gkfAndra(${v.id}, 'falt', this.value)" class="${ruta} w-44">
         ${val(Object.entries(GK_FALT).map(([k, d]) => [k, d.namn]), v.falt)}
       </select>
-      <select onchange="gkfAndra(${v.id}, 'op', this.value)" class="${ruta} w-36">
-        ${val(GK_OPERATORER[f.typ], v.op)}
-      </select>
+      ${deltagare ? '' : operator}
       ${gkfVardeHtml(v, ruta)}
+      ${deltagare ? operator : ''}
+      ${deltagare && _gk.forlopp.laddar ? `<span class="gkf-forlopp text-xs text-ads-muted">${gkfForloppText()}</span>` : ''}
       <button onclick="gkfTaBort(${v.id})" title="Ta bort villkoret"
               class="text-ads-muted hover:text-red-600 px-1">✕</button>
     </div>`;

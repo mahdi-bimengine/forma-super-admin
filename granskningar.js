@@ -20,6 +20,8 @@ const _gk = {
   rader:    [],      // en per granskning, se gkRad
   floden:   true,    // false om arbetsflödena inte gick att läsa
   medlemmar: true,   // false om projektets medlemmar inte gick att läsa
+  // Vem som påbörjat eller lämnat in, se gkLasForlopp.
+  forlopp:  { laddat: false, laddar: false, hamtade: 0, totalt: 0, misslyckade: 0 },
   sok:      '',
   sortera:  'nr',
   fallande: true,
@@ -68,6 +70,7 @@ function gkReset() {
   _gk.rader   = [];
   _gk.floden  = true;
   _gk.medlemmar = true;
+  gkNollstallForlopp();
   _gk.sok     = '';
   _gk.sida    = 0;
   // Filtrets värden är namn och arbetsflöden i projektet, så det börjar om.
@@ -89,6 +92,7 @@ async function gkLas() {
   _gk.fel     = null;
   _gk.hamtade = 0;
   _gk.totalt  = 0;
+  gkNollstallForlopp();
   gkRita();
 
   try {
@@ -125,6 +129,58 @@ async function gkLas() {
   }
   _gk.laddar = false;
   gkRita();
+  // Ett filter som frågar efter stegdeltagare behöver förloppet igen.
+  if (_gk.laddad && gkfBehoverForlopp()) gkLasForlopp();
+}
+
+function gkNollstallForlopp() {
+  _gk.forlopp = { laddat: false, laddar: false, hamtade: 0, totalt: 0, misslyckade: 0 };
+  for (const r of _gk.rader) r.deltagare = null;
+}
+
+// Förloppet säger vem i det aktuella steget som har påbörjat (CLAIMED) eller
+// lämnat in (SUBMITTED). Det kräver ett anrop per granskning, så det hämtas
+// först när ett villkor behöver det, och bara för öppna granskningar.
+async function gkLasForlopp() {
+  const f = _gk.forlopp;
+  if (f.laddat || f.laddar) return;
+  const projektId = _currentProject.id;
+  const oppna     = _gk.rader.filter(r => r.status === 'OPEN');
+  Object.assign(f, { laddar: true, hamtade: 0, totalt: oppna.length, misslyckade: 0 });
+  gkfUppdatera();
+
+  for (let i = 0; i < oppna.length; i += 8) {
+    await Promise.all(oppna.slice(i, i + 8).map(async r => {
+      try {
+        r.deltagare = gkDeltagare(await getReviewProgress(projektId, r.id), r.stegId);
+      } catch {
+        r.deltagare = null;
+        f.misslyckade++;
+      }
+    }));
+    if (_currentProject?.id !== projektId || _gk.forlopp !== f) return;
+    f.hamtade = Math.min(i + 8, oppna.length);
+    gkfRitaForlopp();
+  }
+  f.laddar = false;
+  f.laddat = true;
+  gkfUppdatera();
+}
+
+// Deltagarna i det aktuella steget med senaste status. Inlämnat går före
+// påbörjat, oavsett i vilken ordning posterna kommer.
+function gkDeltagare(poster, stegId) {
+  const perNamn = new Map();
+  for (const p of poster) {
+    if (p.stepId !== stegId) continue;
+    if (p.status === 'SUBMITTED') {
+      const namn = p.actionBy?.name || p.claimedBy?.name;
+      if (namn) perNamn.set(namn, 'inlamnat');
+    } else if (p.status === 'CLAIMED' && p.claimedBy?.name && !perNamn.has(p.claimedBy.name)) {
+      perNamn.set(p.claimedBy.name, 'paborjat');
+    }
+  }
+  return [...perNamn].map(([namn, status]) => ({ namn, status }));
 }
 
 async function gkEgnaFloden(projektId, granskningar) {
@@ -188,6 +244,8 @@ function gkRad(g, flode, eget, medl) {
     stegNr:      oppen && index >= 0 ? index + 1 : null,
     stegTotalt:  steg.length || null,
     stegNamn:    oppen && index >= 0 ? steg[index].name || '' : '',
+    stegId:      g.currentStepId,
+    deltagare:   null,   // fylls i av gkLasForlopp när filtret behöver det
     initieradAv: g.createdBy?.name || '',
     nastaAtgard: oppen ? vem.filter((a, i) => a.namn && vem.findIndex(b => b.typ === a.typ && b.namn === a.namn) === i) : [],
     // Till filtret: alla som kan agera, även när någon redan tagit steget och
