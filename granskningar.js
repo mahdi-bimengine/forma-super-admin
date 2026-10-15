@@ -5,8 +5,9 @@
 // bläddras sedan i webbläsaren. Det är det som gör att filtret i del 2 kan
 // kombinera villkor med OCH, ELLER och XOR, vilket ACC:s egna filter inte kan.
 //
-// Byggs i tre delar: 1 tabellen (klar), 2 filtret, 3 spara filter och export.
-// Fliken läser bara, inget ändras i ACC.
+// Byggs i tre delar: 1 tabellen och 2 filtret (klara), 3 spara filter och
+// export. Filtret ligger i granskningar-filter.js. Fliken läser bara, inget
+// ändras i ACC.
 //
 // Delar vkEsc, vkKortDatum och vkLaddarKort med Veckokontroll.
 
@@ -18,10 +19,14 @@ const _gk = {
   totalt:   0,       // ... av hur många
   rader:    [],      // en per granskning, se gkRad
   floden:   true,    // false om arbetsflödena inte gick att läsa
+  medlemmar: true,   // false om projektets medlemmar inte gick att läsa
   sok:      '',
   sortera:  'nr',
   fallande: true,
   sida:     0,
+  filter:   null,    // huvudgruppen i filtret, se granskningar-filter.js
+  filterOppet:        false,
+  visaBortfiltrerade: false,
 };
 
 const GK_PER_SIDA = 50;
@@ -62,8 +67,12 @@ function gkReset() {
   _gk.totalt  = 0;
   _gk.rader   = [];
   _gk.floden  = true;
+  _gk.medlemmar = true;
   _gk.sok     = '';
   _gk.sida    = 0;
+  // Filtrets värden är namn och arbetsflöden i projektet, så det börjar om.
+  _gk.filter  = null;
+  _gk.visaBortfiltrerade = false;
 }
 
 function gkOppnaFlik() {
@@ -82,16 +91,18 @@ async function gkLas() {
   gkRita();
 
   try {
-    const [granskningar, floden] = await Promise.all([
+    const [granskningar, floden, medlemmar] = await Promise.all([
       listReviews(projektId, (n, totalt) => {
         if (_currentProject?.id !== projektId) return;
         _gk.hamtade = n;
         _gk.totalt  = totalt;
         gkRita();
       }),
-      // Utan arbetsflödena blir bara arbetsflöde och steg tomma, så ett fel där
-      // får inte stoppa listan.
+      // Utan arbetsflödena blir bara arbetsflöde och steg tomma, och utan
+      // medlemmarna hittar filtret färre under Nästa åtgärd av. Ett fel där
+      // får alltså inte stoppa listan.
       listReviewWorkflows(projektId).catch(() => null),
+      listProjectUsers(projektId.replace(/^b\./, '')).catch(() => null),
     ]);
     if (_currentProject?.id !== projektId) return;   // användaren hann byta projekt
 
@@ -102,8 +113,10 @@ async function gkLas() {
       g.status === 'OPEN' && !(perFlode.get(g.workflowId)?.steps || []).some(s => s.id === g.currentStepId))) : new Map();
     if (_currentProject?.id !== projektId) return;
 
-    _gk.floden = !!floden;
-    _gk.rader  = granskningar.map(g => gkRad(g, perFlode.get(g.workflowId), egna.get(g.id)));
+    const medl = gkMedlemsindex(medlemmar);
+    _gk.floden    = !!floden;
+    _gk.medlemmar = !!medlemmar;
+    _gk.rader     = granskningar.map(g => gkRad(g, perFlode.get(g.workflowId), egna.get(g.id), medl));
     _gk.laddad = true;
   } catch (err) {
     if (_currentProject?.id !== projektId) return;
@@ -124,9 +137,31 @@ async function gkEgnaFloden(projektId, granskningar) {
   return egna;
 }
 
-// En granskning i den form tabellen, och senare filtret, arbetar med.
-// eget är granskningens egen version av arbetsflödet, när den behövts.
-function gkRad(g, flode, eget) {
+// Vilka medlemmar som hör till varje roll och företag. ACC:s granskningslista
+// räknar inte alltid upp alla i en tilldelad roll eller ett tilldelat företag,
+// men ACC:s eget filter på Nästa åtgärd av tar med dem, och det gör vi också.
+// Granskningens roll- och företags-id är medlemslistans roleGroupId och
+// companyGroupId.
+function gkMedlemsindex(medlemmar) {
+  const roller  = new Map();
+  const foretag = new Map();
+  const lagg = (karta, id, namn) => {
+    if (id == null || !namn) return;
+    if (!karta.has(String(id))) karta.set(String(id), []);
+    karta.get(String(id)).push(namn);
+  };
+  for (const m of medlemmar || []) {
+    const namn = m.name || [m.firstName, m.lastName].filter(Boolean).join(' ');
+    for (const r of m.roles || []) lagg(roller, r.roleGroupId, namn);
+    lagg(foretag, m.companyGroupId, namn);
+  }
+  return { roller, foretag };
+}
+
+// En granskning i den form tabellen och filtret arbetar med. eget är
+// granskningens egen version av arbetsflödet, när den behövts, och medl
+// projektets medlemmar per roll och företag (gkMedlemsindex).
+function gkRad(g, flode, eget, medl) {
   const steg  = (eget || flode)?.steps || [];
   const index = steg.findIndex(s => s.id === g.currentStepId);
   const oppen = g.status === 'OPEN';
@@ -154,6 +189,15 @@ function gkRad(g, flode, eget) {
     stegNamn:    oppen && index >= 0 ? steg[index].name || '' : '',
     initieradAv: g.createdBy?.name || '',
     nastaAtgard: oppen ? vem.filter((a, i) => a.namn && vem.findIndex(b => b.typ === a.typ && b.namn === a.namn) === i) : [],
+    // Till filtret: alla som kan agera, även när någon redan tagit steget och
+    // även medlemmarna i tilldelade roller och företag, som ACC:s eget filter.
+    // Rollerna och företagen själva står med typen i namnet.
+    nastaAlla:   oppen ? [...new Set([
+      ...(nasta.claimedBy || []).map(p => p.name),
+      ...(kand.users      || []).map(p => p.name),
+      ...(kand.roles      || []).flatMap(p => [p.name && `${p.name} (roll)`, ...(medl?.roller.get(String(p.autodeskId)) || [])]),
+      ...(kand.companies  || []).flatMap(p => [p.name && `${p.name} (företag)`, ...(medl?.foretag.get(String(p.autodeskId)) || [])]),
+    ].filter(Boolean))] : [],
     godkantAv:   g.approvedBy?.name || '',
     forfaller:   oppen ? g.currentStepDueDate || null : null,
     skapad:      g.createdAt || null,
@@ -275,21 +319,33 @@ function gkKropp() {
                class="w-full border border-ads-border rounded pl-8 pr-2.5 py-1.5 text-sm bg-white
                       focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
       </div>
+      ${gkfKnapp()}
       ${!_gk.floden ? `<span class="text-xs text-amber-600">
         Arbetsflödena gick inte att läsa, så kolumnerna Arbetsflöde och Steg är tomma.</span>` : ''}
+      ${!_gk.medlemmar ? `<span class="text-xs text-amber-600" title="Kräver behörighet att se projektets medlemmar">
+        Medlemmarna gick inte att läsa, så filtret på Nästa åtgärd av missar dem som bara ingår via en roll eller ett företag.</span>` : ''}
       <button onclick="gkLas()" class="ml-auto text-sm text-ads-muted hover:text-ads-text">Läs om</button>
     </div>
+    <div id="gk-filter">${gkfKort()}</div>
     <div id="gk-tabell">${gkTabell()}</div>`;
 }
 
 function gkTabell() {
-  const rader   = gkSorterade(gkSokta());
-  const sidor   = Math.max(1, Math.ceil(rader.length / GK_PER_SIDA));
+  // Sökningen gäller alltid. Filtret tar bort de som inte uppfyller det, eller
+  // tonar ned dem när de bortfiltrerade ska synas.
+  const aktivt   = gkfAktivt();
+  const villkor  = aktivt ? gkfVillkorslista().filter(gkfKomplett) : [];
+  const provade  = gkSorterade(gkSokta()).map(r => ({ r, ...(aktivt ? gkfUtvardera(r) : { ok: true, traffar: {} }) }));
+  const borta    = provade.filter(x => !x.ok).length;
+  const rader    = _gk.visaBortfiltrerade ? provade : provade.filter(x => x.ok);
+  const sidor    = Math.max(1, Math.ceil(rader.length / GK_PER_SIDA));
   if (_gk.sida >= sidor) _gk.sida = sidor - 1;
-  const fran    = _gk.sida * GK_PER_SIDA;
-  const synliga = rader.slice(fran, fran + GK_PER_SIDA);
+  const fran     = _gk.sida * GK_PER_SIDA;
+  const synliga  = rader.slice(fran, fran + GK_PER_SIDA);
+  const kolumner = aktivt ? [...GK_KOLUMNER, { rubrik: 'Träff' }] : GK_KOLUMNER;
 
   const rubrik = k => {
+    if (!k.falt) return `<th class="text-left font-medium px-3 py-2 whitespace-nowrap">${k.rubrik}</th>`;
     const aktiv = _gk.sortera === k.falt;
     return `
       <th class="text-left font-medium px-3 py-2 whitespace-nowrap">
@@ -304,19 +360,20 @@ function gkTabell() {
     <div class="bg-white border border-ads-border rounded overflow-auto">
       <table class="w-full text-sm">
         <thead class="bg-ads-gray text-ads-muted text-xs">
-          <tr>${GK_KOLUMNER.map(rubrik).join('')}</tr>
+          <tr>${kolumner.map(rubrik).join('')}</tr>
         </thead>
         <tbody>
-          ${synliga.map(gkRadHtml).join('')}
-          ${!synliga.length ? `<tr><td colspan="${GK_KOLUMNER.length}" class="px-3 py-6 text-center text-ads-muted">
-            Inga granskningar matchar sökningen.</td></tr>` : ''}
+          ${synliga.map(x => gkRadHtml(x.r, aktivt && { ok: x.ok, villkor, traffar: x.traffar })).join('')}
+          ${!synliga.length ? `<tr><td colspan="${kolumner.length}" class="px-3 py-6 text-center text-ads-muted">
+            ${aktivt ? 'Inga granskningar uppfyller filtret.' : 'Inga granskningar matchar sökningen.'}</td></tr>` : ''}
         </tbody>
       </table>
     </div>
-    ${gkBladdring(rader.length, fran, synliga.length, sidor)}`;
+    ${gkBladdring(rader.length, fran, synliga.length, sidor, aktivt ? borta : 0)}`;
 }
 
-function gkRadHtml(r) {
+// filter är falskt utan filter, annars { ok, villkor, traffar } för raden.
+function gkRadHtml(r, filter) {
   const st   = GK_STATUS[r.status] || { text: r.status || '–', farg: 'bg-gray-300' };
   const sen  = r.forfaller && new Date(r.forfaller) < new Date();
   const td   = 'px-3 py-2 whitespace-nowrap';
@@ -326,7 +383,7 @@ function gkRadHtml(r) {
   const datum = iso => iso ? vkEsc(vkKortDatum(iso)) : GK_TOM;
 
   return `
-    <tr class="border-t border-ads-border hover:bg-ads-gray/60">
+    <tr class="border-t border-ads-border hover:bg-ads-gray/60 ${filter && !filter.ok ? 'opacity-40' : ''}">
       <td class="${td}">
         <span class="inline-flex items-center gap-2"><span class="w-1 h-5 rounded-sm ${st.farg}"></span>${vkEsc(st.text)}</span>
       </td>
@@ -341,6 +398,7 @@ function gkRadHtml(r) {
       <td class="${td} tabular-nums ${sen ? 'text-red-600 font-medium' : ''}">${datum(r.forfaller)}</td>
       <td class="${td} tabular-nums">${datum(r.skapad)}</td>
       <td class="${td} tabular-nums">${datum(r.slutford)}</td>
+      ${filter ? `<td class="${td}">${gkfTraffHtml(filter.villkor, filter.traffar)}</td>` : ''}
     </tr>`;
 }
 
@@ -374,7 +432,7 @@ function gkNastaHtml(lista) {
     </span>`;
 }
 
-function gkBladdring(antal, fran, synliga, sidor) {
+function gkBladdring(antal, fran, synliga, sidor, borta) {
   const knapp = (sida, tecken, etikett, aktiv) => `
     <button onclick="gkBladdra(${sida})" ${aktiv ? '' : 'disabled'} aria-label="${etikett}"
             class="px-2 py-1 rounded hover:text-ads-text hover:bg-ads-gray
@@ -388,6 +446,7 @@ function gkBladdring(antal, fran, synliga, sidor) {
       <span>
         ${antal ? `Visar ${fran + 1}–${fran + synliga} av ${antal}` : 'Visar 0'}
         ${sok ? ` · sökning bland ${_gk.rader.length} granskningar` : ''}
+        ${borta ? ` · ${borta} bortfiltrerade${_gk.visaBortfiltrerade ? ', visas nedtonade' : ''}` : ''}
       </span>
       ${sidor > 1 ? `
         <span class="flex items-center gap-1">
