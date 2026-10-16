@@ -344,11 +344,61 @@ function isMatcharKolumner(a) {
   for (const [kol, varde] of Object.entries(_is.kolFilter)) {
     if (kol === 'status') { if (a.status !== varde) return false; continue; }
     if (kol === 'dagar')  { if (!IS_DAGAR_VAL[varde]?.test(a)) return false; continue; }
+    if (kol === 'tilldeladTyp') { if ((a.tilldeladTyp || 'ingen') !== varde) return false; continue; }
+    if (kol === 'tilldeladVia') continue;
+    if (kol === 'tilldelad' && _is.kolFilter.tilldeladVia) { if (!isTilldeladViaMatchar(a, varde)) return false; continue; }
     const text = IS_KOLUMN_TEXT[kol]?.(a) || '';
     // Flera sökord separerade med komma: något av dem ska finnas.
     if (!isDelar(varde).some(t => text.toLowerCase().includes(t))) return false;
   }
   return true;
+}
+
+// ── Tilldelning till person, roll eller företag ───────────────────────────────
+// Ett ärende kan vara tilldelat en person, en roll eller ett företag. Med
+// "även via roll och företag" träffar en sökning på en person också ärenden
+// som ligger på personens roller och företag, enligt projektets medlemslista.
+// Rollerna och företagen jämförs på namn.
+
+const IS_TILLDELAD_TYP = [['user', 'Person'], ['role', 'Roll'], ['company', 'Företag'], ['ingen', 'Ej tilldelat']];
+
+// Projekt-id → namn (gemener) på roller och företag som hör till personerna
+// som matchar sökorden.
+function isGrupperForPersoner(varde) {
+  if (_is._viaCache?.varde === varde && _is._viaCache.projekt === _is.projekt) return _is._viaCache.karta;
+  const termer = isDelar(varde);
+  const karta = new Map();
+  for (const p of _is.projekt.values()) {
+    const namn = new Set();
+    for (const m of p.medlemmar || []) {
+      const person = `${m.name || ''} ${m.email || ''}`.toLowerCase();
+      if (!termer.some(t => person.includes(t))) continue;
+      if (m.companyName) namn.add(m.companyName.toLowerCase());
+      for (const r of m.roles || []) if (r.name) namn.add(r.name.toLowerCase());
+    }
+    karta.set(p.id, namn);
+  }
+  _is._viaCache = { varde, projekt: _is.projekt, karta };
+  return karta;
+}
+
+function isTilldeladViaMatchar(a, varde) {
+  const text = (a.tilldelad || '').toLowerCase();
+  if (isDelar(varde).some(t => text.includes(t))) return true;
+  if (a.tilldeladTyp !== 'role' && a.tilldeladTyp !== 'company') return false;
+  return isGrupperForPersoner(varde).get(a.projektId)?.has(text) || false;
+}
+
+function isVaxlaTilldeladVia(pa) {
+  if (pa) _is.kolFilter.tilldeladVia = '1'; else delete _is.kolFilter.tilldeladVia;
+  isRitaRader();
+}
+
+// Liten etikett framför namnet för roller och företag.
+function isTilldeladEtikett(typ) {
+  if (typ === 'role') return '<span class="mr-1 text-[9px] uppercase tracking-wide px-1 rounded bg-violet-100 text-violet-800">Roll</span>';
+  if (typ === 'company') return '<span class="mr-1 text-[9px] uppercase tracking-wide px-1 rounded bg-teal-100 text-teal-800">Företag</span>';
+  return '';
 }
 
 // Sökfältet och kolumnfiltren. Styr både tabellen och nyckeltalen.
@@ -388,13 +438,13 @@ function isSorterade(arenden) {
 
 function isExportera() {
   const rader = isSorterade(isFiltrerade(isVyArenden()));
-  const aoa = [['Nr', 'Projekt', 'Ärendetyp', 'Subtyp', 'Rubrik', 'Status', 'Tilldelad till', 'Skapad av', 'Skapat', 'Förfallodatum', 'Dagar till förfall', 'Förfallet', 'Location', 'Länk']];
+  const aoa = [['Nr', 'Projekt', 'Ärendetyp', 'Subtyp', 'Rubrik', 'Status', 'Tilldelad till', 'Tilldelad typ', 'Skapad av', 'Skapat', 'Förfallodatum', 'Dagar till förfall', 'Förfallet', 'Location', 'Länk']];
   for (const a of rader) {
-    aoa.push([a.nr, a.projekt, a.typ, a.subtyp, a.rubrik, isStatusLabel(a.status), a.tilldelad, a.skapadAv, a.skapat,
+    aoa.push([a.nr, a.projekt, a.typ, a.subtyp, a.rubrik, isStatusLabel(a.status), a.tilldelad, isTypNamn(a.tilldeladTyp), a.skapadAv, a.skapat,
               a.forfaller, isDagarKvar(a.forfaller) ?? '', isArForfallet(a) ? 'Ja' : 'Nej', isLocation(a), isLank(a)]);
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{ wch: 6 }, { wch: 26 }, { wch: 20 }, { wch: 20 }, { wch: 40 }, { wch: 11 }, { wch: 26 }, { wch: 22 }, { wch: 11 }, { wch: 11 }, { wch: 8 }, { wch: 8 }, { wch: 22 }, { wch: 60 }];
+  ws['!cols'] = [{ wch: 6 }, { wch: 26 }, { wch: 20 }, { wch: 20 }, { wch: 40 }, { wch: 11 }, { wch: 26 }, { wch: 9 }, { wch: 22 }, { wch: 11 }, { wch: 11 }, { wch: 8 }, { wch: 8 }, { wch: 22 }, { wch: 60 }];
   const wb = XLSX.utils.book_new();
   const vy = _is.vyer.find(v => v.id === _is.vyId);
   XLSX.utils.book_append_sheet(wb, ws, bhBladnamn(vy?.namn || 'Ärenden'));
@@ -558,9 +608,11 @@ function isDiagramHtml() {
       <div class="text-3xl font-semibold text-ads-text mt-2">${antal}</div>
     </button>`;
   const sokText = [_is.sok && `sök "${_is.sok}"`, ...Object.entries(_is.kolFilter).map(([k, v]) =>
+    k === 'tilldeladVia' ? 'även via roll och företag' :
     `${{ nr: 'Nr', typ: 'Ärendetyp', rubrik: 'Rubrik', status: 'Status', tilldelad: 'Tilldelad', skapadAv: 'Skapad av',
-         skapat: 'Skapat', forfaller: 'Förfaller', dagar: 'Dagar', projekt: 'Projekt', location: 'Location' }[k] || k}: ${
-      k === 'status' ? isStatusLabel(v) : k === 'dagar' ? IS_DAGAR_VAL[v]?.text : v}`)].filter(Boolean);
+         skapat: 'Skapat', forfaller: 'Förfaller', dagar: 'Dagar', projekt: 'Projekt', location: 'Location', tilldeladTyp: 'Tilldelad till' }[k] || k}: ${
+      k === 'status' ? isStatusLabel(v) : k === 'dagar' ? IS_DAGAR_VAL[v]?.text
+      : k === 'tilldeladTyp' ? (IS_TILLDELAD_TYP.find(([t]) => t === v)?.[1] || v) : v}`)].filter(Boolean);
 
   return `
     ${sokText.length ? `
@@ -698,7 +750,21 @@ function isTabellHtml() {
           ${falt('nr', 'Nr', false)}<th></th>
           ${falt('typ', 'Sök typ…', true)}${falt('rubrik', 'Sök rubrik…', false)}
           ${val('status', statusar)}
-          ${falt('tilldelad', 'Sök tilldelad…', true)}${falt('skapadAv', 'Sök…', true)}
+          <th class="px-1.5 pb-2 font-normal align-top">
+            <input type="search" value="${vkEsc(_is.kolFilter.tilldelad || '')}" placeholder="Sök tilldelad…" oninput="isKolumnSok('tilldelad', this.value)"
+                   list="is-dl-tilldelad"
+                   class="w-full min-w-[60px] px-1.5 py-0.5 text-xs font-normal border rounded bg-white focus:outline-none focus:ring-1 focus:ring-ads-blue
+                          ${_is.kolFilter.tilldelad ? 'border-ads-blue' : 'border-ads-border'}" />
+            <select onchange="isKolumnSok('tilldeladTyp', this.value)" title="Typ av tilldelning"
+                    class="mt-1 w-full px-1 py-0.5 text-xs font-normal border rounded bg-white ${_is.kolFilter.tilldeladTyp ? 'border-ads-blue' : 'border-ads-border'}">
+              <option value="">Alla typer</option>
+              ${IS_TILLDELAD_TYP.map(([v, t]) => `<option value="${v}" ${_is.kolFilter.tilldeladTyp === v ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+            <label class="mt-1 flex items-center gap-1 text-[10px] text-ads-muted whitespace-nowrap cursor-pointer"
+                   title="En sökning på en person träffar också ärenden som är tilldelade personens roller och företag">
+              <input type="checkbox" class="accent-ads-blue" ${_is.kolFilter.tilldeladVia ? 'checked' : ''} onchange="isVaxlaTilldeladVia(this.checked)" />
+              även via roll och företag</label>
+          </th>${falt('skapadAv', 'Sök…', true)}
           ${falt('skapat', 'ÅÅÅÅ-MM', false)}${falt('forfaller', 'ÅÅÅÅ-MM', false)}
           ${val('dagar', Object.entries(IS_DAGAR_VAL).map(([k, v]) => [k, v.text]))}
           ${falt('location', 'Sök plats…', true)}${falt('projekt', 'Sök projekt…', true)}
@@ -736,7 +802,7 @@ function isRaderHtml() {
           ? `<div class="text-[10px] text-ads-muted">${klick('typ', a.typ)}</div>` : ''}</td>
         <td class="px-2 py-1.5 max-w-[280px]"><div class="truncate" title="${vkEsc(a.rubrik)}">${vkEsc(a.rubrik)}</div></td>
         <td class="px-2 py-1.5">${isStatusCell(a, ref)}</td>
-        <td class="px-2 py-1.5 text-xs">${_is.redigera ? isTilldeladCell(a, ref) : (isVantande(a) && 'assignedTo' in isVantande(a).efter ? isTilldeladCell(a, ref) : klick('tilldelad', a.tilldelad))}</td>
+        <td class="px-2 py-1.5 text-xs">${_is.redigera ? isTilldeladCell(a, ref) : (isVantande(a) && 'assignedTo' in isVantande(a).efter ? isTilldeladCell(a, ref) : isTilldeladEtikett(a.tilldeladTyp) + klick('tilldelad', a.tilldelad))}</td>
         <td class="px-2 py-1.5 text-xs">${klick('skapadAv', a.skapadAv)}</td>
         <td class="px-2 py-1.5 text-xs whitespace-nowrap">${a.skapat}</td>
         <td class="px-2 py-1.5 text-xs whitespace-nowrap">${isForfallerCell(a, ref)}</td>

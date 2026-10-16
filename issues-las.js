@@ -77,7 +77,11 @@ async function isNamnFranMappar(hubId, projekt, accId, namn) {
   const toppar = (await getTopFolders(hubId, projekt.id)).filter(f => !f.attributes?.hidden);
   const listor = await Promise.all(toppar.map(f =>
     bhMedOmforsok(() => getFolderPermissions(accId, f.id)).catch(() => [])));
-  for (const s of listor.flat()) {
+  // Finns en sparad hämtning från Behörigheter tas roller och företag från
+  // alla mappar med, så att de går att tilldela även om de saknas på toppen.
+  const sparad = await bhCacheLas(projekt.id);
+  const ovriga = (sparad?.mappar || []).flatMap(m => m.beh || []);
+  for (const s of [...listor.flat(), ...ovriga]) {
     if (!s.autodeskId) continue;
     const typ = { USER: 'user', ROLE: 'role', COMPANY: 'company' }[s.subjectType];
     if (typ && !namn.has(s.autodeskId)) namn.set(s.autodeskId, { namn: s.name || s.email, typ, email: s.email || '' });
