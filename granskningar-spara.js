@@ -302,17 +302,17 @@ function gkExportera() {
 
   const rubriker = ['ID', 'Granskningsnamn', 'Status', 'Arbetsflöde', 'Steg', 'Stegnamn', 'Initierad av',
     'Nästa åtgärd av', ...(medDeltagare ? ['Aktuella stegdeltagare'] : []), 'Godkänt av', 'Förfaller', 'Skapad', 'Slutförd',
-    ...villkor.map(v => `Villkor ${v.bokstav}`)];
+    ...villkor.map(v => `Villkor ${v.bokstav}`), 'Länk'];
   const aoa = [rubriker, ...rader.map(({ r, traffar }) => [
     r.nr, r.namn, GK_STATUS[r.status]?.text || r.status, r.arbetsflode,
     r.stegNr ? `${r.stegNr} av ${r.stegTotalt}` : '', r.stegNamn,
     r.initieradAv, r.nastaAtgard.map(vem).join(', '), ...(medDeltagare ? [deltagare(r)] : []), r.godkantAv,
     datum(r.forfaller), datum(r.skapad), datum(r.slutford),
-    ...villkor.map(v => traffar[v.id] ? 'Ja' : 'Nej'),
+    ...villkor.map(v => traffar[v.id] ? 'Ja' : 'Nej'), gkLank(r),
   ])];
 
   const blad = XLSX.utils.aoa_to_sheet(aoa, { cellDates: true, dateNF: 'yyyy-mm-dd' });
-  blad['!cols'] = [6, 50, 11, 34, 8, 20, 22, 50, ...(medDeltagare ? [40] : []), 22, 11, 11, 11, ...villkor.map(() => 10)]
+  blad['!cols'] = [6, 50, 11, 34, 8, 20, 22, 50, ...(medDeltagare ? [40] : []), 22, 11, 11, 11, ...villkor.map(() => 10), 60]
     .map(wch => ({ wch }));
   blad['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: aoa.length - 1, c: rubriker.length - 1 } }) };
 

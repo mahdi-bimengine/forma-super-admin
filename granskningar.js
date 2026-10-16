@@ -445,6 +445,14 @@ function gkTabell() {
     ${gkBladdring(rader.length, fran, synliga.length, sidor, aktivt ? borta : 0)}`;
 }
 
+// Direktlänk till granskningen i ACC. Adressen följer ACC:s egen väg
+// /docs/reviews/projects/:projectId/:reviewId, med projekt-id utan "b.".
+function gkLank(r) {
+  const doman = _hubs[_hubIdx]?.attributes?.region === 'EMEA' ? 'acc.autodesk.eu' : 'acc.autodesk.com';
+  const projekt = String(_currentProject?.id || '').replace(/^b\./, '');
+  return `https://${doman}/docs/reviews/projects/${projekt}/${r.id}`;
+}
+
 // filter är falskt utan filter, annars { ok, villkor, traffar } för raden.
 function gkRadHtml(r, filter) {
   const st   = GK_STATUS[r.status] || { text: r.status || '–', farg: 'bg-gray-300' };
@@ -461,7 +469,13 @@ function gkRadHtml(r, filter) {
         <span class="inline-flex items-center gap-2"><span class="w-1 h-5 rounded-sm ${st.farg}"></span>${vkEsc(st.text)}</span>
       </td>
       <td class="${td} tabular-nums">${vkEsc(r.nr)}</td>
-      <td class="${td}">${text(r.namn, 'max-w-80')}</td>
+      <td class="${td}">
+        <a href="${vkEsc(gkLank(r))}" target="_blank" rel="noopener" title="Öppna granskningen i ACC: ${vkEsc(r.namn)}"
+           class="flex items-center gap-1 max-w-80 text-ads-text hover:text-ads-blue group">
+          <span class="truncate group-hover:underline">${r.namn ? vkEsc(r.namn) : GK_TOM}</span>
+          <span class="text-ads-blue shrink-0">↗</span>
+        </a>
+      </td>
       <td class="${td}">${text(r.arbetsflode, 'max-w-56')}</td>
       <td class="${td} tabular-nums">${r.stegNr
         ? `<span title="${vkEsc(r.stegNamn)}">${r.stegNr} av ${r.stegTotalt}</span>` : GK_TOM}</td>
