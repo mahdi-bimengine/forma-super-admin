@@ -82,16 +82,6 @@ function isStartHtml() {
             rad('#DC2626', 'Slutförda men clashen finns kvar', clash.filter(a => isModellLage(a) === 'kvar').length)
           : '') +
         (redo == null ? '<div class="text-[11px] text-ads-muted italic">Räknas när kommentarerna lästs in</div>' : ''))}
-      ${(() => {
-        const omraden = isOmradesTabell();
-        const slapar = omraden.filter(r => r.slapar);
-        return kort("isSattYta('omrade')", 'Clash · per område', slapar.length,
-          `släpande av ${omraden.length} områden`,
-          slapar.slice(0, 4).map(r => rad('#DC2626', vkEsc(r.omrade), r.oppna)).join('') +
-          (slapar.length > 4 ? `<div class="text-[11px] text-ads-muted">… och ${slapar.length - 4} till</div>` : '') +
-          (!slapar.length ? '<div class="text-[11px] text-ads-muted italic">Inga områden släpar</div>' : ''),
-          slapar.length ? 'border-l-4 !border-l-red-500' : '');
-      })()}
       ${[['onb', 'Onboarding', onb, 'öppna ärenden om nya medlemmar'], ['off', 'Offboarding', offb, 'öppna ärenden om medlemmar som ska bort']]
         .map(([flik, titel, lista, under]) => {
           // Lägena kommer från stegen som sparats i den här webbläsaren.
@@ -457,16 +447,12 @@ function isInstHtml() {
         ${falt('veckaDagar', 'Denna vecka: inom antal dagar', '')}
       </div>
       <div class="md:col-span-2 mt-1 pt-3 border-t border-ads-border grid md:grid-cols-2 gap-x-6">
-        <div class="md:col-span-2 text-[10px] uppercase tracking-wider text-ads-muted mb-2">Område för clash per område</div>
-        <div>
-          <label class="block mb-3">
-            <span class="text-xs font-medium text-ads-text">Hämta området från</span>
-            ${isOmradeValjare(u, "isValjOmradeKalla(this.value, true)", 'mt-1 w-full px-2 py-1.5 text-sm')}
-            <span class="text-[11px] text-ads-muted">Bara källor som finns i de hämtade clashärendena visas, med antal och exempel.</span>
-          </label>
+        <div class="md:col-span-2 text-[10px] uppercase tracking-wider text-ads-muted mb-2">Plats och modell</div>
+        <div class="text-xs">
+          <button onclick="isOppnaPlatser()" class="border border-ads-border rounded px-3 py-1.5 bg-white hover:border-ads-blue">Namnge platser (Location)…</button>
+          <p class="text-[11px] text-ads-muted mt-1">Namnen används i kolumnen Location under Alla ärenden.</p>
         </div>
         <div>
-          ${falt('gammalDagar', 'Gamla ärenden: öppna längre än antal dagar', '')}
           <label class="flex items-start gap-1.5 text-xs mt-1">
             <input type="checkbox" class="accent-ads-blue mt-0.5" ${u.modellAuto ? 'checked' : ''}
                    onchange="_is.instUtkast.modellAuto = this.checked" />

@@ -273,7 +273,7 @@ function isVardeText(k, v) {
       const vag = isPlatsVag(p.platser, v.locationId);
       if (vag.length) return vag.join(' › ');
     }
-    // Utan platsträdet: det härledda eller egna namnet från projektets ärenden.
+    // Utan platsträdet: namnet som satts i Namnge platser.
     for (const p of _is.projekt.values()) {
       if (p.arenden.some(a => a.platsId === v.locationId)) return isPlatsnamn(p, v.locationId);
     }
@@ -357,7 +357,7 @@ function isDialogHtml() {
   if (!_is.dialog) return '<div id="is-dialog"></div>';
   if (_is.dialog === 'vyer') return isDialogRam(isVyRedigerareHtml());
   if (_is.dialog === 'inst') return isDialogRam(isInstHtml());
-  if (_is.dialog === 'omrade') return isDialogRam(isTilldelaOmradeHtml());
+  if (_is.dialog === 'platser') return isDialogRam(isPlatserHtml());
 
   if (_is.dialog === 'granska') {
     const a = _is.andringar;

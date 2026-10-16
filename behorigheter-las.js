@@ -154,25 +154,51 @@ async function bhMedOmforsok(fn) {
 // Går igenom alla synliga mappar i projektet och hämtar behörigheterna för
 // varje. framsteg(klara, kanda) anropas efter varje mapp.
 async function bhLasFranAcc(projekt, hubId, framsteg) {
+  const mappar = await bhGaIgenomMappar(projekt, hubId, framsteg, null);
+  return bhModellFranAcc(projekt.attributes?.name || 'Projekt', mappar);
+}
+
+// Själva genomgången. Behörigheterna läses alltid för varje mapp. Med en
+// tidigare genomgång (lista med id, path, andrad, foralder) listas en mapps
+// undermappar bara om mappens ändringstid har ändrats; annars återanvänds de
+// sparade undermapparna. Det halverar ungefär antalet anrop, men en ny mapp
+// djupt ner under en oförändrad mapp kan missas. "Hämta allt om" fångar den.
+async function bhGaIgenomMappar(projekt, hubId, framsteg, tidigare) {
   const dmId  = projekt.id;
   const accId = String(dmId).replace(/^b\./, '');
 
+  // Äldre sparade hämtningar saknar ändringstider och föräldrar. Då listas allt.
+  const kanAteranvanda = !!tidigare?.length && tidigare.every(m => 'andrad' in m && 'foralder' in m);
+  const forut = new Map((kanAteranvanda ? tidigare : []).map(m => [m.id, m]));
+  const barnAv = new Map();
+  for (const m of forut.values()) {
+    if (!m.foralder) continue;
+    if (!barnAv.has(m.foralder)) barnAv.set(m.foralder, []);
+    barnAv.get(m.foralder).push(m);
+  }
+  const sistaLed = path => path.split('/').pop();
+
   const toppar = (await getTopFolders(hubId, dmId)).filter(f => !f.attributes?.hidden);
-  const ko     = toppar.map(f => ({ id: f.id, path: bhMappnamn(f) }));
+  const ko     = toppar.map(f => ({ id: f.id, path: bhMappnamn(f), andrad: f.attributes?.lastModifiedTime || null, foralder: null }));
   const klara  = [];
   let aktiva   = 0;
 
   await new Promise((resolve, reject) => {
     let avbruten = false;
     const behandla = async m => {
+      const fore = forut.get(m.id);
+      const listaOm = !fore || !m.andrad || fore.andrad !== m.andrad;
       const [under, beh] = await Promise.all([
-        bhMedOmforsok(() => getSubfolders(dmId, m.id)),
+        listaOm
+          ? bhMedOmforsok(() => getSubfolders(dmId, m.id)).then(lista => lista.map(u => ({
+              id: u.id, path: `${m.path}/${bhMappnamn(u)}`, andrad: u.attributes?.lastModifiedTime || null, foralder: m.id })))
+          : Promise.resolve((barnAv.get(m.id) || []).map(c => ({ id: c.id, path: `${m.path}/${sistaLed(c.path)}`, andrad: c.andrad, foralder: m.id }))),
         // Mappar man inte får se behörigheterna för räknas upp i stället för
         // att stoppa hela läsningen.
         bhMedOmforsok(() => getFolderPermissions(accId, m.id)).catch(err => { m.fel = err.message; return []; }),
       ]);
       m.beh = beh;
-      for (const u of under) ko.push({ id: u.id, path: `${m.path}/${bhMappnamn(u)}` });
+      ko.push(...under);
       klara.push(m);
     };
     const nasta = () => {
@@ -191,7 +217,7 @@ async function bhLasFranAcc(projekt, hubId, framsteg) {
     nasta();
   });
 
-  return bhModellFranAcc(projekt.attributes?.name || 'Projekt', klara);
+  return klara;
 }
 
 function bhMappnamn(f) {
@@ -235,18 +261,81 @@ async function bhCacheLas(projektId) {
 // redan omlästa, så hämtningstiden behålls.
 async function bhCacheSpara(projektId, data, medlemmar) {
   if (data?.meta?.kalla !== 'ACC' || !data.mappId) return;
-  const olasta = new Map((data.meta.olasta || []).map(o => [o.path, o.fel]));
   const post = {
     hamtad:      data.meta.hamtad,
+    kontrollerad: data.meta.kontrollerad || null,
     projektNamn: data.meta.projectName,
-    mappar:      [...data.mappId].map(([path, id]) => ({ id, path, beh: data.ra.get(path) || [], ...(olasta.has(path) ? { fel: olasta.get(path) } : {}) })),
+    mappar:      bhMapparFranData(data),
     medlemmar:   medlemmar || null,
   };
   try { await bhCacheGor('readwrite', s => s.put(post, projektId)); } catch { /* inte kritiskt */ }
 }
 
+// Modellens mappar i samma form som genomgången ger.
+function bhMapparFranData(data) {
+  const olasta = new Map((data.meta.olasta || []).map(o => [o.path, o.fel]));
+  return [...data.mappId].map(([path, id]) => {
+    const t = data.mappTrad?.get(path);
+    return { id, path, beh: data.ra.get(path) || [], ...(t ? { andrad: t.andrad, foralder: t.foralder } : {}),
+             ...(olasta.has(path) ? { fel: olasta.get(path) } : {}) };
+  });
+}
+
+// ── Ändringar sedan förra hämtningen ──────────────────────────────────────────
+
+// Mappens direkta behörigheter per subjekt: id → { namn, typ, actions }.
+function bhDirektaPerSubjekt(beh) {
+  const ut = new Map();
+  for (const s of beh || []) {
+    if (!s.subjectId || !(s.actions || []).length) continue;
+    ut.set(s.subjectId, { namn: s.name || s.email || s.subjectId, typ: s.subjectType, actions: [...s.actions].sort() });
+  }
+  return ut;
+}
+
+// Jämför två genomgångar. Bara direkta behörigheter räknas, eftersom ärvda
+// ändringar redan syns på mappen där de sattes.
+function bhJamforMappar(fore, efter) {
+  const f = new Map(fore.map(m => [m.id, m]));
+  const e = new Map(efter.map(m => [m.id, m]));
+  const nya = efter.filter(m => !f.has(m.id)).map(m => m.path);
+  const borttagna = fore.filter(m => !e.has(m.id)).map(m => m.path);
+  const flyttade = efter.filter(m => f.has(m.id) && f.get(m.id).path !== m.path).map(m => ({ fran: f.get(m.id).path, till: m.path }));
+  const andrade = [];
+  for (const m of efter) {
+    const gammal = f.get(m.id);
+    const fa = bhDirektaPerSubjekt(gammal ? gammal.beh : []);
+    const ea = bhDirektaPerSubjekt(m.beh);
+    const rader = [];
+    for (const id of new Set([...fa.keys(), ...ea.keys()])) {
+      const a = fa.get(id), b = ea.get(id);
+      if (a && b && a.actions.join() === b.actions.join()) continue;
+      rader.push({ namn: (b || a).namn, typ: (b || a).typ,
+                   fore: a ? bhNivaFranActions(a.actions) || 'egen' : null,
+                   efter: b ? bhNivaFranActions(b.actions) || 'egen' : null });
+    }
+    // En ny mapp räknas för sig. Dess behörigheter visas inte som ändringar.
+    if (rader.length && gammal) andrade.push({ path: m.path, rader: rader.sort((x, y) => x.namn.localeCompare(y.namn, 'sv')) });
+  }
+  return { nya, borttagna, flyttade, andrade };
+}
+
+// Medlemmar som tillkommit eller försvunnit, jämfört på e-post.
+function bhJamforMedlemmar(fore, efter) {
+  if (!fore?.members || !efter?.members) return null;
+  const nyckel = m => String(m.email || m.accId || '').toLowerCase();
+  const f = new Set(fore.members.map(nyckel));
+  const e = new Set(efter.members.map(nyckel));
+  return {
+    nya:       efter.members.filter(m => !f.has(nyckel(m))).map(m => m.name || m.email),
+    borttagna: fore.members.filter(m => !e.has(nyckel(m))).map(m => m.name || m.email),
+  };
+}
+
 function bhModellFranCache(post) {
-  return bhModellFranAcc(post.projektNamn, post.mappar, post.hamtad);
+  const data = bhModellFranAcc(post.projektNamn, post.mappar, post.hamtad);
+  data.meta.kontrollerad = post.kontrollerad || null;
+  return data;
 }
 
 function bhHamtadText(iso) {
@@ -271,6 +360,9 @@ function bhModellFranAcc(projektNamn, mappar, hamtad = new Date().toISOString())
   // Mappens id och de råa behörigheterna behövs för att kunna skriva
   // ändringar och återställa dem exakt som de var.
   data.mappId = new Map(mappar.map(m => [m.path, m.id]));
+  // Ändringstid och förälder, så att nästa sökning efter ändringar kan
+  // återanvända trädet.
+  data.mappTrad = new Map(mappar.filter(m => 'andrad' in m).map(m => [m.path, { andrad: m.andrad, foralder: m.foralder }]));
   data.ra     = new Map();
   for (const m of mappar) bhSattMappBeh(data, m.path, m.beh || [], false);
   for (const lista of [data.users, data.roles, data.companies]) lista.sort(bhSv);

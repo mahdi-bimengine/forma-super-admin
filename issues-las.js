@@ -170,15 +170,15 @@ async function isLasPlatser(accId) {
 
 // ── Platsnamn utan platsträdet ─────────────────────────────────────────────────
 // Autodesks Locations-API saknar CORS och kan inte anropas från webbläsaren.
-// Ärendena har ändå platsens id, så de grupperas på det, och namnet härleds ur
-// rubrikerna: den fras som står i de flesta av platsens rubriker men sällan hos
-// andra platser. Ett eget namn som satts i Område går före.
+// Ärendena har ändå platsens id. Namnet är det man satt i "Namnge platser"
+// (issues-platser.js). isHarleddaPlatsnamn ger förslag ur rubrikerna: den fras
+// som står i de flesta av platsens rubriker men sällan hos andra platser.
 
 function isPlatsnamn(p, id) {
   if (!id) return '';
   const eget = _is.platsNamn?.[p.id]?.[id];
   if (eget) return eget;
-  return isHarleddaPlatsnamn(p).get(id) || `Plats ${String(id).slice(0, 8)}`;
+  return `${IS_EJ_NAMNGIVEN} ${String(id).slice(0, 6)}`;
 }
 
 function isHarleddaPlatsnamn(p) {
@@ -368,89 +368,8 @@ const IS_STANDARDINST = {
   offboarding: 'Offboarding',
   snartDagar:  2,
   veckaDagar:  7,
-  omradeKalla: 'auto',                     // auto | falt | plats | text
-  omradeFalt:  'Location, Plats, Område',  // namnet på det egna fältet
-  platsNiva:   0,                          // 0 = hela sökvägen, 1 = översta nivån osv.
-  gammalDagar: 30,                         // öppna ärenden äldre än så räknas som gamla
   modellAuto:  false,                      // kör modellkontrollen när Clash öppnas
 };
-
-const IS_UTAN_OMRADE = '(utan område)';
-
-// Ärendets område. Det egna fältet går före platsträdet i läget auto, och
-// platsens fritext används om inget annat finns.
-function isOmrade(a) {
-  const inst = isInst();
-  const falt = () => {
-    const namn = isDelar(inst.omradeFalt);
-    const traff = Object.keys(a.egnaFalt || {}).find(t => namn.includes(t.toLowerCase()));
-    return traff ? a.egnaFalt[traff] : '';
-  };
-  const plats = () => {
-    if (!a.platsVag?.length) return a.platsId ? isPlatsnamn(_is.projekt.get(a.projektId), a.platsId) : '';
-    const n = Number(inst.platsNiva) || 0;
-    return (n > 0 ? a.platsVag.slice(0, n) : a.platsVag).join(' › ');
-  };
-  const varde = inst.omradeKalla === 'falt' ? falt()
-              : inst.omradeKalla === 'plats' ? plats()
-              : inst.omradeKalla === 'text' ? a.platsText
-              : falt() || plats() || a.platsText;
-  return varde || IS_UTAN_OMRADE;
-}
-
-// Källorna för område som faktiskt finns i ärendena, med antal och exempel.
-// Används i Inställningar så att man väljer bland det som finns.
-function isOmradeKallor(arenden) {
-  const kallor = [];
-  const exempel = lista => [...new Set(lista.filter(Boolean))].slice(0, 3).join(', ');
-
-  const djup = Math.max(0, ...arenden.map(a => a.platsVag?.length || 0));
-  const medPlats = arenden.filter(a => a.platsVag?.length);
-  // Utan platsträdet: platsfältets id med härledda eller egna namn.
-  const medBaraId = arenden.filter(a => a.platsId && !a.platsVag?.length);
-  if (medBaraId.length) {
-    kallor.push({ kalla: 'plats', niva: 0, antal: medBaraId.length, text: 'Platsfältet (Location)',
-      exempel: exempel(medBaraId.map(a => isPlatsnamn(_is.projekt.get(a.projektId), a.platsId))) });
-  }
-  for (let n = 1; n <= djup; n++) {
-    kallor.push({ kalla: 'plats', niva: n, antal: medPlats.length,
-      text: `Platsträdet, nivå ${n}`, exempel: exempel(medPlats.map(a => a.platsVag.slice(0, n).join(' › '))) });
-  }
-  if (djup > 1 && !medBaraId.length) {
-    kallor.push({ kalla: 'plats', niva: 0, antal: medPlats.length,
-      text: 'Platsträdet, hela sökvägen', exempel: exempel(medPlats.map(a => a.platsVag.join(' › '))) });
-  }
-
-  const titlar = new Map();
-  for (const a of arenden) for (const [t, v] of Object.entries(a.egnaFalt || {})) {
-    if (!titlar.has(t)) titlar.set(t, []);
-    titlar.get(t).push(v);
-  }
-  for (const [t, varden] of [...titlar.entries()].sort((a, b) => b[1].length - a[1].length)) {
-    kallor.push({ kalla: 'falt', falt: t, antal: varden.length, text: `Eget fält: ${t}`, exempel: exempel(varden) });
-  }
-
-  const medText = arenden.filter(a => a.platsText);
-  if (medText.length) kallor.push({ kalla: 'text', antal: medText.length, text: 'Platsbeskrivning (fritext)', exempel: exempel(medText.map(a => a.platsText)) });
-  return kallor;
-}
-
-// Varför ärenden saknar område: per projekt vad som finns i datan.
-function isOmradeDiagnos() {
-  return [..._is.projekt.values()].map(p => {
-    const clash = p.arenden.filter(isArClash);
-    return {
-      projekt:    p.namn,
-      clash:      clash.length,
-      platser:    p.platser?.size || 0,
-      platsFel:   p.platsFel,
-      medPlatsId: clash.filter(a => a.platsId).length,
-      utanTraff:  clash.filter(a => a.platsId && !a.platsVag.length).length,
-      medText:    clash.filter(a => a.platsText).length,
-      medFalt:    clash.filter(a => Object.keys(a.egnaFalt || {}).length).length,
-    };
-  });
-}
 
 function isInst() {
   return _is.inst || IS_STANDARDINST;

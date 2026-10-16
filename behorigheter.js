@@ -51,6 +51,7 @@ function bhReset() {
   _bh.perm = null;
   _bh.medl = null;
   _bh.acc  = null;
+  _bh.sok  = null;
   bhNollstallAndringar();
   bhStangOversikt();
 }
@@ -104,11 +105,120 @@ async function bhOppnaSparad(post) {
   bhOppnaOversikt();
 }
 
-// Ny hämtning från ACC, från översikten.
+// Ny hämtning av allt från ACC, från översikten.
 function bhHamtaOm() {
+  if (_bh.sok?.kor) return;
   if (_bh.andringar.length && !confirm(`${_bh.andringar.length} ändringar väntar och försvinner. Hämta om från ACC ändå?`)) return;
+  _bh.sok = null;
   bhStangOversikt();
   bhHamtaFranAcc();
+}
+
+// Söker efter ändringar i bakgrunden medan man arbetar i den sparade
+// versionen. Behörigheterna läses om för varje mapp, men mappträdet bara där
+// det ändrats. Sedan byts modellen ut och en rapport visar vad som ändrats.
+async function bhSokAndringar() {
+  const d = _bh.perm?.data;
+  if (_bh.sok?.kor || !d?.mappId || !_currentProject) return;
+  const projekt   = _currentProject;
+  const fore      = bhMapparFranData(d);
+  const foreMedl  = _bh.medl?.data || null;
+  const sedan     = d.meta.kontrollerad || d.meta.hamtad;
+  _bh.sok = { kor: true, klara: 0, kanda: fore.length };
+  bhRita();
+
+  let efter, medl = null;
+  try {
+    efter = await bhGaIgenomMappar(projekt, _hubs[_hubIdx].id, (klara, kanda) => {
+      if (_bh.perm?.data !== d) return;
+      Object.assign(_bh.sok, { klara, kanda });
+      const el = document.getElementById('bh-sok');
+      if (el) el.innerHTML = bhSokHtml();
+    }, fore);
+    medl = await bhLasMedlemmarFranAcc(projekt).catch(() => null);
+  } catch (err) {
+    if (_bh.perm?.data === d) { _bh.sok = { kor: false, fel: bhKortFel(err) }; bhRita(); }
+    return;
+  }
+  // Har man bytt projekt eller hämtat allt om under tiden gäller inte svaret.
+  if (_currentProject?.id !== projekt.id || _bh.perm?.data !== d) return;
+
+  const diff     = bhJamforMappar(fore, efter);
+  const medlDiff = bhJamforMedlemmar(foreMedl, medl);
+  const ny       = bhModellFranAcc(d.meta.projectName, efter, d.meta.hamtad);
+  ny.meta.kontrollerad = new Date().toISOString();
+  _bh.perm = { data: ny, filnamn: 'ACC' };
+  if (medl) _bh.medl = { data: medl, filnamn: 'ACC' };
+  await bhCacheSpara(projekt.id, ny, _bh.medl?.data);
+  _bh.sok = { kor: false, diff, medlDiff, sedan };
+  bhOppnaOversikt();
+}
+
+function bhStangSokRapport() {
+  _bh.sok = null;
+  bhRita();
+}
+
+// Knapparna i översiktens huvud, eller hur långt sökningen kommit.
+function bhSokHtml() {
+  const s = _bh.sok;
+  if (s?.kor) {
+    return `<span class="text-ads-blue">Söker efter ändringar… <span class="font-mono">${s.klara.toLocaleString('sv')} / ${s.kanda.toLocaleString('sv')}</span></span>`;
+  }
+  return `<button onclick="bhSokAndringar()" class="text-ads-blue hover:underline">Sök efter ändringar</button> ·
+          <button onclick="bhHamtaOm()" class="text-ads-muted hover:text-ads-blue hover:underline">Hämta allt om</button>`;
+}
+
+function bhSokRapportHtml() {
+  const s = _bh.sok;
+  if (!s || s.kor) return '';
+  if (s.fel) {
+    return `
+      <div class="shrink-0 px-4 py-2 border-b border-red-200 bg-red-50 text-xs text-red-800 flex items-center gap-3">
+        <span class="flex-1">Sökningen efter ändringar avbröts: ${vkEsc(s.fel)}</span>
+        <button onclick="bhStangSokRapport()" class="text-red-800/70 hover:text-red-900">✕</button>
+      </div>`;
+  }
+  const { diff, medlDiff } = s;
+  const antalRader = diff.andrade.reduce((n, m) => n + m.rader.length, 0);
+  const delar = [
+    diff.andrade.length && `${diff.andrade.length} mapp${diff.andrade.length > 1 ? 'ar' : ''} med ändrade behörigheter`,
+    diff.nya.length && `${diff.nya.length} ny${diff.nya.length > 1 ? 'a' : ''} mapp${diff.nya.length > 1 ? 'ar' : ''}`,
+    diff.borttagna.length && `${diff.borttagna.length} borttagen${diff.borttagna.length > 1 ? 'a' : ''}`,
+    diff.flyttade.length && `${diff.flyttade.length} flyttad${diff.flyttade.length > 1 ? 'e' : ''} eller omdöpt${diff.flyttade.length > 1 ? 'a' : ''}`,
+    medlDiff?.nya.length && `${medlDiff.nya.length} ny${medlDiff.nya.length > 1 ? 'a' : ''} medlem${medlDiff.nya.length > 1 ? 'mar' : ''}`,
+    medlDiff?.borttagna.length && `${medlDiff.borttagna.length} medlem${medlDiff.borttagna.length > 1 ? 'mar' : ''} borta`,
+  ].filter(Boolean);
+  const niva = v => v ? `<b>${vkEsc(BH_PERM[v]?.label || v)}</b>` : '<span class="text-ads-muted">ingen</span>';
+  const typNamn = { USER: 'person', ROLE: 'roll', COMPANY: 'företag' };
+  const lista = (rubrik, rader) => rader.length ? `
+    <div class="mt-2"><div class="font-medium mb-0.5">${rubrik}</div>
+      <ul class="ml-4 list-disc">${rader.slice(0, 50).map(r => `<li>${r}</li>`).join('')}${rader.length > 50 ? `<li class="text-ads-muted">… och ${rader.length - 50} till</li>` : ''}</ul></div>` : '';
+
+  return `
+    <div class="shrink-0 border-b ${delar.length ? 'border-amber-200 bg-amber-50/70' : 'border-emerald-200 bg-emerald-50/60'} text-xs">
+      <div class="px-4 py-2 flex items-center gap-3">
+        <span class="flex-1">${delar.length
+          ? `<b>Ändringar sedan ${vkEsc(bhHamtadText(s.sedan))}:</b> ${delar.join(', ')}. Översikten är uppdaterad.`
+          : `Inga ändringar sedan ${vkEsc(bhHamtadText(s.sedan))}.`}</span>
+        <button onclick="bhStangSokRapport()" class="text-ads-muted hover:text-ads-text">✕</button>
+      </div>
+      ${delar.length ? `
+        <details class="px-4 pb-2">
+          <summary class="cursor-pointer text-ads-blue">Visa ändringarna${antalRader ? ` (${antalRader} behörigheter)` : ''}</summary>
+          <div class="mt-1 max-h-72 overflow-y-auto pr-2">
+            ${diff.andrade.map(m => `
+              <div class="mt-2"><div class="font-mono text-[11px] text-ads-text">${vkEsc(m.path)}</div>
+                <ul class="ml-4">${m.rader.map(r => `<li>${vkEsc(r.namn)} <span class="text-ads-muted">(${typNamn[r.typ] || r.typ})</span>: ${niva(r.fore)} → ${niva(r.efter)}</li>`).join('')}</ul>
+              </div>`).join('')}
+            ${lista('Nya mappar', diff.nya.map(p => `<span class="font-mono text-[11px]">${vkEsc(p)}</span>`))}
+            ${lista('Borttagna mappar', diff.borttagna.map(p => `<span class="font-mono text-[11px]">${vkEsc(p)}</span>`))}
+            ${lista('Flyttade eller omdöpta', diff.flyttade.map(f => `<span class="font-mono text-[11px]">${vkEsc(f.fran)} → ${vkEsc(f.till)}</span>`))}
+            ${lista('Nya medlemmar', (medlDiff?.nya || []).map(vkEsc))}
+            ${lista('Medlemmar som inte längre finns', (medlDiff?.borttagna || []).map(vkEsc))}
+          </div>
+        </details>` : ''}
+    </div>`;
 }
 
 document.addEventListener('keydown', e => {
@@ -524,8 +634,9 @@ function bhOversiktHtml() {
           <div class="font-semibold text-sm text-ads-text leading-tight truncate">${vkEsc(d.meta.projectName)}</div>
           <div class="text-[10px] text-ads-muted leading-tight">
             ${d.meta.kalla === 'ACC' && d.meta.hamtad
-              ? `Mappstruktur hämtad ${vkEsc(bhHamtadText(d.meta.hamtad))} ·
-                 <button onclick="bhHamtaOm()" class="text-ads-blue hover:underline">Hämta om från ACC</button>`
+              ? `Mappstruktur hämtad ${vkEsc(bhHamtadText(d.meta.hamtad))}${d.meta.kontrollerad
+                   ? ` · kontrollerad ${vkEsc(bhHamtadText(d.meta.kontrollerad))}` : ''} ·
+                 <span id="bh-sok">${bhSokHtml()}</span>`
               : `${d.meta.kalla === 'ACC' ? 'Från ACC' : 'Från Excel'}
                  ${d.meta.exportDate ? ` · ${vkEsc(d.meta.exportDate)}` : ''}${d.meta.createdBy && d.meta.kalla !== 'ACC' ? ` · ${vkEsc(d.meta.createdBy)}` : ''}`}
           </div>
@@ -548,6 +659,7 @@ function bhOversiktHtml() {
         </div>
       </div>
 
+      ${bhSokRapportHtml()}
       ${bhBannersHtml()}
       ${_bh.lage === 'browse' ? bhValdRadHtml() : ''}
 

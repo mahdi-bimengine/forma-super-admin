@@ -29,11 +29,7 @@ const _is = {
   modell:       new Map(), // ärende-id → modellkontroll, se issues-modell.js
   modellStatus: null,
   modellFilter: 'alla',
-  omradeVald:   null,    // utfällt område i ytan Område, se issues-omrade.js
-  omradeProjekt: 'alla',
   medlem:        isNyttMedlemTillstand(),  // ytan Medlemmar, se issues-medlem.js
-  tilldela:      new Map(), // ärende-id → valt område i "Tilldela område"
-  tilldelaValda: new Set(),
 
   vyer:        null,
   vyId:        'koordinator',
@@ -141,7 +137,7 @@ async function isHamta() {
   await Promise.all([arbetare(), arbetare(), arbetare()]);
 
   Object.assign(_is, { projekt: nya, laddar: false, hamtad: new Date(), fel: fel.length ? fel : null, clashValda: new Set(),
-                       modell: new Map(), modellStatus: null, omradeVald: null, omradeProjekt: 'alla',
+                       modell: new Map(), modellStatus: null,
                        medlem: { ...isNyttMedlemTillstand(), flik: _is.medlem.flik, foretag: _is.medlem.foretag, logg: _is.medlem.logg } });
   // Var "Visa stängda" påslaget hämtas de stängda direkt också.
   if (_is.visaStangda) { _is.visaStangda = false; return isVaxlaStangda(); }
@@ -335,6 +331,7 @@ const IS_KOLUMN_TEXT = {
   skapat:    a => a.skapat,
   forfaller: a => a.forfaller,
   projekt:   a => a.projekt,
+  location:  a => isLocation(a),
 };
 
 const IS_DAGAR_VAL = {
@@ -359,7 +356,7 @@ function isSokfiltrerade(arenden) {
   const q = _is.sok.trim().toLowerCase();
   return arenden.filter(a =>
     isMatcharKolumner(a) &&
-    (!q || [a.rubrik, a.typ, a.subtyp, a.tilldelad, a.skapadAv, String(a.nr), a.projekt].some(s => (s || '').toLowerCase().includes(q))));
+    (!q || [a.rubrik, a.typ, a.subtyp, a.tilldelad, a.skapadAv, String(a.nr), a.projekt, isLocation(a)].some(s => (s || '').toLowerCase().includes(q))));
 }
 
 // Plus klicken i diagrammen, som bara styr tabellen.
@@ -378,6 +375,7 @@ function isSorterade(arenden) {
   const varde = a => kol === 'dagar' ? (isDagarKvar(a.forfaller) ?? (upp ? 99999 : -99999))
                    : kol === 'nr' ? a.nr
                    : kol === 'forfaller' ? (a.forfaller || tomt)
+                   : kol === 'location' ? (isLocation(a) || tomt)
                    : (a[kol] || '');
   return [...arenden].sort((x, y) => {
     const a = varde(x), b = varde(y);
@@ -390,13 +388,13 @@ function isSorterade(arenden) {
 
 function isExportera() {
   const rader = isSorterade(isFiltrerade(isVyArenden()));
-  const aoa = [['Nr', 'Projekt', 'Ärendetyp', 'Subtyp', 'Rubrik', 'Status', 'Tilldelad till', 'Skapad av', 'Skapat', 'Förfallodatum', 'Dagar till förfall', 'Förfallet', 'Länk']];
+  const aoa = [['Nr', 'Projekt', 'Ärendetyp', 'Subtyp', 'Rubrik', 'Status', 'Tilldelad till', 'Skapad av', 'Skapat', 'Förfallodatum', 'Dagar till förfall', 'Förfallet', 'Location', 'Länk']];
   for (const a of rader) {
     aoa.push([a.nr, a.projekt, a.typ, a.subtyp, a.rubrik, isStatusLabel(a.status), a.tilldelad, a.skapadAv, a.skapat,
-              a.forfaller, isDagarKvar(a.forfaller) ?? '', isArForfallet(a) ? 'Ja' : 'Nej', isLank(a)]);
+              a.forfaller, isDagarKvar(a.forfaller) ?? '', isArForfallet(a) ? 'Ja' : 'Nej', isLocation(a), isLank(a)]);
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{ wch: 6 }, { wch: 26 }, { wch: 20 }, { wch: 20 }, { wch: 40 }, { wch: 11 }, { wch: 26 }, { wch: 22 }, { wch: 11 }, { wch: 11 }, { wch: 8 }, { wch: 8 }, { wch: 60 }];
+  ws['!cols'] = [{ wch: 6 }, { wch: 26 }, { wch: 20 }, { wch: 20 }, { wch: 40 }, { wch: 11 }, { wch: 26 }, { wch: 22 }, { wch: 11 }, { wch: 11 }, { wch: 8 }, { wch: 8 }, { wch: 22 }, { wch: 60 }];
   const wb = XLSX.utils.book_new();
   const vy = _is.vyer.find(v => v.id === _is.vyId);
   XLSX.utils.book_append_sheet(wb, ws, bhBladnamn(vy?.namn || 'Ärenden'));
@@ -435,7 +433,7 @@ function isHuvudHtml() {
       </div>
       ${_is.hamtad && !_is.valjProjekt ? `
         <nav class="flex items-center bg-ads-gray rounded p-0.5 ml-2">
-          ${[['start', 'Start'], ['admin', 'Admin'], ['clash', 'Clash'], ['omrade', 'Område'], ['medlem', 'Medlemmar'], ['alla', 'Alla ärenden']].map(([y, t]) => `
+          ${[['start', 'Start'], ['admin', 'Admin'], ['clash', 'Clash'], ['medlem', 'Medlemmar'], ['alla', 'Alla ärenden']].map(([y, t]) => `
             <button onclick="isSattYta('${y}')"
                     class="px-3 py-1 text-xs font-medium rounded ${_is.yta === y ? 'bg-white shadow-sm text-ads-text' : 'text-ads-muted hover:text-ads-text'}">${t}</button>`).join('')}
         </nav>` : ''}
@@ -457,7 +455,7 @@ function isKroppHtml() {
       ${_is.fel.map(f => `<div>${vkEsc(f)}</div>`).join('')}
     </div>` : '';
   if (_is.valjProjekt || !_is.hamtad) return fel + isProjektvalHtml();
-  const yta = { start: isStartHtml, admin: isAdminHtml, clash: isClashHtml, omrade: isOmradeHtml, medlem: isMedlemHtml, alla: isDashboardHtml }[_is.yta] || isStartHtml;
+  const yta = { start: isStartHtml, admin: isAdminHtml, clash: isClashHtml, medlem: isMedlemHtml, alla: isDashboardHtml }[_is.yta] || isStartHtml;
   return fel + isVarningarHtml() + yta();
 }
 
@@ -538,7 +536,7 @@ function isDashboardHtml() {
           <label class="flex items-center gap-1.5 text-xs text-ads-muted cursor-pointer">
             <input type="checkbox" ${_is.visaStangda ? 'checked' : ''} onchange="isVaxlaStangda()" class="accent-ads-blue" /> Visa stängda</label>
           ${bhKnapp('isVaxlaRedigera()', _is.redigera ? 'Klar med redigering' : 'Redigera')}
-          ${bhKnapp('isExportera()', 'Excel')}
+          ${bhKnapp('isOppnaPlatser()', 'Namnge platser')}${bhKnapp('isExportera()', 'Excel')}
         </div>
         <div id="is-tabell" class="overflow-x-auto">${isTabellHtml()}</div>
       </div>
@@ -561,7 +559,7 @@ function isDiagramHtml() {
     </button>`;
   const sokText = [_is.sok && `sök "${_is.sok}"`, ...Object.entries(_is.kolFilter).map(([k, v]) =>
     `${{ nr: 'Nr', typ: 'Ärendetyp', rubrik: 'Rubrik', status: 'Status', tilldelad: 'Tilldelad', skapadAv: 'Skapad av',
-         skapat: 'Skapat', forfaller: 'Förfaller', dagar: 'Dagar', projekt: 'Projekt' }[k] || k}: ${
+         skapat: 'Skapat', forfaller: 'Förfaller', dagar: 'Dagar', projekt: 'Projekt', location: 'Location' }[k] || k}: ${
       k === 'status' ? isStatusLabel(v) : k === 'dagar' ? IS_DAGAR_VAL[v]?.text : v}`)].filter(Boolean);
 
   return `
@@ -687,13 +685,14 @@ function isTabellHtml() {
     ${lista('tilldelad', vy.map(a => a.tilldelad))}
     ${lista('skapadAv', vy.map(a => a.skapadAv))}
     ${lista('projekt', vy.map(a => a.projekt))}
+    ${lista('location', vy.map(isLocation))}
     <table class="w-full text-sm">
       <thead class="text-[11px] text-ads-muted text-left bg-ads-gray/60">
         <tr>
           ${rubrik('nr', 'Nr', 'text-right')}<th class="px-2"></th>
           ${rubrik('typ', 'Ärendetyp')}${rubrik('rubrik', 'Rubrik')}${rubrik('status', 'Status')}
           ${rubrik('tilldelad', 'Tilldelad till')}${rubrik('skapadAv', 'Skapad av')}${rubrik('skapat', 'Skapat')}
-          ${rubrik('forfaller', 'Förfaller')}${rubrik('dagar', 'Dagar', 'text-right')}${rubrik('projekt', 'Projekt')}
+          ${rubrik('forfaller', 'Förfaller')}${rubrik('dagar', 'Dagar', 'text-right')}${rubrik('location', 'Location')}${rubrik('projekt', 'Projekt')}
         </tr>
         <tr>
           ${falt('nr', 'Nr', false)}<th></th>
@@ -702,7 +701,7 @@ function isTabellHtml() {
           ${falt('tilldelad', 'Sök tilldelad…', true)}${falt('skapadAv', 'Sök…', true)}
           ${falt('skapat', 'ÅÅÅÅ-MM', false)}${falt('forfaller', 'ÅÅÅÅ-MM', false)}
           ${val('dagar', Object.entries(IS_DAGAR_VAL).map(([k, v]) => [k, v.text]))}
-          ${falt('projekt', 'Sök projekt…', true)}
+          ${falt('location', 'Sök plats…', true)}${falt('projekt', 'Sök projekt…', true)}
         </tr>
       </thead>
       <tbody id="is-tbody">${html}</tbody>
@@ -715,7 +714,7 @@ function isRaderHtml() {
   const alla  = isSorterade(isFiltrerade(isVyArenden()));
   const rader = alla.slice(0, _is.visaAntal);
   if (!alla.length) {
-    return { html: '<tr><td colspan="11" class="p-8 text-center text-sm text-ads-muted">Inga ärenden matchar vyn och filtren.</td></tr>', fotHtml: '' };
+    return { html: '<tr><td colspan="12" class="p-8 text-center text-sm text-ads-muted">Inga ärenden matchar vyn och filtren.</td></tr>', fotHtml: '' };
   }
   // Ett värde som går att klicka på för att filtrera kolumnen på det.
   const klick = (k, varde, visas = varde) => varde
@@ -742,6 +741,7 @@ function isRaderHtml() {
         <td class="px-2 py-1.5 text-xs whitespace-nowrap">${a.skapat}</td>
         <td class="px-2 py-1.5 text-xs whitespace-nowrap">${isForfallerCell(a, ref)}</td>
         <td class="px-2 py-1.5 text-right text-xs font-mono"><span class="px-1.5 py-0.5 rounded ${dagStil}">${dagar ?? ''}</span></td>
+        <td class="px-2 py-1.5 text-xs whitespace-nowrap">${klick('location', isLocation(a))}</td>
         <td class="px-2 py-1.5 text-xs">${klick('projekt', a.projekt)}</td>
       </tr>`;
   }).join('');
