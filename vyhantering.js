@@ -31,6 +31,7 @@ function vhReset() {
   _vh.setLista = null;
   _vh.setFel   = null;
   _vh.setId    = null;
+  vpReset();
   vhNollstallSet();
 }
 
@@ -299,6 +300,11 @@ function renderVyhantering() {
 }
 
 function vhKropp() {
+  if (_vp.lage === 'publika') return vpLageHtml() + vpKropp();
+  return vpLageHtml() + vhSetKropp();
+}
+
+function vhSetKropp() {
   if (_vh.setFel) {
     return `
       <div class="bg-white border border-ads-border rounded p-6">
