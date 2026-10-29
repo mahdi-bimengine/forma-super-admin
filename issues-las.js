@@ -38,7 +38,8 @@ function isAccId(projektId) {
 const IS_FALT_URVAL = [
   'displayId', 'title', 'issueTypeId', 'issueSubtypeId', 'status', 'assignedTo', 'assignedToType',
   'dueDate', 'createdBy', 'createdAt', 'closedAt', 'permittedStatuses', 'permittedAttributes',
-  'commentCount', 'updatedAt', 'customAttributes', 'locationId', 'locationDetails',
+  'commentCount', 'updatedAt', 'customAttributes', 'locationId', 'locationDetails', 'watcherObjects',
+  'startDate', 'rootCauseId',
 ].join(',');
 
 // Alla statusar utom stängd. Stängda ärenden hämtas först när de ska visas.
@@ -96,7 +97,7 @@ async function isLasProjekt(hubId, projekt) {
   const varningar = [];
   let platsFel = null;
 
-  const [typer, arenden, , medlemmar, faltDef, platser] = await Promise.all([
+  const [typer, arenden, , medlemmar, faltDef, platser, grundorsaker] = await Promise.all([
     bhMedOmforsok(() => listIssueTypes(projekt.id)),
     isListaArenden(accId, IS_EJ_STANGDA),
     isNamnFranMappar(hubId, projekt, accId, namn).catch(err => {
@@ -110,11 +111,22 @@ async function isLasProjekt(hubId, projekt) {
     isLasFaltDef(accId).catch(() => []),
     // Felet sparas, så att Område kan visa varför platserna saknas.
     isLasPlatser(accId).catch(err => { platsFel = String(err.message || err).slice(0, 200); return new Map(); }),
+    // Grundorsakerna behövs bara för att ändra flera ärenden samtidigt.
+    isLasGrundorsaker(accId).catch(() => []),
   ]);
 
   // Medlemslistan har alla personer, även de utan mappbehörigheter, och går före.
+  // foretagId är företagets id i projektet, som behövs för att lägga till en
+  // persons företag som bevakare.
   for (const u of medlemmar) {
-    if (u.autodeskId) namn.set(u.autodeskId, { namn: u.name || u.email, typ: 'user', email: u.email || '', foretag: u.companyName || '' });
+    if (u.autodeskId) namn.set(u.autodeskId, { namn: u.name || u.email, typ: 'user', email: u.email || '', foretag: u.companyName || '', foretagId: u.companyGroupId || null });
+  }
+  // Företag och roller som medlemmarna hör till, även de som inte har någon
+  // mappbehörighet. companyGroupId och roleGroupId är samma id som ACC visar
+  // som bevakare (provat i R&D BIM ENGINE 2026-10-29).
+  for (const u of medlemmar) {
+    if (u.companyGroupId && u.companyName && !namn.has(u.companyGroupId)) namn.set(u.companyGroupId, { namn: u.companyName, typ: 'company', email: '' });
+    for (const r of u.roles || []) if (r.roleGroupId && r.name && !namn.has(r.roleGroupId)) namn.set(r.roleGroupId, { namn: r.name, typ: 'role', email: '' });
   }
 
   const p = {
@@ -131,9 +143,21 @@ async function isLasProjekt(hubId, projekt) {
     faltDef,
     platsFel,
     platser,
+    grundorsaker,
   };
   p.arenden = arenden.map(a => isNormalisera(a, p));
   return p;
+}
+
+// Projektets grundorsaker som { id, namn }, där namnet är "Kategori › Orsak".
+async function isLasGrundorsaker(accId) {
+  const res = await bhMedOmforsok(() => apsGet(
+    `/construction/issues/v1/projects/${accId}/issue-root-cause-categories?include=rootcauses`));
+  const ut = [];
+  for (const k of res.results || []) {
+    for (const o of k.rootCauses || []) if (o.isActive !== false) ut.push({ id: o.id, namn: `${k.title} › ${o.title}` });
+  }
+  return ut;
 }
 
 // Hämtar de stängda ärendena till ett redan inläst projekt.
@@ -301,6 +325,10 @@ function isNormalisera(a, p) {
     tilldeladTyp: a.assignedToType || null,
     tilldelad:   a.assignedTo ? (tilldelad?.namn || `${isTypNamn(a.assignedToType)} ${a.assignedTo}`) : '',
     tilldeladEmail: tilldelad?.email || '',
+    tilldeladForetag: tilldelad?.typ === 'company' ? tilldelad.namn : tilldelad?.foretag || '',
+    bevakare:    isBevakarObjekt(a).map(w => w.id),
+    start:       a.startDate ? a.startDate.slice(0, 10) : '',
+    grundorsak:  (p.grundorsaker || []).find(o => o.id === a.rootCauseId)?.namn || '',
     skapadAv:    skapare?.namn || a.createdBy || '',
     skapat:      (a.createdAt || '').slice(0, 10),
     forfaller:   a.dueDate ? a.dueDate.slice(0, 10) : '',
@@ -311,6 +339,12 @@ function isNormalisera(a, p) {
     tillatnaFalt:     a.permittedAttributes || [],
     tillatnaHandl:    a.permittedActions || [],
   };
+}
+
+// Bevakarna som { id, type }. Fältet watchers har bara personer: ett företag
+// eller en roll som skrivs dit sparas som person. watcherObjects har typen.
+function isBevakarObjekt(ra) {
+  return ra.watcherObjects || (ra.watchers || []).map(id => ({ id, type: 'user' }));
 }
 
 function isTypNamn(typ) {

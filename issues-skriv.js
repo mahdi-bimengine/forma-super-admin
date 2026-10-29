@@ -19,8 +19,13 @@ function isFore(a, nycklar = []) {
     assignedTo:     a.ra.assignedTo || null,
     assignedToType: a.ra.assignedToType || null,
     dueDate:        a.ra.dueDate ? a.ra.dueDate.slice(0, 10) : null,
+    watchers:       isBevakarObjekt(a.ra).map(w => w.id).sort(),
+    watcherTyper:   Object.fromEntries(isBevakarObjekt(a.ra).map(w => [w.id, w.type])),
   };
   for (const k of nycklar) {
+    if (k === 'issueSubtypeId')  ut.issueSubtypeId = a.ra.issueSubtypeId || null;
+    if (k === 'startDate')       ut.startDate = a.ra.startDate ? a.ra.startDate.slice(0, 10) : null;
+    if (k === 'rootCauseId')     ut.rootCauseId = a.ra.rootCauseId || null;
     if (k === 'locationId')      ut.locationId = a.ra.locationId || null;
     if (k === 'locationDetails') ut.locationDetails = a.ra.locationDetails || null;
     if (k.startsWith('ca:')) {
@@ -52,10 +57,46 @@ function isForesla(ref, falt, varde) {
     andring.efter.assignedTo     = varde ? rest.join(':') : null;
     andring.efter.assignedToType = varde ? typ : null;
   }
-  // Ta bort fält som är tillbaka på sitt ursprungliga värde.
-  for (const k of Object.keys(andring.efter)) if (andring.efter[k] === fore[k]) delete andring.efter[k];
+  isRensaLika(andring);
   isRensaTom(andring);
   isRita();
+}
+
+// Tar bort fält som är tillbaka på sitt ursprungliga värde. Typen av
+// tilldelning följer tilldelningen: ACC behöver båda, även när en person byts
+// mot en annan person och typen därför är densamma.
+function isRensaLika(andring) {
+  for (const k of Object.keys(andring.efter)) {
+    if (k !== 'assignedToType' && isLika(andring.efter[k], andring.fore[k])) delete andring.efter[k];
+  }
+  if (!('assignedTo' in andring.efter)) delete andring.efter.assignedToType;
+  if (!('watchers' in andring.efter)) { delete andring.bevakarSteg; delete andring.bevakarTyper; }
+}
+
+// Bevakarens typ (user, role eller company). Först ur ärendet som det ser ut
+// nu eller i loggen, sedan ur namnregistret, där typerna heter likadant.
+function isBevakarTyp(id, p, ...kallor) {
+  for (const k of kallor) if (k?.[id]) return k[id];
+  return p?.namnRegister.get(id)?.typ || 'user';
+}
+
+// Listor, som bevakare, är lika när de har samma innehåll i någon ordning.
+function isLika(a, b) {
+  if (Array.isArray(a) || Array.isArray(b)) return JSON.stringify([...(a || [])].sort()) === JSON.stringify([...(b || [])].sort());
+  return a === b;
+}
+
+// Bevakare ändras i steg (lägg till, ta bort, ersätt) som spelas upp på
+// listan. Vid sparandet spelas de upp på ärendet som det ser ut just då, så
+// att bevakare som någon annan lagt till under tiden inte försvinner.
+function isBevakareEfterSteg(lista, steg) {
+  let ut = [...(lista || [])];
+  for (const s of steg || []) {
+    if (s.lage === 'lagg')   ut = [...new Set([...ut, ...s.ids])];
+    if (s.lage === 'tabort') ut = ut.filter(id => !s.ids.includes(id));
+    if (s.lage === 'ersatt') ut = [...new Set(s.ids)];
+  }
+  return ut.sort();
 }
 
 function isRensaTom(andring) {
@@ -100,6 +141,7 @@ function isAngra(id) {
 
 function isTomAndringar() {
   _is.andringar = [];
+  _is.hoppade   = [];
   if (_is.dialog === 'granska') _is.dialog = null;
   isRita();
 }
@@ -124,9 +166,15 @@ async function isSpara() {
         const sokvag = `/construction/issues/v1/projects/${r.accId}/issues/${r.id}`;
         const farsk  = await bhMedOmforsok(() => apsGet(sokvag));
         r.fore = isFore({ ra: farsk }, Object.keys(r.efter));
+        if (r.bevakarSteg) r.efter.watchers = isBevakareEfterSteg(r.fore.watchers, r.bevakarSteg);
         const kropp = {};
+        if ('watchers' in r.efter && !isLika(r.efter.watchers, r.fore.watchers)) {
+          const p = _is.projekt.get(r.projektId);
+          kropp.watcherObjects = r.efter.watchers.map(id => ({ id, type: isBevakarTyp(id, p, r.fore.watcherTyper, r.bevakarTyper) }));
+        }
         if ('status' in r.efter) kropp.status = r.efter.status;
         if ('dueDate' in r.efter) kropp.dueDate = r.efter.dueDate;
+        for (const k of ['issueSubtypeId', 'startDate', 'rootCauseId']) if (k in r.efter) kropp[k] = r.efter[k];
         if ('locationId' in r.efter) kropp.locationId = r.efter.locationId;
         if ('locationDetails' in r.efter) kropp.locationDetails = r.efter.locationDetails;
         const egna = Object.keys(r.efter).filter(k => k.startsWith('ca:'));
@@ -144,7 +192,7 @@ async function isSpara() {
           _is.kommentarer?.delete(r.id);
         }
         r.faktisk = isFore({ ra: svar }, Object.keys(r.efter));
-        r.status  = Object.keys(r.efter).every(k => r.faktisk[k] === r.efter[k]) ? 'klar' : 'avviker';
+        r.status  = Object.keys(r.efter).every(k => isLika(r.faktisk[k], r.efter[k])) ? 'klar' : 'avviker';
         isUppdateraArende(r.projektId, svar);
       } catch (err) {
         r.status = 'fel';
@@ -165,6 +213,7 @@ async function isSpara() {
     andringar:   rader,
   });
   _is.aterstaller = null;
+  _is.hoppade     = [];
   _is.andringar   = rader.filter(r => r.status === 'fel').map(({ status, fel, faktisk, ...r }) => r);
   _is.kor.klar    = true;
   isRita();
@@ -216,6 +265,8 @@ function isAterstall(id) {
     _is.andringar.push({
       id: r.id, nr: r.nr, rubrik: r.rubrik, projekt: r.projekt, projektId: r.projektId, accId: r.accId,
       fore: a ? isFore(a, Object.keys(efter)) : r.faktisk || r.efter, efter,
+      // Bevakare som tagits bort finns inte kvar på ärendet, så typen tas ur loggen.
+      ...('watchers' in efter ? { bevakarTyper: r.fore.watcherTyper } : {}),
     });
   }
   _is.aterstaller = id;
@@ -249,6 +300,7 @@ function isExporteraLogg() {
 }
 
 function isFaltNamn(k) {
+  if (k.startsWith('eget:')) return k.slice(5);
   if (k.startsWith('ca:')) {
     for (const p of _is.projekt.values()) {
       const d = p.faltDef?.find(f => f.id === k.slice(3));
@@ -258,6 +310,10 @@ function isFaltNamn(k) {
   }
   if (k === 'locationId') return 'Plats';
   if (k === 'locationDetails') return 'Platsbeskrivning';
+  if (k === 'watchers') return 'Bevakare';
+  if (k === 'issueSubtypeId') return 'Ärendetyp';
+  if (k === 'startDate') return 'Startdatum';
+  if (k === 'rootCauseId') return 'Grundorsak';
   return { status: 'Status', assignedTo: 'Tilldelad', dueDate: 'Förfaller' }[k] || k;
 }
 
@@ -267,6 +323,24 @@ function isVardeText(k, v) {
   if (k === 'status') return isStatusLabel(v.status);
   if (k === 'dueDate') return v.dueDate || '–';
   if (k === 'locationDetails') return v.locationDetails || 'ingen';
+  if (k === 'watchers') return (v.watchers || []).map(isNamnPaId).join(', ') || 'inga';
+  if (k === 'startDate') return v.startDate || '–';
+  if (k === 'issueSubtypeId') {
+    if (!v.issueSubtypeId) return '–';
+    for (const p of _is.projekt.values()) {
+      const t = p.typer?.find(t => (t.subtypes || []).some(s => s.id === v.issueSubtypeId));
+      if (t) return `${t.title} › ${t.subtypes.find(s => s.id === v.issueSubtypeId).title}`;
+    }
+    return v.issueSubtypeId;
+  }
+  if (k === 'rootCauseId') {
+    if (!v.rootCauseId) return 'ingen';
+    for (const p of _is.projekt.values()) {
+      const o = p.grundorsaker?.find(o => o.id === v.rootCauseId);
+      if (o) return o.namn;
+    }
+    return v.rootCauseId;
+  }
   if (k === 'locationId') {
     if (!v.locationId) return 'ingen';
     for (const p of _is.projekt.values()) {
@@ -295,6 +369,28 @@ function isVardeText(k, v) {
   return '';
 }
 
+// Namnet på en person, ett företag eller en roll, i något av de inlästa
+// projekten. Ett företag som bara är känt genom en medlem får medlemmens
+// företagsnamn.
+function isNamnPaId(id) {
+  for (const p of _is.projekt.values()) {
+    const n = p.namnRegister.get(id);
+    if (n) return n.namn;
+  }
+  for (const p of _is.projekt.values()) {
+    for (const n of p.namnRegister.values()) if (n.foretagId === id && n.foretag) return n.foretag;
+  }
+  return id;
+}
+
+// Bevakarändringen som det som läggs till och tas bort.
+function isBevakarDiff(fore, efter) {
+  const f = fore?.watchers || [], e = efter?.watchers || [];
+  const plus  = e.filter(id => !f.includes(id)).map(id => `<span class="text-emerald-700">+ ${vkEsc(isNamnPaId(id))}</span>`);
+  const minus = f.filter(id => !e.includes(id)).map(id => `<span class="text-red-700 line-through">${vkEsc(isNamnPaId(id))}</span>`);
+  return [...plus, ...minus].join(', ') || '<span class="text-ads-muted">ingen skillnad</span>';
+}
+
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 function isAndringsradHtml() {
@@ -303,10 +399,10 @@ function isAndringsradHtml() {
   return `
     <div class="shrink-0 border-t border-ads-border px-4 py-2 flex items-center gap-3 ${n ? 'bg-amber-50' : 'bg-white'}">
       ${n ? `
-        <span class="text-sm text-amber-900"><b>${n}</b> ärende${n > 1 ? 'n' : ''} med ändringar väntar</span>
+        <span class="text-sm text-amber-900"><b>${n}</b> ärende${n > 1 ? 'n' : ''} med ändringar väntar${_is.hoppade.length ? ` · ${_is.hoppade.length} hoppas över` : ''}</span>
         <button onclick="isOppnaDialog('granska')" class="bg-be-charcoal hover:bg-black text-white text-xs font-medium py-1.5 px-3 rounded">Granska och spara</button>
         <button onclick="isTomAndringar()" class="text-xs text-ads-muted hover:text-ads-text">Töm listan</button>`
-        : `<span class="text-xs text-ads-muted">${_is.redigera || _is.yta !== 'alla' ? 'Ändringar samlas här och sparas först när du granskat dem.' : 'Slå på Redigera ovanför tabellen för att ändra ärenden.'}</span>`}
+        : `<span class="text-xs text-ads-muted">Ändringar samlas här och sparas först när du granskat dem.</span>`}
       <div class="flex-1"></div>
       <button onclick="isOppnaDialog('historik')" class="text-xs text-ads-blue hover:underline">Historik och återställning${logg ? ` (${logg})` : ''}</button>
     </div>`;
@@ -324,7 +420,8 @@ function isAndringsTabell(rader, medAngra, medStatus) {
           <tr class="border-t border-ads-border/60 align-top">
             <td class="py-1.5 px-2"><div class="font-medium">#${r.nr} ${vkEsc(r.rubrik)}</div><div class="text-[10px] text-ads-muted">${vkEsc(r.projekt)}</div></td>
             <td class="px-2 py-1.5 text-xs">
-              ${Object.keys(r.efter).filter(k => k !== 'assignedToType').map(k => `
+              ${Object.keys(r.efter).filter(k => k !== 'assignedToType').map(k => k === 'watchers' ? `
+                <div><span class="text-ads-muted">${isFaltNamn(k)}:</span> ${isBevakarDiff(r.fore, r.efter)}</div>` : `
                 <div><span class="text-ads-muted">${isFaltNamn(k)}:</span> ${vkEsc(isVardeText(k, r.fore))} <span class="text-ads-muted">→</span> <b>${vkEsc(isVardeText(k, r.efter))}</b></div>`).join('')}
               ${r.kommentar ? `<div><span class="text-ads-muted">Kommentar:</span> <i>${vkEsc(r.kommentar)}</i></div>` : ''}
             </td>
@@ -364,7 +461,7 @@ function isDialogHtml() {
     return isDialogRam(`
       ${isDialogHuvud(_is.aterstaller ? 'Granska återställning' : 'Granska ändringar',
         `${a.length} ärende${a.length === 1 ? '' : 'n'}. Inget har skrivits till ACC än.`)}
-      <div class="flex-1 overflow-y-auto px-3 py-2">${a.length ? isAndringsTabell(a, true, false) : '<p class="p-6 text-center text-sm text-ads-muted">Listan är tom.</p>'}</div>
+      <div class="flex-1 overflow-y-auto px-3 py-2">${a.length ? isAndringsTabell(a, true, false) : '<p class="p-6 text-center text-sm text-ads-muted">Listan är tom.</p>'}${isHoppadeHtml()}</div>
       <div class="px-5 py-3 border-t border-ads-border flex items-center gap-3">
         <p class="text-[11px] text-ads-muted flex-1">Ändringarna syns direkt i ACC, och den som tilldelas kan få ett mejl. Läget före sparas, så omgången kan återställas från Historik.</p>
         <button onclick="isStangDialog()" class="text-sm text-ads-muted hover:text-ads-text px-3">Avbryt</button>
