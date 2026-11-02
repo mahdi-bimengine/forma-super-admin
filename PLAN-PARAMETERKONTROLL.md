@@ -1,7 +1,7 @@
 # Parameterkontroll – rebuild plan
 
-Status: **being built.** Revision 2, 2026-11-02.
-The new tool replaces today's Modellkontroll tab once it has been verified. Until then the two run side by side, with the new one marked "beta".
+Status: **built and in use; part 0 still has open questions** (section 10). Revision 2, 2026-11-02.
+The tool has replaced the old Modellkontroll tab.
 
 ### Build status
 
@@ -15,11 +15,14 @@ The new tool replaces today's Modellkontroll tab once it has been verified. Unti
 | 5 Resultat | **Done, tested locally**: key figures, per model › category › parameter, element lists with ElementId (type gaps one row per type), per parameter and per discipline views, coverage panel with one-click "add category", out-of-date banner that fetches only what is new, quick add of category/parameter from the results. |
 | 6 Excel | **Done, tested locally**: all sheets in 7.1, export dialog with size estimate, Swedish/English word list (`parameterkontroll-ord.js`, both languages checked to have the same keys), values written as text (`=A1-WA0` stays text), percentages rounded down, saving to ACC as a new version of a fixed file. ExcelJS 4.4.0 is loaded from jsDelivr when first used. |
 | 7 History and PDF | **Done, tested locally**: measurement points in `parameterkontroll-historik-<id>.json` (manual, and automatic with the PDF or reports saved to ACC), trend with break markers and per-model change text, infographic preview in both languages, real PDF via jsPDF 2.5.2 + svg2pdf 2.2.4 (checked by rendering the produced PDF with pdf.js), 40 models flow onto a second page. Changes from the plan: Helvetica instead of Inter (built into every PDF reader, handles å ä ö, no font file to load); reopening an old measurement point and recalculating it is not built (needs fetching specific old versions instead of the latest). |
-| 8 Finish | **Waiting on purpose.** The old Modellkontroll (and its GitHub saving) stays until the new tab has been tested with real data. The 3D view is not built. |
-| 9 ACC issues | **Done, tested locally** with stubbed Issues calls: preview, one issue per model or discipline, type, assignee (person) and due date, issue IDs stored in the measurement point, a comment instead of a duplicate next time, closed issues reported, retry of only the failed ones. Assigning to a role or company is not offered here. Not yet tested against real ACC. |
-| 10 Veckokontroll | **Not built.** It needs the run engine split from the tab's own state, so that Veckokontroll can run several saved setups by itself. Best done after the tab is verified with real data. |
+| 8 Finish | **Done** (2026-11-02, after the real-data test): the old Modellkontroll, its report and GitHub saving are removed, the beta label is gone, and the unused preset spreadsheet is deleted from the repo. The 3D view is not built. |
+| 9 ACC issues | **Done, tested on real data**: two issues created in R&D BIM ENGINE from the six "Models Pag" models; a second run recognised them as open and added a comment instead of creating duplicates. Assigning to a role or company is not offered here. |
+| 10 Veckokontroll | **Done, tested locally**: `parameterkontroll-motor.js` runs a saved setup without the tab; in Veckokontroll's settings (card 6) saved setups are chosen; the weekly run executes them, shows a result card with "Visa i Parameterkontroll" (opens the result without running again), and saving the weekly reading writes them to the weekly log and as measurement points marked "veckokontroll". |
 
-**Still not verified against real data:** the tab itself. The calculation and the data layer were verified in the live app (part 1), but everything from part 2 on has only been run locally with made-up data (`parameterkontroll-stub.js`), because the live site only runs code that has been published.
+**Real-data test** (2026-11-02, the six models in "Sample files / Models Pag" in R&D BIM ENGINE, published beta, only totals read): preparation 3–9 s per model, a run of 7,975 elements × 5 requirements in 23.5 s, self-check clean; 25 category/parameter combinations in one model matched an independent count of a full download; Excel 1.7 MB in 2.6 s with no formula cells; PDF fine; setup saved via the folder dialog; measurement point saved; issues created and updated. Fixed afterwards:
+- the discipline suggestion skipped codes with digits (PS1) and picked CLH/MLH instead;
+- "Kanske glömd" flagged every category left out, because general parameters like IfcGUID have values everywhere, so it is now one line per model with "values on X of Y elements";
+- ACC's search finds a newly created `parameterkontroll.json` only after 10–20 s, so a second save right after the first could fail; the known file is now read directly.
 
 ### What changed in revision 2
 

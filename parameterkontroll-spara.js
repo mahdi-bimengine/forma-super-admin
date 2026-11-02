@@ -44,6 +44,16 @@ async function pkHittaFil(projektId) {
   return { itemId, mapp: mapp ? { id: mapp.id, sokvag: vkMappNamnAv(mapp) } : null, dubletter: filer.length - 1, data: pkTolkaFil(text) };
 }
 
+// ACC:s sökning hittar en nyskapad fil först efter 10–20 sekunder (prövat i
+// R&D BIM ENGINE). Vet vi redan var filen ligger läses den då direkt, så att
+// en andra sparning strax efter den första inte tappar bort filen.
+async function pkFarskFil(projektId) {
+  const f = await pkHittaFil(projektId);
+  const l = pkLagring();
+  if (f.itemId || !l.itemId) return f;
+  return { itemId: l.itemId, mapp: l.mapp, dubletter: l.dubletter, data: pkTolkaFil(await readTextFile(projektId, l.itemId)) };
+}
+
 // Läser filen en gång per projektbesök. Flera anrop samtidigt väntar på samma läsning.
 async function pkLasLagring() {
   const l = pkLagring();
@@ -60,7 +70,7 @@ async function pkLasLagring() {
 // ny version. mapp behövs bara när filen inte finns än.
 async function pkSkrivFil(andra, mapp) {
   const projektId = _currentProject.id;
-  const farsk     = await pkHittaFil(projektId);
+  const farsk     = await pkFarskFil(projektId);
   const malmapp   = farsk.itemId ? farsk.mapp : mapp;
   if (!malmapp) throw new Error(farsk.itemId ? 'mappen där filen ligger gick inte att läsa' : 'ingen mapp är vald');
 
@@ -102,7 +112,7 @@ async function pkSpara(somKopia = false) {
     }
 
     // Har någon annan sparat samma uppsättning sedan den öppnades?
-    const farsk = await pkHittaFil(_currentProject.id);
+    const farsk = await pkFarskFil(_currentProject.id);
     const deras = farsk.data.uppsattningar.find(u => u.id === _pk.setup.id);
     if (!somKopia && deras && _pk.sparadTid && deras.sparad !== _pk.sparadTid) {
       _pk.sparar = false;

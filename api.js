@@ -597,39 +597,6 @@ async function reviewSidor(path, params, onProgress) {
   return alla;
 }
 
-// ── GitHub ────────────────────────────────────────────────────────────────────
-
-// Repot är publikt, så en läsning fungerar utan token. Token skickas när den
-// finns, dels för att slippa GitHubs snäva takgräns för anonyma anrop.
-async function githubGetFile(token, path) {
-  const repo = 'mahdi-bimengine/forma-super-admin';
-  const res  = await fetch(`https://api.github.com/repos/${repo}/contents/${path}`, {
-    headers: {
-      ...(token ? { Authorization: `token ${token}` } : {}),
-      Accept: 'application/vnd.github.v3+json',
-    }
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`GitHub ${res.status}: ${await res.text()}`);
-  return res.json();
-}
-
-async function githubPutFile(token, path, content, sha, message) {
-  const repo = 'mahdi-bimengine/forma-super-admin';
-  const body = {
-    message,
-    content: btoa(unescape(encodeURIComponent(content))),
-    ...(sha ? { sha } : {}),
-  };
-  const res = await fetch(`https://api.github.com/repos/${repo}/contents/${path}`, {
-    method:  'PUT',
-    headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json', Accept: 'application/vnd.github.v3+json' },
-    body:    JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`GitHub ${res.status}: ${await res.text()}`);
-  return res.json();
-}
-
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
 
 async function apsGet(path) {

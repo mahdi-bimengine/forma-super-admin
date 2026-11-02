@@ -497,24 +497,6 @@ function switchHub(idx) {
 
 let _currentProject = null;
 
-// ── Modellkontroll state ───────────────────────────────────────────────────────
-
-let _folderState  = {};   // folderId | '__top__' → { items, expanded, loaded, loading }
-let _itemsById    = {};   // item.id → item
-let _modelFilter  = null; // null | 'rvt' | 'ifc' | 'dwg'
-let _selectedFile = null;
-let _fids         = [];   // numeric index → original ID (for onclick safety)
-
-function fid(id) {
-  const i = _fids.indexOf(id);
-  if (i !== -1) return i;
-  return _fids.push(id) - 1;
-}
-
-function fidLookup(i) { return _fids[i]; }
-
-// ──────────────────────────────────────────────────────────────────────────────
-
 function selectProject(projectId) {
   const hub     = _hubs[_hubIdx];
   const project = _projCache[hub?.id]?.find(p => p.id === projectId);
@@ -523,11 +505,6 @@ function selectProject(projectId) {
 
 function renderProjectView(project) {
   _currentProject = project;
-  _folderState    = {};
-  _itemsById      = {};
-  _selectedFile   = null;
-  _fids           = [];
-  mkReset();
   pkReset();
   grReset();
   vkReset();
@@ -594,8 +571,7 @@ function renderSidebar(activeTab) {
       ${navItem('data-management', 'Data Management', ICONS.folder)}
       ${navItem('issues',          'Issues',          ICONS.clock)}
       ${navItem('granskningar',    'Granskningar',    ICONS.review)}
-      ${navItem('modelldata',      'Modellkontroll',  ICONS.cube)}
-      ${navItem('parameterkontroll', 'Parameterkontroll <span class="text-[9px] font-semibold uppercase bg-amber-100 text-amber-700 rounded px-1 py-px ml-auto">beta</span>', ICONS.cube)}
+      ${navItem('parameterkontroll', 'Parameterkontroll', ICONS.cube)}
       ${navItem('ritningsgranskning', 'Ritningsgranskning', ICONS.sheet)}
       ${navItem('veckokontroll',   'Veckokontroll',   ICONS.week)}
       ${navItem('vyhantering',     'Vyhantering',     ICONS.views)}
@@ -616,7 +592,6 @@ function renderSidebar(activeTab) {
 function showTab(tab) {
   renderSidebar(tab);
   if (tab === 'overview')        renderOverview();
-  if (tab === 'modelldata')      renderModelldata();
   if (tab === 'parameterkontroll') pkOppnaFlik();
   if (tab === 'ritningsgranskning') renderRitningsgranskning();
   if (tab === 'veckokontroll')   vkOppnaFlik();
@@ -643,180 +618,6 @@ function renderOverview() {
       <h1 class="text-base font-semibold text-ads-text mb-2">${name}</h1>
       <p class="text-ads-muted text-sm">Projektverktyg kommer snart.</p>
     </div>`;
-}
-
-// ── Modelldata ─────────────────────────────────────────────────────────────────
-
-const EXT_BADGE = {
-  rvt: 'bg-blue-50 text-blue-600',
-  ifc: 'bg-emerald-50 text-emerald-600',
-  dwg: 'bg-orange-50 text-orange-600',
-};
-
-function fileExt(name) {
-  return (name.split('.').pop() || '').toLowerCase();
-}
-
-function extBadge(ext) {
-  const cls = EXT_BADGE[ext];
-  if (!cls) return '';
-  return `<span class="shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded ${cls} uppercase tracking-wide">${ext}</span>`;
-}
-
-function renderChips() {
-  return [
-    { value: null,  label: 'Alla' },
-    { value: 'rvt', label: 'RVT'  },
-    { value: 'ifc', label: 'IFC'  },
-    { value: 'dwg', label: 'DWG'  },
-  ].map(({ value, label }) => {
-    const active  = _modelFilter === value;
-    const onclick = value === null ? `setModelFilter(null)` : `setModelFilter('${value}')`;
-    return `<button onclick="${onclick}"
-      class="px-3 py-1 rounded-full text-xs font-medium border transition-colors
-             ${active
-               ? 'bg-ads-blue border-ads-blue text-white'
-               : 'bg-white border-ads-border text-ads-muted hover:border-ads-blue hover:text-ads-blue'}"
-    >${label}</button>`;
-  }).join('');
-}
-
-function renderTreeItems(items, depth) {
-  const base = 12 + depth * 20;
-
-  return items.map(item => {
-    if (item.attributes?.hidden) return '';
-
-    if (item.type === 'folders') {
-      const st      = _folderState[item.id] || {};
-      const exp     = st.expanded  || false;
-      const loading = st.loading   || false;
-      const name    = item.attributes.displayName || item.attributes.name || '';
-      const i       = fid(item.id);
-
-      return `
-        <div onclick="toggleFolder(${i})"
-             class="flex items-center gap-2 py-1.5 pr-4 rounded hover:bg-ads-gray cursor-pointer select-none"
-             style="padding-left:${base}px">
-          <svg class="w-3.5 h-3.5 shrink-0 text-ads-muted transition-transform duration-150 ${exp ? 'rotate-90' : ''}"
-               fill="none" viewBox="0 0 20 20">
-            <path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M7 5l6 5-6 5"/>
-          </svg>
-          <svg class="w-4 h-4 shrink-0 text-amber-400" viewBox="0 0 20 15" fill="currentColor">
-            <path d="M0 2.5A1.5 1.5 0 0 1 1.5 1h4.764a1.5 1.5 0 0 1 1.06.44l.94.94A1.5 1.5 0 0 0 9.322 3H18.5A1.5 1.5 0 0 1 20 4.5v8A1.5 1.5 0 0 1 18.5 14H1.5A1.5 1.5 0 0 1 0 12.5v-10z"/>
-          </svg>
-          <span class="text-sm text-ads-text truncate flex-1">${name}</span>
-          ${loading ? `<span class="text-xs text-ads-muted">laddar…</span>` : ''}
-        </div>
-        ${exp ? renderTreeItems(st.items || [], depth + 1) : ''}`;
-    }
-
-    if (item.type === 'items') {
-      const name = item.attributes.displayName || item.attributes.name || '';
-      const ext  = fileExt(name);
-      if (_modelFilter && ext !== _modelFilter) return '';
-
-      const selected = _selectedFile?.id === item.id;
-      const i        = fid(item.id);
-
-      return `
-        <div onclick="selectFile(${i})"
-             class="flex items-center gap-2 py-1.5 pr-4 rounded cursor-pointer select-none
-                    ${selected ? 'bg-blue-50' : 'hover:bg-ads-gray'}"
-             style="padding-left:${base + 23}px">
-          <svg class="w-4 h-4 shrink-0 ${selected ? 'text-ads-blue' : 'text-ads-muted'}"
-               viewBox="0 0 16 20" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M9.5 1H3a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6.5L9.5 1z"/>
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9.5 1v5.5H15"/>
-          </svg>
-          <span class="text-sm ${selected ? 'text-ads-blue font-medium' : 'text-ads-text'} truncate flex-1">${name}</span>
-          ${extBadge(ext)}
-        </div>`;
-    }
-
-    return '';
-  }).join('');
-}
-
-function refreshFileBrowser() {
-  const el = document.getElementById('file-browser');
-  if (!el) return;
-  const st = _folderState['__top__'];
-
-  if (!st || st.loading) {
-    el.innerHTML = `
-      <div class="flex items-center gap-2 px-4 py-6 text-ads-muted text-sm">
-        <svg class="animate-spin w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" opacity=".25"/>
-          <path stroke="currentColor" stroke-width="3" stroke-linecap="round"
-                d="M22 12a10 10 0 0 0-10-10" opacity=".75"/>
-        </svg>
-        Laddar mappar…
-      </div>`;
-    return;
-  }
-
-  if (!st.items.length) {
-    el.innerHTML = `<p class="text-ads-muted text-sm px-4 py-6">Inga mappar hittades.</p>`;
-    return;
-  }
-
-  el.innerHTML = renderTreeItems(st.items, 0);
-}
-
-function setModelFilter(f) {
-  _modelFilter = f;
-  const chipsEl = document.getElementById('filter-chips');
-  if (chipsEl) chipsEl.innerHTML = renderChips();
-  refreshFileBrowser();
-}
-
-async function toggleFolder(idx) {
-  const id = fidLookup(idx);
-  const st = _folderState[id] || { items: [], expanded: false, loaded: false, loading: false };
-
-  if (!st.loaded) {
-    _folderState[id] = { ...st, expanded: true, loading: true };
-    refreshFileBrowser();
-    try {
-      const contents = await getFolderContents(_currentProject.id, id);
-      contents.forEach(item => { _itemsById[item.id] = item; });
-      _folderState[id] = { items: contents, expanded: true, loaded: true, loading: false };
-    } catch {
-      _folderState[id] = { ...st, expanded: false, loaded: false, loading: false };
-    }
-  } else {
-    _folderState[id] = { ...st, expanded: !st.expanded };
-  }
-
-  refreshFileBrowser();
-}
-
-function selectFile(idx) {
-  const id = fidLookup(idx);
-  _selectedFile = _selectedFile?.id === id ? null : (_itemsById[id] || { id });
-  refreshFileBrowser();
-}
-
-async function loadTopFolders() {
-  _folderState['__top__'] = { loading: true, loaded: false, items: [] };
-  refreshFileBrowser();
-  try {
-    const hub   = _hubs[_hubIdx];
-    const items = await getTopFolders(hub.id, _currentProject.id);
-    items.forEach(item => { _itemsById[item.id] = item; });
-    _folderState['__top__'] = { loading: false, loaded: true, items };
-  } catch (err) {
-    const el = document.getElementById('file-browser');
-    if (el) el.innerHTML = `<p class="text-ads-muted text-sm px-4 py-6">Fel: ${err.message}</p>`;
-    return;
-  }
-  refreshFileBrowser();
-}
-
-function renderModelldata() {
-  renderModellkontroll();
 }
 
 boot();

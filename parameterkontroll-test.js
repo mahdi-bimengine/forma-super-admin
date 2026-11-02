@@ -298,8 +298,8 @@ pkProv('Modell A: nyckeltal, bedömning och täckning', () => {
   pkLika(pkProcentText(m.nyckeltal.kontrollerade, m.nyckeltal.element), '63,6 %', 'täckning');
   pkLika(m.bedomning, 'uppfyller-inte', 'bedömning');
   pkLika(m.tackning.ejValda, [
-    { kategori: 'Cable Trays', antal: 3, kanskeGlomd: ['PK_Text_Instans'] },
-    { kategori: 'Floors', antal: 5, kanskeGlomd: [] },
+    { kategori: 'Cable Trays', antal: 3, kanskeGlomd: ['PK_Text_Instans'], medVarde: 1 },
+    { kategori: 'Floors', antal: 5, kanskeGlomd: [], medVarde: 0 },
   ], 'ej valda kategorier');
   pkLika(m.tackning.uteslutna, [{ kategori: 'Walls', orsak: 'rivna', antal: 1 }], 'uteslutna av datadelen');
   pkLika(m.kravInfo.PK_Text_Instans.liknande, ['PK Text Instans'], 'liknande namn');

@@ -70,7 +70,9 @@ async function vkKor() {
       : { vyer: [], problem: [] };
 
     rapport('Jämför mot förra avläsningen');
-    _vk.kor.resultat = vkJamfor(inst, mappData, setData, vyData, forra);
+    const resultat = vkJamfor(inst, mappData, setData, vyData, forra);
+    if (typeof vkPkKor === 'function') resultat.parameterkontroller = await vkPkKor(inst, rapport);
+    _vk.kor.resultat = resultat;
   } catch (err) {
     _vk.kor.fel = vkFelText(err);
   }
@@ -244,6 +246,7 @@ async function vkSparaAvlasning() {
         varsta: r.varsta ?? null, fel: r.fel || null,
       })),
       summering: res.summering,
+      parameterkontroller: typeof vkPkLoggPoster === 'function' ? vkPkLoggPoster(res) : [],
     });
     while (logg.korningar.length > VK_LOGG_ANTAL) logg.korningar.shift();
 
@@ -258,6 +261,7 @@ async function vkSparaAvlasning() {
     _vk.kor.logg   = logg;
     _vk.kor.sparad = true;
     vkToast('Veckans avläsning är sparad i projektet.');
+    if (typeof vkPkSparaMatpunkter === 'function') await vkPkSparaMatpunkter(res);
   } catch (err) {
     vkToast(`Kunde inte spara avläsningen: ${vkFelText(err)}`, 'red');
   }
@@ -343,6 +347,7 @@ function vkRenderResultat() {
     <div id="vk-resultat" class="mt-5 space-y-5">
       ${vkRenderSammanfattning(res)}
       ${vkRenderModelltabell(res)}
+      ${typeof vkPkResultatHtml === 'function' ? vkPkResultatHtml(res) : ''}
       ${vkRenderVyer(res)}
       ${vkRenderBaspunkt(res)}
       ${vkRenderAvvikelser(res)}

@@ -103,6 +103,7 @@ function vkNyaInstallningar() {
       tolerans:   5,                    // mm
     },
     grans:    { dagar: 7 },
+    parameterkontroller: [],            // {id, namn}[], se veckokontroll-parameter.js
     andrad:   null,                     // {tid, av}
   };
 }
@@ -122,6 +123,7 @@ function vkNormalisera(inst) {
     mappar:    Array.isArray(inst.mappar)    ? inst.mappar    : [],
     modellSet: Array.isArray(inst.modellSet) ? inst.modellSet : [],
     vyer:      Array.isArray(inst.vyer)      ? inst.vyer      : [],
+    parameterkontroller: Array.isArray(inst.parameterkontroller) ? inst.parameterkontroller : [],
     filtyper:  Array.isArray(inst.filtyper) && inst.filtyper.length ? inst.filtyper : bas.filtyper,
     baspunkt: {
       ...bas.baspunkt,
@@ -575,6 +577,8 @@ function vkRenderInstallningar() {
           <div id="vk-mapptrad-lagring"></div>
         </div>
       `)}
+
+      ${typeof vkPkInstallningarHtml === 'function' ? vkPkInstallningarHtml() : ''}
 
       <div class="flex items-center justify-between gap-4 pb-2">
         <p class="text-[11px] text-ads-muted">

@@ -448,9 +448,12 @@ function pkBeraknaModell(m, mv, krav, undantag, raknaNastlade, tomSet, troskel, 
     if (vald || n === 0) continue;
     const narvaro = m.narvaro?.[kat] || {};
     const glomda  = krav.filter(k => (narvaro[k.namn] || 0) > 0).map(k => k.namn);
-    if (modell || glomda.length) ut.tackning.ejValda.push({ kategori: kat, antal: n, kanskeGlomd: glomda });
+    // Hur många element som mest har värde i något krav, så att användaren
+    // kan skilja en glömd kategori från en där bara enstaka element har värden.
+    const medVarde = Math.min(n, Math.max(0, ...glomda.map(namn => narvaro[namn])));
+    if (modell || glomda.length) ut.tackning.ejValda.push({ kategori: kat, antal: n, kanskeGlomd: glomda, medVarde });
   }
-  ut.tackning.ejValda.sort((a, b) => (b.kanskeGlomd.length - a.kanskeGlomd.length) || (b.antal - a.antal));
+  ut.tackning.ejValda.sort((a, b) => (b.kanskeGlomd.length - a.kanskeGlomd.length) || (b.medVarde - a.medVarde) || (b.antal - a.antal));
   ut.nyckeltal.element = allaElement;
   ut.tackning.uteslutna = (m.uteslutna || []).filter(u => u.antal > 0);
 

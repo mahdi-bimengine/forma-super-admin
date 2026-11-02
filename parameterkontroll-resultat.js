@@ -409,9 +409,20 @@ function pkTackningHtml(r) {
     const i = pkNod(m.id);
     if (m.status !== 'klar') { punkter.push(`<b>${pkEsc(m.namn)}</b> kunde inte läsas: ${pkEsc(m.fel || '')}`); continue; }
     const t = m.tackning;
+    // Alla kanske glömda kategorier i en modell på en rad. Allmänna parametrar
+    // som IfcGUID har värden nästan överallt, och en rad per kategori dränkte
+    // resten. Flest krav med värden först.
     const glomda = t.ejValda.filter(e => e.kanskeGlomd.length);
-    for (const e of glomda) punkter.push(`<span class="text-amber-800">Kanske glömd:</span> ${pkEsc(e.kategori)} i <b>${pkEsc(m.namn)}</b> har ${pkTalText(e.antal)} element och värden i ${pkEsc(e.kanskeGlomd.slice(0, 3).join(', '))}${e.kanskeGlomd.length > 3 ? ' …' : ''}, men ingår inte.
-      <button onclick="pkLaggTillKategori(${i}, '${encodeURIComponent(e.kategori)}')" class="text-ads-blue hover:underline">Lägg till kategorin</button>`);
+    if (glomda.length) {
+      const visaAlla = pkResUi().visaGlomda?.has(m.id);
+      const visas = visaAlla ? glomda : glomda.slice(0, 5);
+      punkter.push(`<span class="text-amber-800">Kanske glömda:</span> ${glomda.length} ${glomda.length === 1 ? 'kategori' : 'kategorier'} i <b>${pkEsc(m.namn)}</b>
+        har värden i krävda parametrar men ingår inte.
+        <ul class="mt-1 ml-4 text-xs flex flex-col gap-0.5">${visas.map(e => `<li>${pkEsc(e.kategori)}: värden på ${pkTalText(e.medVarde)} av ${pkTalText(e.antal)} element,
+          i ${pkEsc(e.kanskeGlomd.slice(0, 3).join(', '))}${e.kanskeGlomd.length > 3 ? ` och ${e.kanskeGlomd.length - 3} till` : ''}
+          <button onclick="pkLaggTillKategori(${i}, '${encodeURIComponent(e.kategori)}')" class="text-ads-blue hover:underline">Lägg till</button></li>`).join('')}</ul>
+        ${glomda.length > 5 ? `<button onclick="pkVisaGlomda(${i})" class="text-xs text-ads-blue hover:underline ml-4">${visaAlla ? 'Visa färre' : `Visa alla ${glomda.length}`}</button>` : ''}`);
+    }
     const ovriga = t.ejValda.filter(e => !e.kanskeGlomd.length);
     if (ovriga.length) punkter.push(`<b>${pkEsc(m.namn)}</b>: ${ovriga.length} ${ovriga.length === 1 ? 'kategori' : 'kategorier'} med 3D-geometri ingår inte (${pkTalText(ovriga.reduce((s, e) => s + e.antal, 0))} element): ${pkEsc(ovriga.slice(0, 6).map(e => e.kategori).join(', '))}${ovriga.length > 6 ? ' …' : ''}`);
     for (const kat of t.tommaValda) punkter.push(`${pkEsc(kat)} är vald i <b>${pkEsc(m.namn)}</b> men har inga element i den här versionen.`);
@@ -431,6 +442,14 @@ function pkTackningHtml(r) {
       ${punkter.length ? `<ul class="divide-y divide-ads-border text-sm">${punkter.map(p => `<li class="px-4 py-2 text-ads-text">${p}</li>`).join('')}</ul>`
         : `<p class="px-4 py-3 text-sm text-ads-muted">Inget. Alla modellkategorier med element ingår och alla krav gäller någon kategori.</p>`}
     </div>`;
+}
+
+function pkVisaGlomda(i) {
+  const ui = pkResUi(), id = pkNodId(i);
+  ui.visaGlomda ??= new Set();
+  if (ui.visaGlomda.has(id)) ui.visaGlomda.delete(id); else ui.visaGlomda.add(id);
+  const el = document.getElementById('pk-tackning');
+  if (el) el.innerHTML = pkTackningHtml(_pk.korning.resultat);
 }
 
 function pkLaggTillKategori(i, kat) {

@@ -68,7 +68,8 @@ const PK_ORD = {
       tackningRubrik: 'Utanför kontrollen',
       inget: 'Inget.',
       kunde: (m, fel) => `${m} kunde inte läsas: ${fel}`,
-      glomd: (kat, m, n, p) => `Kanske glömd: ${kat} i ${m} har ${n} element och värden i ${p}, men ingår inte.`,
+      glomda: (m, n, lista) => `Kanske glömda i ${m}: ${n} kategorier har värden i krävda parametrar men ingår inte: ${lista}`,
+      glomdKategori: (kat, med, antal) => `${kat} (värden på ${med} av ${antal} element)`,
       ejValda: (m, n, e, lista) => `${m}: ${n} kategorier med 3D-geometri ingår inte (${e} element): ${lista}`,
       tomValda: (kat, m) => `${kat} är vald i ${m} men har inga element i den här versionen.`,
       kravUtan: (k, m) => `Kravet ${k} gäller ingen vald kategori i ${m}.`,
@@ -151,7 +152,8 @@ const PK_ORD = {
       tackningRubrik: 'Outside the check',
       inget: 'Nothing.',
       kunde: (m, fel) => `${m} could not be read: ${fel}`,
-      glomd: (kat, m, n, p) => `Possibly forgotten: ${kat} in ${m} has ${n} elements with values in ${p}, but is not included.`,
+      glomda: (m, n, lista) => `Possibly forgotten in ${m}: ${n} categories have values in required parameters but are not included: ${lista}`,
+      glomdKategori: (kat, med, antal) => `${kat} (values on ${med} of ${antal} elements)`,
       ejValda: (m, n, e, lista) => `${m}: ${n} categories with 3D geometry are not included (${e} elements): ${lista}`,
       tomValda: (kat, m) => `${kat} is chosen in ${m} but has no elements in this version.`,
       kravUtan: (k, m) => `Requirement ${k} applies to no chosen category in ${m}.`,
@@ -197,7 +199,8 @@ function pkTackningText(r, setup, O) {
   for (const m of r.modeller) {
     if (m.status !== 'klar') { ut.push(O.om.kunde(m.namn, m.fel || '')); continue; }
     const t = m.tackning;
-    for (const e of t.ejValda.filter(e => e.kanskeGlomd.length)) ut.push(O.om.glomd(e.kategori, m.namn, tal(e.antal), e.kanskeGlomd.join(', ')));
+    const glomda = t.ejValda.filter(e => e.kanskeGlomd.length);
+    if (glomda.length) ut.push(O.om.glomda(m.namn, glomda.length, glomda.map(e => O.om.glomdKategori(e.kategori, tal(e.medVarde ?? 0), tal(e.antal))).join(', ')));
     const ovriga = t.ejValda.filter(e => !e.kanskeGlomd.length);
     if (ovriga.length) ut.push(O.om.ejValda(m.namn, ovriga.length, tal(ovriga.reduce((s, e) => s + e.antal, 0)), ovriga.map(e => e.kategori).join(', ')));
     for (const kat of t.tommaValda) ut.push(O.om.tomValda(kat, m.namn));

@@ -233,7 +233,6 @@ function pkRitaTopp() {
     <div class="flex items-center gap-3 flex-wrap">
       <div class="flex items-center gap-2 min-w-0">
         <h2 class="text-lg font-semibold text-ads-text">Parameterkontroll</h2>
-        <span class="text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700 rounded px-1.5 py-0.5">beta</span>
       </div>
       <input value="${pkEsc(_pk.setup.namn)}" aria-label="Kontrollens namn"
              onchange="pkAndra('Bytte namn', s => { s.namn = this.value.trim() || 'Ny kontroll'; })"
@@ -722,19 +721,22 @@ function pkSattDisciplin(i, varde) {
   pkRitaRail();
 }
 
-// Förslag på disciplin ur filnamnen: den position i namnet där korta
-// bokstavskoder skiljer sig mellan filerna, t.ex. K i B1-K-200-V-ZZ-001.
-// Inga koder är inbyggda; det är filernas egen namngivning som avgör.
+// Förslag på disciplin ur filnamnen: den position i namnet där korta koder
+// skiljer sig mest mellan filerna, t.ex. K i B1-K-200-V-ZZ-001 eller PS1 i
+// L1D1-MLH-PS1-500. En kod börjar med en bokstav och har högst fyra tecken.
+// Rena bokstavskoder går före koder med siffror vid lika, så att ett
+// versionsnummer som V11 inte vinner. Inga koder är inbyggda; det är filernas
+// egen namngivning som avgör.
 function pkDisciplinForslag(modeller) {
   const delar = modeller.map(m => String(m.namn).replace(/\.[^.]+$/, '').split(/[-_. ]+/));
   if (delar.length < 2) return {};
-  let basta = -1, bastaAntal = 1;
+  let basta = -1, bastaPoang = 1.5;
   const langst = Math.max(...delar.map(d => d.length));
   for (let p = 0; p < langst; p++) {
     const varden = delar.map(d => d[p]);
-    if (varden.some(v => !v || !/^[A-Za-zÅÄÖåäö]{1,4}$/.test(v))) continue;
-    const olika = new Set(varden.map(v => v.toUpperCase())).size;
-    if (olika > bastaAntal) { basta = p; bastaAntal = olika; }
+    if (varden.some(v => !v || !/^[A-Za-zÅÄÖåäö][A-Za-zÅÄÖåäö0-9]{0,3}$/.test(v))) continue;
+    const poang = new Set(varden.map(v => v.toUpperCase())).size + (varden.every(v => /^[A-Za-zÅÄÖåäö]+$/.test(v)) ? 0.5 : 0);
+    if (poang > bastaPoang) { basta = p; bastaPoang = poang; }
   }
   if (basta === -1) return {};
   return Object.fromEntries(modeller.map((m, i) => [m.id, delar[i][basta].toUpperCase()]));
