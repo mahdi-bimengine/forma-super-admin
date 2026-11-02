@@ -725,18 +725,21 @@ function pkSattDisciplin(i, varde) {
 // skiljer sig mest mellan filerna, t.ex. K i B1-K-200-V-ZZ-001 eller PS1 i
 // L1D1-MLH-PS1-500. En kod börjar med en bokstav och har högst fyra tecken.
 // Rena bokstavskoder går före koder med siffror vid lika, så att ett
-// versionsnummer som V11 inte vinner. Inga koder är inbyggda; det är filernas
-// egen namngivning som avgör.
+// versionsnummer som V11 inte vinner. Är det fortfarande lika går kortare koder
+// före, eftersom discipliner oftast är en eller två bokstäver och upphovskoder
+// längre (V före CLH när bara två modeller jämförs). Inga koder är inbyggda;
+// det är filernas egen namngivning som avgör.
 function pkDisciplinForslag(modeller) {
   const delar = modeller.map(m => String(m.namn).replace(/\.[^.]+$/, '').split(/[-_. ]+/));
   if (delar.length < 2) return {};
-  let basta = -1, bastaPoang = 1.5;
+  let basta = -1, bastaPoang = 1.5, bastaLangd = Infinity;
   const langst = Math.max(...delar.map(d => d.length));
   for (let p = 0; p < langst; p++) {
     const varden = delar.map(d => d[p]);
     if (varden.some(v => !v || !/^[A-Za-zÅÄÖåäö][A-Za-zÅÄÖåäö0-9]{0,3}$/.test(v))) continue;
     const poang = new Set(varden.map(v => v.toUpperCase())).size + (varden.every(v => /^[A-Za-zÅÄÖåäö]+$/.test(v)) ? 0.5 : 0);
-    if (poang > bastaPoang) { basta = p; bastaPoang = poang; }
+    const langd = varden.reduce((n, v) => n + v.length, 0) / varden.length;
+    if (poang > bastaPoang || (basta !== -1 && poang === bastaPoang && langd < bastaLangd)) { basta = p; bastaPoang = poang; bastaLangd = langd; }
   }
   if (basta === -1) return {};
   return Object.fromEntries(modeller.map((m, i) => [m.id, delar[i][basta].toUpperCase()]));
@@ -792,12 +795,13 @@ function pkValdaHtml() {
         </span>
       </div>
       <datalist id="pk-discipliner">${kandaDisc.map(d => `<option value="${pkEsc(d)}">`).join('')}</datalist>
-      <table class="w-full text-sm">
+      <div class="overflow-x-auto rounded-b-lg">
+      <table class="w-full min-w-[460px] table-fixed text-sm">
         <thead><tr class="text-[11px] uppercase tracking-wide text-ads-muted text-left">
           <th class="px-4 py-2 font-semibold">Modell</th>
-          <th class="px-2 py-2 font-semibold w-28">Version</th>
-          <th class="px-2 py-2 font-semibold w-28">Disciplin</th>
-          <th class="px-2 py-2 font-semibold">Status</th>
+          <th class="px-2 py-2 font-semibold w-20">Version</th>
+          <th class="px-2 py-2 font-semibold w-20">Disciplin</th>
+          <th class="px-2 py-2 font-semibold w-28">Status</th>
           <th class="w-8"></th>
         </tr></thead>
         <tbody>
@@ -808,16 +812,16 @@ function pkValdaHtml() {
             return `
               <tr class="border-t border-ads-border align-top">
                 <td class="px-4 py-2">
-                  <div class="flex items-center gap-2 min-w-0">${pkTypBricka(m.filtyp)}<span class="truncate text-ads-text" title="${pkEsc(m.namn)}">${pkEsc(m.namn)}</span></div>
-                  ${m.mapp && (namnRakning[m.namn] > 1 || m.kalla === 'mc') ? `<p class="text-[11px] text-ads-muted truncate mt-0.5">${pkEsc(m.mapp)}</p>` : ''}
+                  <div class="flex items-start gap-2 min-w-0">${pkTypBricka(m.filtyp)}<span class="min-w-0 break-words text-ads-text" title="${pkEsc(m.namn)}">${pkEsc(m.namn)}</span></div>
+                  ${m.mapp && (namnRakning[m.namn] > 1 || m.kalla === 'mc') ? `<p class="text-[11px] text-ads-muted break-words mt-0.5">${pkEsc(m.mapp)}</p>` : ''}
                   ${dubbla.has(m.id) ? `<p class="text-[11px] text-amber-700 mt-0.5">Samma modell finns både som RVT och IFC och räknas då två gånger i disciplinens siffror.</p>` : ''}
                 </td>
-                <td class="px-2 py-2 text-xs text-ads-muted whitespace-nowrap">${v ? `v${v.nummer ?? '?'}${v.datum ? ` · ${pkEsc(String(v.datum).slice(0, 10))}` : ''}` : '–'}
+                <td class="px-2 py-2 text-xs text-ads-muted whitespace-nowrap">${v ? `v${v.nummer ?? '?'}${v.datum ? `<span class="block">${pkEsc(String(v.datum).slice(0, 10))}</span>` : ''}` : '–'}
                   ${d?.nyareVersion ? `<button onclick="pkAnvandNyVersion(${i})" class="block text-[11px] text-amber-700 hover:underline mt-0.5">Ny version v${d.nyareVersion.nummer} – använd</button>` : ''}</td>
                 <td class="px-2 py-2">
                   <input value="${pkEsc(m.disciplin)}" list="pk-discipliner" placeholder="${pkEsc(forslag[m.id] || '–')}"
                          onchange="pkSattDisciplin(${i}, this.value)" aria-label="Disciplin för ${pkEsc(m.namn)}"
-                         class="w-24 px-2 py-1 text-xs border border-ads-border rounded focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
+                         class="w-full px-2 py-1 text-xs border border-ads-border rounded focus:outline-none focus:ring-1 focus:ring-ads-blue"/>
                 </td>
                 <td class="px-2 py-2" data-pk-status="${pkEsc(m.id)}">${pkModellStatusHtml(m.id)}</td>
                 <td class="px-2 py-2 text-right">
@@ -829,6 +833,7 @@ function pkValdaHtml() {
           }).join('')}
         </tbody>
       </table>
+      </div>
     </div>`;
 }
 
@@ -1059,13 +1064,13 @@ async function pkSakerstallVarden(pid, m, setup, signal) {
   const nyaParam = parametrar.filter(p => !c.parametrar.has(p));
   const gamlaKat = [...c.kategorier];
   if (nyaParam.length && gamlaKat.length) {
-    slaIhop(await pkLasVarden(pid, d.index, d.karta, d.raNamn, gamlaKat, nyaParam, signal));
+    slaIhop(await pkLasVarden(pid, d.index, d.karta, d.raNamn, gamlaKat, nyaParam, signal, d.utelamnade));
   }
   // Nya kategorier, med alla parametrar som behövs.
   const nyaKat = kategorier.filter(k => !c.kategorier.has(k));
   const allaParam = [...new Set([...c.parametrar, ...parametrar])];
   if (nyaKat.length) {
-    slaIhop(await pkLasVarden(pid, d.index, d.karta, d.raNamn, nyaKat, allaParam, signal));
+    slaIhop(await pkLasVarden(pid, d.index, d.karta, d.raNamn, nyaKat, allaParam, signal, d.utelamnade));
   }
   nyaKat.forEach(k => c.kategorier.add(k));
   parametrar.forEach(p => c.parametrar.add(p));
@@ -1073,7 +1078,7 @@ async function pkSakerstallVarden(pid, m, setup, signal) {
   // Närvaron i ej valda kategorier beror på både kategorier och parametrar.
   const narvaroFor = JSON.stringify([[...c.kategorier].sort(), [...c.parametrar].sort()]);
   if (c.narvaroFor !== narvaroFor && c.parametrar.size) {
-    c.narvaro    = await pkLasNarvaro(pid, d.index, d.karta, [...c.kategorier], [...c.parametrar], signal);
+    c.narvaro    = await pkLasNarvaro(pid, d.index, d.karta, [...c.kategorier], [...c.parametrar], signal, d.utelamnade);
     c.narvaroFor = narvaroFor;
   }
 }
@@ -1097,7 +1102,7 @@ function pkBerakningsModell(id, { utanVarden = false } = {}) {
     element:       utanVarden ? [] : [...(c?.element.values() || [])],
     typer:         utanVarden ? {} : c?.typer || {},
     narvaro:       utanVarden ? {} : c?.narvaro || {},
-    uteslutna:     [],
+    uteslutna:     d.uteslutna || [],
   };
 }
 

@@ -267,7 +267,7 @@ function pkAllaValdaKategorier() {
 function pkOmfangText(kategorier) {
   if (!kategorier) return 'Alla valda kategorier';
   if (!kategorier.length) return 'Ingen kategori';
-  return kategorier.length <= 2 ? kategorier.join(', ') : `${kategorier.length} kategorier`;
+  return kategorier.length <= 2 ? kategorier.map(k => pkKatSv(k) || k).join(', ') : `${kategorier.length} kategorier`;
 }
 
 function pkOppnaOmfang(typ, i) {
@@ -670,7 +670,7 @@ function pkKravRadHtml(typ, i, namn, kallor, datatyp, kategorier, finns, notiser
         ${oppen ? `<div class="mt-1.5 border border-ads-border rounded p-2 bg-white shadow-sm flex flex-col gap-1 max-h-56 overflow-auto">
           <button onclick="pkOmfangAlla('${typ}', ${i})" class="text-left text-ads-blue hover:underline">Alla valda kategorier</button>
           ${valda.map(k => `<label class="flex items-center gap-1.5 cursor-pointer"><input type="checkbox" ${!kategorier || kategorier.includes(k) ? 'checked' : ''}
-            onchange="pkSattOmfang('${typ}', ${i}, decodeURIComponent('${encodeURIComponent(k)}'), this.checked)" class="accent-ads-blue"/>${pkEsc(k)}</label>`).join('') || '<span class="text-ads-muted">Välj kategorier i steg 2 först.</span>'}
+            onchange="pkSattOmfang('${typ}', ${i}, decodeURIComponent('${encodeURIComponent(k)}'), this.checked)" class="accent-ads-blue"/>${pkKatHtml(k)}</label>`).join('') || '<span class="text-ads-muted">Välj kategorier i steg 2 först.</span>'}
         </div>` : ''}
       </td>
       <td class="px-2 py-2 text-xs text-ads-muted">${finns}</td>

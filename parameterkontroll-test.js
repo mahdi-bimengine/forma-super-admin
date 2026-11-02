@@ -56,7 +56,7 @@ function pkTestModellA() {
     },
     hamtade: [...PK_TEST_KRAV, 'Comments'],
     narvaro: { 'Cable Trays': { PK_Text_Instans: 1 } },
-    uteslutna: [{ kategori: 'Walls', orsak: 'rivna', antal: 1 }],
+    uteslutna: [{ kategori: 'Walls', orsak: 'rivna', antal: 1 }, { kategori: 'Floors', orsak: 'rivna', antal: 2 }],
     typer: {
       tW: { namn: 'Generic 200', familj: 'Basic Wall', varden: {} },
       tA: { namn: 'Typ A', familj: 'Dörr', varden: { PK_Text_Typ: ['X'] } },
@@ -443,6 +443,47 @@ pkProv('Snabbhet: 2 miljoner värden under 0,4 sekunder (mål 0,2 s per miljon)'
   // Vart sjunde element har tomma värden, så klara element är de övriga.
   pkLika(res.modeller[0].nyckeltal.klara, 100000 - Math.ceil(100000 / 7), 'klara element');
   if (tid > 400) throw new Error(`tog ${Math.round(tid)} ms`);
+});
+
+pkProv('Det som inte räknas: rivna, designalternativ, rum utan yta och inbäddade', () => {
+  const rader = [
+    { id: 1,  k: 'Revit Walls', riv0a: 'None' },
+    { id: 2,  k: 'Revit Walls', riv0a: 'New Construction' },
+    { id: 3,  k: 'Revit Walls', riv0b: 'Ingen', opt0a: 'Main Model' },
+    { id: 4,  k: 'Revit Walls', opt0a: 'Fasad : Alternativ A (primary)' },
+    { id: 5,  k: 'Revit Walls', opt1b: 'Huvudmodell' },
+    { id: 6,  k: 'Revit Rooms', yta0a: 0 },
+    { id: 7,  k: 'Revit Rooms', yta0a: 12.5 },
+    { id: 8,  k: 'Revit Rooms' },
+    { id: 9,  k: 'Revit Rooms', yta0b: '8,2' },
+    { id: 10, k: 'Revit Doors' },
+    { id: 11, k: 'Revit Generic Models', f1: 10 },      // beslag i en dörr
+    { id: 12, k: 'Revit Doors', f1: 1 },                // dörr i en glasfasad
+    { id: 13, k: 'Revit Curtain Panels', f2: 1 },       // panel i en glasfasad
+    { id: 14, k: 'Revit Doors', f1: 999 },              // föräldern är en typnod
+    { id: 15, k: 'Revit Generic Models', f1: 2, riv0a: 'Fas 2' },
+    { id: 16, k: 'Revit Doors', riv0a: ' none ' },
+    { id: 17, k: 'Revit Generic Models', f1: 11 },      // inbäddad i en inbäddad
+    { id: 18, k: 'Revit Generic Models', f1: 20 },      // i en modellgrupp
+    { id: 20, k: 'Revit Model Groups' },
+  ];
+  const { bort, nastlade } = pkSorteraElement(rader, pkRevitKategori);
+  pkLika([...bort], [[2, 'rivna'], [4, 'designalternativ'], [6, 'utanYta'], [8, 'utanYta'], [15, 'rivna']], 'bortsorterade');
+  pkLika([...nastlade], [11, 17], 'inbäddade');
+});
+
+pkProv('Täckningen säger vad som inte räknas, bara i valda kategorier', () => {
+  const m = pkBerakna(pkTestModeller(), pkTestVal()).modeller[0];
+  pkLika(pkEjRaknadeText(m, PK_ORD.sv), '1 rivna element i Väggar (Walls); 1 inbäddade element (delar av andra familjer) i Generiska modeller (Generic Models)', 'svenska');
+  pkLika(pkEjRaknadeText(m, PK_ORD.en), '1 demolished elements in Walls; 1 nested elements (parts of other families) in Generic Models', 'engelska');
+});
+
+pkProv('Kategorinamn på svenska med det engelska bredvid, IFC och okända på engelska', () => {
+  pkLika([pkKatText('Walls'), pkKatText('Walls', 'en'), pkKatText('IfcWall'), pkKatText('Okänd kategori')],
+    ['Väggar (Walls)', 'Walls', 'IfcWall', 'Okänd kategori'], 'namn');
+  // Varje svenskt namn är unikt, utom Utrymmen som är samma kategori i två versioner av Revit.
+  const sv = Object.entries(PK_KATEGORI_SV).filter(([en]) => en !== 'MEP Spaces').map(([, s]) => s);
+  pkLika(sv.filter((s, i) => sv.indexOf(s) !== i), [], 'dubbletter');
 });
 
 // ── Körning ───────────────────────────────────────────────────────────────────

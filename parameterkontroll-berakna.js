@@ -455,7 +455,8 @@ function pkBeraknaModell(m, mv, krav, undantag, raknaNastlade, tomSet, troskel, 
   }
   ut.tackning.ejValda.sort((a, b) => (b.kanskeGlomd.length - a.kanskeGlomd.length) || (b.medVarde - a.medVarde) || (b.antal - a.antal));
   ut.nyckeltal.element = allaElement;
-  ut.tackning.uteslutna = (m.uteslutna || []).filter(u => u.antal > 0);
+  // Det datadelen inte tog med, i de valda kategorierna.
+  ut.tackning.uteslutna = (m.uteslutna || []).filter(u => u.antal > 0 && perKategori.has(pkNyckel(u.kategori)));
 
   // Krav som inte gäller någon vald kategori som har element i modellen.
   const medElement = ut.kategorier.filter(k => k.antal > 0).map(k => k.namn);

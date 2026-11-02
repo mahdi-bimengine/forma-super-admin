@@ -23,6 +23,12 @@ const PK_KATEGORIGRUPPER = [
   { id: 'ovriga',  namn: 'Övriga',             info: 'Taggar, mått, vyer, skisser och andra objekt utan 3D-geometri.' },
 ];
 
+// Kategorin i gränssnittet: det svenska namnet med det engelska i grått bredvid.
+function pkKatHtml(kat) {
+  const sv = pkKatSv(kat);
+  return sv ? `${pkEsc(sv)} <span class="text-[11px] text-ads-muted">${pkEsc(kat)}</span>` : pkEsc(kat);
+}
+
 function pkKatUi() {
   _pk.ui.kat ??= { sok: '', baraValda: false, sortering: 'namn', oppnaGrupper: new Set(['modell', 'projekt']), undantagForm: null };
   return _pk.ui.kat;
@@ -66,6 +72,9 @@ function pkKategorierHtml() {
       <label class="flex items-center gap-1.5 text-sm text-ads-text cursor-pointer">
         <input type="checkbox" ${ui.baraValda ? 'checked' : ''} onchange="pkKatBaraValda(this.checked)" class="accent-ads-blue"/> Visa bara valda
       </label>
+      <label class="flex items-center gap-1.5 text-sm text-ads-text cursor-pointer" title="ACC ger Revits kategorier på engelska. Det engelska namnet visas alltid bredvid.">
+        <input type="checkbox" ${pkSvenskaKategorier() ? 'checked' : ''} onchange="pkKatSvenska(this.checked)" class="accent-ads-blue"/> Svenska kategorinamn
+      </label>
       <label class="flex items-center gap-1.5 text-sm text-ads-muted">Sortera
         <select onchange="pkKatSortera(this.value)" class="text-sm border border-ads-border rounded px-2 py-1 bg-white">
           <option value="namn" ${ui.sortering === 'namn' ? 'selected' : ''}>på namn</option>
@@ -82,6 +91,7 @@ function pkKategorierHtml() {
 function pkKatSok(q) { pkKatUi().sok = q; pkRitaMatriser(); }
 function pkKatBaraValda(pa) { pkKatUi().baraValda = pa; pkRitaMatriser(); }
 function pkKatSortera(s) { pkKatUi().sortering = s; pkRitaMatriser(); }
+function pkKatSvenska(pa) { pkSattSvenskaKategorier(pa); pkRita(); }
 
 function pkKatGrupp(id) {
   const ui = pkKatUi();
@@ -129,9 +139,10 @@ function pkMatrisHtml(modeller) {
   const q     = ui.sok.trim().toLocaleLowerCase('sv');
   const klara = modeller.filter(m => pkModellData(m.id)?.status === 'klar').length;
   let rader   = pkKategoriRader(modeller)
-    .filter(r => !q || r.namn.toLocaleLowerCase('sv').includes(q))
+    .filter(r => !q || r.namn.toLocaleLowerCase('sv').includes(q) || (pkKatSv(r.namn) || '').toLocaleLowerCase('sv').includes(q))
     .filter(r => !ui.baraValda || modeller.some(m => m.kategorier.includes(r.namn)));
-  rader.sort(ui.sortering === 'antal' ? (a, b) => b.totalt - a.totalt : (a, b) => a.namn.localeCompare(b.namn, 'sv'));
+  const visas = r => pkKatSv(r.namn) || r.namn;
+  rader.sort(ui.sortering === 'antal' ? (a, b) => b.totalt - a.totalt : (a, b) => visas(a).localeCompare(visas(b), 'sv'));
 
   const kolumner = modeller.map((m, i) => {
     const d = pkModellData(m.id);
@@ -199,7 +210,7 @@ function pkKategoriRadHtml(r, modeller) {
                 title="${alla ? 'Avmarkera i alla modeller' : 'Välj i alla modeller som har kategorin'}">
           <span class="w-4 h-4 shrink-0 rounded border flex items-center justify-center text-[10px]
                        ${alla ? 'bg-ads-blue border-ads-blue text-white' : valda ? 'border-ads-blue text-ads-blue' : 'border-ads-muted'}">${alla ? '✓' : valda ? '–' : ''}</span>
-          <span class="text-ads-text truncate">${pkEsc(r.namn)}</span>
+          <span class="text-ads-text truncate">${pkKatHtml(r.namn)}</span>
           ${rad ? `<span class="text-[10px] text-ads-blue shrink-0" title="Kryssas automatiskt i modeller som läggs till senare">alla</span>` : ''}
         </button>
       </td>
@@ -285,7 +296,7 @@ function pkUndantagText(u) {
     : `${u.parameter} ${(PK_OPERATORER.find(o => o[0] === u.operator) || [, u.operator])[1]}${['tom', 'inteTom'].includes(u.operator) ? '' : ` ${u.varde}`}`;
   const var_ = [
     u.modeller?.length ? u.modeller.map(id => _pk.setup.modeller.find(m => m.id === id)?.namn || 'borttagen modell').join(', ') : 'alla modeller',
-    u.kategorier?.length ? u.kategorier.join(', ') : 'alla kategorier',
+    u.kategorier?.length ? u.kategorier.map(k => pkKatText(k)).join(', ') : 'alla kategorier',
   ].join(' · ');
   return { vad, var: var_ };
 }
@@ -304,7 +315,7 @@ function pkUndantagHtml() {
   const t  = _pk.korning?.resultat;
   const varningar = t ? t.modeller.flatMap(m => [
     ...m.tackning.undantagUtanTraff.map(id => ({ id, text: `matchade inga element i ${m.namn}` })),
-    ...m.tackning.storaUndantag.map(u => ({ id: u.id, text: `tar bort ${u.antal} av ${u.av} element i ${u.kategori} i ${m.namn}` })),
+    ...m.tackning.storaUndantag.map(u => ({ id: u.id, text: `tar bort ${u.antal} av ${u.av} element i ${pkKatText(u.kategori)} i ${m.namn}` })),
   ]) : [];
   return `
     <div class="bg-white border border-ads-border rounded-lg">
@@ -386,7 +397,7 @@ function pkUndantagFormHtml() {
         </select>
         <select onchange="pkUndantagFalt('kategori', this.value)" class="${falt}">
           <option value="">alla kategorier</option>
-          ${kategorier.map(k => `<option value="${pkEsc(k)}" ${f.kategori === k ? 'selected' : ''}>${pkEsc(k)}</option>`).join('')}
+          ${kategorier.map(k => `<option value="${pkEsc(k)}" ${f.kategori === k ? 'selected' : ''}>${pkEsc(pkKatText(k))}</option>`).join('')}
         </select>
         <input value="${pkEsc(f.skal)}" placeholder="Skäl, visas i rapporterna" oninput="pkUndantagFalt('skal', this.value)" class="${falt} flex-1 min-w-[12rem]"/>
       </div>

@@ -31,10 +31,10 @@ async function pkKorUppsattning(projectId, setup, { signal, onSteg } = {}) {
         d.parametrar = pkBehovdaParametrar(setup, d);
         const kategorier = m.kategorier.filter(k => d.kategoriAntal[k]);
         Object.assign(d, kategorier.length
-          ? await pkLasVarden(projectId, idx, d.karta, d.raNamn, kategorier, d.parametrar, signal)
+          ? await pkLasVarden(projectId, idx, d.karta, d.raNamn, kategorier, d.parametrar, signal, d.utelamnade)
           : { element: [], typer: {} });
         d.narvaro = kategorier.length && d.parametrar.length
-          ? await pkLasNarvaro(projectId, idx, d.karta, kategorier, d.parametrar, signal) : {};
+          ? await pkLasNarvaro(projectId, idx, d.karta, kategorier, d.parametrar, signal, d.utelamnade) : {};
       } catch (err) {
         if (err.name === 'AbortError') throw err;
         d.fel = `Kunde inte läsa modellen: ${vkFelText(err)}`;
@@ -48,7 +48,7 @@ async function pkKorUppsattning(projectId, setup, { signal, onSteg } = {}) {
     const bas = { id: m.id, namn: m.namn, filtyp: m.filtyp, version: d.version || null, disciplin: m.disciplin };
     if (d.fel) return { ...bas, status: 'fel', fel: d.fel };
     return { ...bas, status: 'klar', falt: d.karta.falt, kategoriAntal: d.kategoriAntal, hamtade: d.parametrar,
-      element: d.element, typer: d.typer, narvaro: d.narvaro, uteslutna: [] };
+      element: d.element, typer: d.typer, narvaro: d.narvaro, uteslutna: d.uteslutna || [] };
   });
   return {
     id: pkNyttId(), tid: new Date().toISOString(), kalla: 'veckokontroll', pagar: false,

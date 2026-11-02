@@ -266,7 +266,7 @@ function pkModellKategorierHtml(m) {
           <tr class="border-t border-ads-border hover:bg-ads-gray/40 cursor-pointer" onclick="pkResKategori(${i}, ${j})">
             <td class="px-4 py-2"><span class="inline-flex items-center gap-2">
               <svg class="w-3 h-3 text-ads-muted transition-transform ${oppen ? 'rotate-90' : ''}" fill="none" viewBox="0 0 20 20"><path stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M7 5l6 5-6 5"/></svg>
-              ${pkEsc(k.namn)}</span>${k.undantagna ? `<span class="text-[11px] text-ads-muted ml-1">(${k.undantagna} undantagna)</span>` : ''}</td>
+              ${pkKatHtml(k.namn)}</span>${k.undantagna ? `<span class="text-[11px] text-ads-muted ml-1">(${k.undantagna} undantagna)</span>` : ''}</td>
             <td class="px-2 py-2 text-right tabular-nums">${k.antal === 0 ? '<span class="text-amber-700">0</span>' : pkTalText(k.kontrollerade)}</td>
             <td class="px-2 py-2 text-xs">${k.antal === 0 ? '<span class="text-amber-700">Inga element i den här versionen</span>' : `
               <b>${k.kompletta} av ${krav}</b> kompletta${k.delvis ? ` · ${k.delvis} delvis` : ''}${k.tomma ? ` · ${k.tomma} inget värde` : ''}${k.saknade ? ` · <span class="text-red-600">${k.saknade} finns inte</span>` : ''}`}</td>
@@ -316,7 +316,7 @@ function pkVisaBrister(i, j, pi) {
   _pk.ui.brister = { element, typer, visas: 200 };
   const ids = element.map(b => b.el.elementId).filter(x => x != null);
   pkDialog({
-    titel: `${par} saknar värde · ${kat}`,
+    titel: `${par} saknar värde · ${pkKatText(kat)}`,
     text: `${m.namn}. ${typer.length ? `${typer.length} ${typer.length === 1 ? 'typ' : 'typer'} och ` : ''}${element.length} element utan värde.`,
     bredd: 'w-[760px]',
     html: `
@@ -418,18 +418,19 @@ function pkTackningHtml(r) {
       const visas = visaAlla ? glomda : glomda.slice(0, 5);
       punkter.push(`<span class="text-amber-800">Kanske glömda:</span> ${glomda.length} ${glomda.length === 1 ? 'kategori' : 'kategorier'} i <b>${pkEsc(m.namn)}</b>
         har värden i krävda parametrar men ingår inte.
-        <ul class="mt-1 ml-4 text-xs flex flex-col gap-0.5">${visas.map(e => `<li>${pkEsc(e.kategori)}: värden på ${pkTalText(e.medVarde)} av ${pkTalText(e.antal)} element,
+        <ul class="mt-1 ml-4 text-xs flex flex-col gap-0.5">${visas.map(e => `<li>${pkKatHtml(e.kategori)}: värden på ${pkTalText(e.medVarde)} av ${pkTalText(e.antal)} element,
           i ${pkEsc(e.kanskeGlomd.slice(0, 3).join(', '))}${e.kanskeGlomd.length > 3 ? ` och ${e.kanskeGlomd.length - 3} till` : ''}
           <button onclick="pkLaggTillKategori(${i}, '${encodeURIComponent(e.kategori)}')" class="text-ads-blue hover:underline">Lägg till</button></li>`).join('')}</ul>
         ${glomda.length > 5 ? `<button onclick="pkVisaGlomda(${i})" class="text-xs text-ads-blue hover:underline ml-4">${visaAlla ? 'Visa färre' : `Visa alla ${glomda.length}`}</button>` : ''}`);
     }
     const ovriga = t.ejValda.filter(e => !e.kanskeGlomd.length);
-    if (ovriga.length) punkter.push(`<b>${pkEsc(m.namn)}</b>: ${ovriga.length} ${ovriga.length === 1 ? 'kategori' : 'kategorier'} med 3D-geometri ingår inte (${pkTalText(ovriga.reduce((s, e) => s + e.antal, 0))} element): ${pkEsc(ovriga.slice(0, 6).map(e => e.kategori).join(', '))}${ovriga.length > 6 ? ' …' : ''}`);
-    for (const kat of t.tommaValda) punkter.push(`${pkEsc(kat)} är vald i <b>${pkEsc(m.namn)}</b> men har inga element i den här versionen.`);
+    if (ovriga.length) punkter.push(`<b>${pkEsc(m.namn)}</b>: ${ovriga.length} ${ovriga.length === 1 ? 'kategori' : 'kategorier'} med 3D-geometri ingår inte (${pkTalText(ovriga.reduce((s, e) => s + e.antal, 0))} element): ${pkEsc(ovriga.slice(0, 6).map(e => pkKatSv(e.kategori) || e.kategori).join(', '))}${ovriga.length > 6 ? ' …' : ''}`);
+    for (const kat of t.tommaValda) punkter.push(`${pkKatHtml(kat)} är vald i <b>${pkEsc(m.namn)}</b> men har inga element i den här versionen.`);
     for (const namn of t.kravUtanKategori) punkter.push(`Kravet ${pkEsc(namn)} gäller ingen vald kategori i <b>${pkEsc(m.namn)}</b> och kontrolleras inte där.`);
     for (const id of t.undantagUtanTraff) punkter.push(`Undantaget "${pkEsc(pkUndantagText(_pk.korning.setup.undantag.find(u => u.id === id) || {}).vad)}" matchade inga element i <b>${pkEsc(m.namn)}</b>. Stämmer stavningen?`);
-    for (const u of t.storaUndantag) punkter.push(`<span class="text-amber-800">Stort undantag:</span> en regel tar bort ${pkTalText(u.antal)} av ${pkTalText(u.av)} element i ${pkEsc(u.kategori)} i <b>${pkEsc(m.namn)}</b>.`);
-    for (const u of t.uteslutna) punkter.push(`${pkTalText(u.antal)} element i ${pkEsc(u.kategori)} i <b>${pkEsc(m.namn)}</b> togs inte med (${pkEsc(u.orsak)}).`);
+    for (const u of t.storaUndantag) punkter.push(`<span class="text-amber-800">Stort undantag:</span> en regel tar bort ${pkTalText(u.antal)} av ${pkTalText(u.av)} element i ${pkKatHtml(u.kategori)} i <b>${pkEsc(m.namn)}</b>.`);
+    const ejRaknade = pkEjRaknadeText(m, PK_ORD.sv);
+    if (ejRaknade) punkter.push(`Räknas inte i <b>${pkEsc(m.namn)}</b>: ${pkEsc(ejRaknade)}.`);
     const undantagna = m.kategorier.reduce((s, k) => s + k.undantagna, 0);
     if (undantagna) punkter.push(`${pkTalText(undantagna)} element i <b>${pkEsc(m.namn)}</b> är undantagna enligt reglerna i steg 2.`);
   }
@@ -473,13 +474,13 @@ function pkSnabbKategori() {
     r.antal += a.antal; r.modeller++; r.geometri += a.geometri ?? 1;
     alla.set(kat, r);
   }
-  const lista = [...alla].filter(([, r]) => r.geometri).sort((a, b) => a[0].localeCompare(b[0], 'sv'));
+  const lista = [...alla].filter(([, r]) => r.geometri).sort((a, b) => (pkKatSv(a[0]) || a[0]).localeCompare(pkKatSv(b[0]) || b[0], 'sv'));
   pkDialog({
     titel: 'Lägg till kategori',
     text: 'Kategorin väljs i alla modeller som har den. Modellkategorier med 3D-geometri visas; övriga finns i steg 2.',
     html: `<div class="border border-ads-border rounded max-h-80 overflow-auto divide-y divide-ads-border">${lista.map(([kat, r]) => `
       <label class="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-ads-gray"><input type="checkbox" value="${pkEsc(kat)}" class="accent-ads-blue pk-snabb"/>
-        <span class="flex-1">${pkEsc(kat)}</span><span class="text-xs text-ads-muted">${pkTalText(r.antal)} element i ${r.modeller} ${r.modeller === 1 ? 'modell' : 'modeller'}</span></label>`).join('')
+        <span class="flex-1">${pkKatHtml(kat)}</span><span class="text-xs text-ads-muted">${pkTalText(r.antal)} element i ${r.modeller} ${r.modeller === 1 ? 'modell' : 'modeller'}</span></label>`).join('')
       || '<p class="px-3 py-3 text-sm text-ads-muted">Alla modellkategorier är redan valda.</p>'}</div>`,
     knappar: [{ text: 'Avbryt' }, { text: 'Lägg till', primar: true, gor: d => {
       const valda = [...d.querySelectorAll('.pk-snabb:checked')].map(x => x.value);

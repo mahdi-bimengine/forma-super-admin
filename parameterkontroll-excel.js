@@ -216,12 +216,12 @@ async function pkByggExcel({ baraBrister = true, varden = true, sprak = 'sv' } =
   const rader2 = [];
   for (const m of r.modeller) for (const kat of m.kategorier) {
     const n = kat.nyckeltal;
-    rader2.push({ varden: { modell: m.namn, disciplin: m.disciplin || '', kategori: kat.namn, element: kat.antal, undantagna: kat.undantagna, kontrollerade: kat.kontrollerade,
+    rader2.push({ varden: { modell: m.namn, disciplin: m.disciplin || '', kategori: pkKatText(kat.namn, O.sprak), element: kat.antal, undantagna: kat.undantagna, kontrollerade: kat.kontrollerade,
       krav: kat.parametrar.length, kompletta: kat.kompletta, delvis: kat.delvis, ingetVarde: kat.tomma, finnsInte: kat.saknade, kravVarden: n.kravVarden, ifyllda: n.ifyllda,
       ifyllnad: pkAndelNed(n.ifyllda, n.kravVarden), klara: kat.klara ?? '' } });
   }
   tabell(nyttBlad(O.blad.modellKategori), [
-    [O.kol.modell, 'modell', 40], [O.kol.disciplin, 'disciplin', 11], [O.kol.kategori, 'kategori', 26], [O.kol.element, 'element', 10, HELTAL],
+    [O.kol.modell, 'modell', 40], [O.kol.disciplin, 'disciplin', 11], [O.kol.kategori, 'kategori', 30], [O.kol.element, 'element', 10, HELTAL],
     [O.kol.undantagna, 'undantagna', 11, HELTAL], [O.kol.kontrollerade, 'kontrollerade', 13, HELTAL], [O.kol.krav, 'krav', 8], [O.kol.kompletta, 'kompletta', 15],
     [O.kol.delvis, 'delvis', 9], [O.kol.ingetVarde, 'ingetVarde', 12], [O.kol.finnsInte, 'finnsInte', 11], [O.kol.kravVarden, 'kravVarden', 13, HELTAL],
     [O.kol.ifyllda, 'ifyllda', 13, HELTAL], [O.kol.ifyllnad, 'ifyllnad', 12, PROCENT], [O.kol.klara, 'klara', 12, HELTAL],
@@ -233,13 +233,13 @@ async function pkByggExcel({ baraBrister = true, varden = true, sprak = 'sv' } =
     const info = m.kravInfo[p.namn] || {};
     const anm = [info.liknande?.length && O.liknande(info.liknande.join(', ')), info.datatyp?.ok === false && O.annanTyp(info.datatyp.modell.join(', '))].filter(Boolean).join(' · ');
     rader3.push({
-      varden: { modell: m.namn, kategori: kat.namn, parameter: p.namn, status: O.status[p.status] || p.status, med: p.medVarde, utan: p.antal - p.medVarde, antal: p.antal,
+      varden: { modell: m.namn, kategori: pkKatText(kat.namn, O.sprak), parameter: p.namn, status: O.status[p.status] || p.status, med: p.medVarde, utan: p.antal - p.medVarde, antal: p.antal,
         andel: pkAndelNed(p.medVarde, p.antal), instans: p.instans, typ: p.typ, datatyp: (info.datatyp?.modell || []).join(', '), anm },
       stil: wr => fyll(wr.getCell('status'), PK_EXCEL_STATUSFARG[p.status]),
     });
   }
   tabell(nyttBlad(O.blad.parametrar), [
-    [O.kol.modell, 'modell', 40], [O.kol.kategori, 'kategori', 24], [O.kol.parameter, 'parameter', 28], [O.kol.status, 'status', 20],
+    [O.kol.modell, 'modell', 40], [O.kol.kategori, 'kategori', 30], [O.kol.parameter, 'parameter', 28], [O.kol.status, 'status', 20],
     [O.kol.medVarde, 'med', 11, HELTAL], [O.kol.utanVarde, 'utan', 11, HELTAL], [O.kol.kontrollerade, 'antal', 13, HELTAL], [O.kol.andel, 'andel', 9, PROCENT],
     [O.kol.instans, 'instans', 12, HELTAL], [O.kol.typ, 'typ', 10, HELTAL], [O.kol.datatypModell, 'datatyp', 18], [O.kol.anmarkning, 'anm', 50],
   ], rader3);
@@ -252,12 +252,12 @@ async function pkByggExcel({ baraBrister = true, varden = true, sprak = 'sv' } =
     for (const kat of m.kategorier) for (const p of kat.parametrar) {
       if (!p.koder || p.medVarde === p.antal) continue;
       const { element, typer } = pkBrister(m, kat.namn, p.namn, md.typer);
-      for (const ty of typer) rader4.push({ varden: { modell: m.namn, kategori: kat.namn, familj: ty.familj, typ: ty.typ, eid: '', ext: '', namn: O.problem.typen, parameter: p.namn, problem: O.problem.typenSaknar, paverkar: ty.antal } });
-      for (const { el } of element) rader4.push({ varden: { modell: m.namn, kategori: kat.namn, familj: el.familj, typ: el.typ, eid: el.elementId ?? '', ext: el.extId || '', namn: el.namn, parameter: p.namn, problem: O.problem.saknarVarde, paverkar: 1 } });
+      for (const ty of typer) rader4.push({ varden: { modell: m.namn, kategori: pkKatText(kat.namn, O.sprak), familj: ty.familj, typ: ty.typ, eid: '', ext: '', namn: O.problem.typen, parameter: p.namn, problem: O.problem.typenSaknar, paverkar: ty.antal } });
+      for (const { el } of element) rader4.push({ varden: { modell: m.namn, kategori: pkKatText(kat.namn, O.sprak), familj: el.familj, typ: el.typ, eid: el.elementId ?? '', ext: el.extId || '', namn: el.namn, parameter: p.namn, problem: O.problem.saknarVarde, paverkar: 1 } });
     }
   }
   tabell(nyttBlad(O.blad.atgarder), [
-    [O.kol.modell, 'modell', 34], [O.kol.kategori, 'kategori', 20], [O.kol.familj, 'familj', 26], [O.kol.typnamn, 'typ', 26], [O.kol.elementId, 'eid', 11],
+    [O.kol.modell, 'modell', 34], [O.kol.kategori, 'kategori', 30], [O.kol.familj, 'familj', 26], [O.kol.typnamn, 'typ', 26], [O.kol.elementId, 'eid', 11],
     [O.kol.externtId, 'ext', 40], [O.kol.namn, 'namn', 30], [O.kol.parameter, 'parameter', 24], [O.kol.problem, 'problem', 18], [O.kol.paverkar, 'paverkar', 15, HELTAL],
   ], rader4);
 
@@ -274,7 +274,7 @@ async function pkByggExcel({ baraBrister = true, varden = true, sprak = 'sv' } =
         const brist = kat.parametrar.some(p => p.koder && p.koder[i] !== PK_INSTANS && p.koder[i] !== PK_TYP);
         if (baraBrister && !brist) return;
         const typ = md.typer[el.typId];
-        const v = { kategori: kat.namn, familj: el.familj, typ: el.typ, namn: el.namn, eid: el.elementId ?? '', ext: el.extId || '' };
+        const v = { kategori: pkKatText(kat.namn, O.sprak), familj: el.familj, typ: el.typ, namn: el.namn, eid: el.elementId ?? '', ext: el.extId || '' };
         const saknas = [];
         krav.forEach((namn, j) => {
           if (!galler.has(namn)) { v[`p${j}`] = '–'; return; }
@@ -293,7 +293,7 @@ async function pkByggExcel({ baraBrister = true, varden = true, sprak = 'sv' } =
       });
     }
     tabell(nyttBlad(`${O.blad.element} – ${korta[mi]}`), [
-      [O.kol.kategori, 'kategori', 20], [O.kol.familj, 'familj', 24], [O.kol.typnamn, 'typ', 24], [O.kol.namn, 'namn', 28], [O.kol.elementId, 'eid', 11], [O.kol.externtId, 'ext', 38],
+      [O.kol.kategori, 'kategori', 30], [O.kol.familj, 'familj', 24], [O.kol.typnamn, 'typ', 24], [O.kol.namn, 'namn', 28], [O.kol.elementId, 'eid', 11], [O.kol.externtId, 'ext', 38],
       ...krav.map((namn, j) => [namn, `p${j}`, Math.min(40, Math.max(12, namn.length + 4))]),
     ], rader);
   });
@@ -302,11 +302,11 @@ async function pkByggExcel({ baraBrister = true, varden = true, sprak = 'sv' } =
   const rader6 = [];
   for (const m of r.modeller) for (const kat of m.kategorier) for (const { el, regel } of kat.undantagnaElement) {
     const u = setup.undantag.find(x => x.id === regel);
-    rader6.push({ varden: { modell: m.namn, kategori: kat.namn, familj: el.familj, typ: el.typ, eid: el.elementId ?? '', namn: el.namn, regel: pkUndantagBeskrivning(u, setup, O), skal: u?.skal || '' } });
+    rader6.push({ varden: { modell: m.namn, kategori: pkKatText(kat.namn, O.sprak), familj: el.familj, typ: el.typ, eid: el.elementId ?? '', namn: el.namn, regel: pkUndantagBeskrivning(u, setup, O), skal: u?.skal || '' } });
   }
   if (setup.undantag.length) {
     tabell(nyttBlad(O.blad.undantag), [
-      [O.kol.modell, 'modell', 34], [O.kol.kategori, 'kategori', 20], [O.kol.familj, 'familj', 26], [O.kol.typnamn, 'typ', 26], [O.kol.elementId, 'eid', 11],
+      [O.kol.modell, 'modell', 34], [O.kol.kategori, 'kategori', 30], [O.kol.familj, 'familj', 26], [O.kol.typnamn, 'typ', 26], [O.kol.elementId, 'eid', 11],
       [O.kol.namn, 'namn', 30], [O.kol.regel, 'regel', 46], [O.kol.skal, 'skal', 30],
     ], rader6);
   }
@@ -325,20 +325,20 @@ async function pkByggExcel({ baraBrister = true, varden = true, sprak = 'sv' } =
           if (text) antal.set(text, (antal.get(text) || 0) + 1);
         }
         const sorterade = [...antal].sort((a, b) => b[1] - a[1]);
-        for (const [text, n] of sorterade.slice(0, PK_VARDEN_MAX)) rader7.push({ varden: { modell: m.namn, kategori: kat.namn, parameter: p.namn, varde: text, antal: n }, stil: wr => { wr.getCell('varde').numFmt = '@'; } });
-        if (sorterade.length > PK_VARDEN_MAX) rader7.push({ varden: { modell: m.namn, kategori: kat.namn, parameter: p.namn, varde: O.fler(sorterade.length - PK_VARDEN_MAX), antal: '' }, stil: wr => { wr.getCell('varde').font = { italic: true }; } });
+        for (const [text, n] of sorterade.slice(0, PK_VARDEN_MAX)) rader7.push({ varden: { modell: m.namn, kategori: pkKatText(kat.namn, O.sprak), parameter: p.namn, varde: text, antal: n }, stil: wr => { wr.getCell('varde').numFmt = '@'; } });
+        if (sorterade.length > PK_VARDEN_MAX) rader7.push({ varden: { modell: m.namn, kategori: pkKatText(kat.namn, O.sprak), parameter: p.namn, varde: O.fler(sorterade.length - PK_VARDEN_MAX), antal: '' }, stil: wr => { wr.getCell('varde').font = { italic: true }; } });
       }
     }
     tabell(nyttBlad(O.blad.varden), [
-      [O.kol.modell, 'modell', 34], [O.kol.kategori, 'kategori', 22], [O.kol.parameter, 'parameter', 26], [O.kol.varde, 'varde', 44], [O.kol.antal, 'antal', 13, HELTAL],
+      [O.kol.modell, 'modell', 34], [O.kol.kategori, 'kategori', 30], [O.kol.parameter, 'parameter', 26], [O.kol.varde, 'varde', 44], [O.kol.antal, 'antal', 13, HELTAL],
     ], rader7);
   }
 
   // 8. Krav
   const rader8 = [
     ...r.krav.map(kr => ({ varden: { parameter: kr.namn, kalla: kr.kallor.map(x => O.kalla[x] || x).join(', '), datatyp: kr.datatyp, grupp: kr.grupp, guid: kr.guid,
-      galler: kr.kategorier ? kr.kategorier.join(', ') : O.allaKategorier, beskrivning: kr.regel ? `${O.kol.regel}: ${kr.regel}` : kr.beskrivning } })),
-    ...setup.kravprofil.regler.map(rg => ({ varden: { parameter: rg.monster, kalla: O.kalla.regel, galler: rg.kategorier ? rg.kategorier.join(', ') : O.allaKategorier,
+      galler: kr.kategorier ? kr.kategorier.map(x => pkKatText(x, O.sprak)).join(', ') : O.allaKategorier, beskrivning: kr.regel ? `${O.kol.regel}: ${kr.regel}` : kr.beskrivning } })),
+    ...setup.kravprofil.regler.map(rg => ({ varden: { parameter: rg.monster, kalla: O.kalla.regel, galler: rg.kategorier ? rg.kategorier.map(x => pkKatText(x, O.sprak)).join(', ') : O.allaKategorier,
       beskrivning: O.regelFangar(r.krav.filter(kr => kr.regel === rg.monster).map(kr => kr.namn)) } })),
   ];
   tabell(nyttBlad(O.blad.krav), [

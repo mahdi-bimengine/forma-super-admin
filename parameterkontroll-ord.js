@@ -76,6 +76,13 @@ const PK_ORD = {
       undantagUtan: (u, m) => `Undantaget "${u}" matchade inga element i ${m}.`,
       stortUndantag: (n, av, kat, m) => `Ett undantag tar bort ${n} av ${av} element i ${kat} i ${m}.`,
       undantagna: (n, m) => `${n} element i ${m} är undantagna.`,
+      uteslutna: (m, lista) => `Räknas inte i ${m}: ${lista}.`,
+      orsak: {
+        rivna: (n, kat) => `${n} rivna element i ${kat}`,
+        designalternativ: (n, kat) => `${n} element i designalternativ i ${kat}`,
+        utanYta: (n, kat) => `${n} rum utan yta (oplacerade eller inte omslutna) i ${kat}`,
+        nastlade: (n, kat) => `${n} inbäddade element (delar av andra familjer) i ${kat}`,
+      },
       regelUtan: r => `Regeln ${r} matchade inga parametrar.`,
       saknasOveralt: k => `Kravet ${k} finns inte i någon av modellerna.`,
       regelAntal: (r, skal, n) => `${r}${skal ? ` (skäl: ${skal})` : ''}: ${n} element undantagna`,
@@ -160,6 +167,13 @@ const PK_ORD = {
       undantagUtan: (u, m) => `Exemption "${u}" matched no elements in ${m}.`,
       stortUndantag: (n, av, kat, m) => `An exemption removes ${n} of ${av} elements in ${kat} in ${m}.`,
       undantagna: (n, m) => `${n} elements in ${m} are exempted.`,
+      uteslutna: (m, lista) => `Not counted in ${m}: ${lista}.`,
+      orsak: {
+        rivna: (n, kat) => `${n} demolished elements in ${kat}`,
+        designalternativ: (n, kat) => `${n} elements in design options in ${kat}`,
+        utanYta: (n, kat) => `${n} rooms without area (unplaced or not enclosed) in ${kat}`,
+        nastlade: (n, kat) => `${n} nested elements (parts of other families) in ${kat}`,
+      },
       regelUtan: r => `Rule ${r} matched no parameters.`,
       saknasOveralt: k => `Requirement ${k} does not exist in any of the models.`,
       regelAntal: (r, skal, n) => `${r}${skal ? ` (reason: ${skal})` : ''}: ${n} elements exempted`,
@@ -200,19 +214,38 @@ function pkTackningText(r, setup, O) {
     if (m.status !== 'klar') { ut.push(O.om.kunde(m.namn, m.fel || '')); continue; }
     const t = m.tackning;
     const glomda = t.ejValda.filter(e => e.kanskeGlomd.length);
-    if (glomda.length) ut.push(O.om.glomda(m.namn, glomda.length, glomda.map(e => O.om.glomdKategori(e.kategori, tal(e.medVarde ?? 0), tal(e.antal))).join(', ')));
+    if (glomda.length) ut.push(O.om.glomda(m.namn, glomda.length, glomda.map(e => O.om.glomdKategori(pkKatText(e.kategori, O.sprak), tal(e.medVarde ?? 0), tal(e.antal))).join(', ')));
     const ovriga = t.ejValda.filter(e => !e.kanskeGlomd.length);
-    if (ovriga.length) ut.push(O.om.ejValda(m.namn, ovriga.length, tal(ovriga.reduce((s, e) => s + e.antal, 0)), ovriga.map(e => e.kategori).join(', ')));
-    for (const kat of t.tommaValda) ut.push(O.om.tomValda(kat, m.namn));
+    if (ovriga.length) ut.push(O.om.ejValda(m.namn, ovriga.length, tal(ovriga.reduce((s, e) => s + e.antal, 0)), ovriga.map(e => pkKatText(e.kategori, O.sprak)).join(', ')));
+    for (const kat of t.tommaValda) ut.push(O.om.tomValda(pkKatText(kat, O.sprak), m.namn));
     for (const k of t.kravUtanKategori) ut.push(O.om.kravUtan(k, m.namn));
     for (const id of t.undantagUtanTraff) ut.push(O.om.undantagUtan(pkUndantagBeskrivning(setup.undantag.find(u => u.id === id), setup, O), m.namn));
-    for (const u of t.storaUndantag) ut.push(O.om.stortUndantag(tal(u.antal), tal(u.av), u.kategori, m.namn));
+    for (const u of t.storaUndantag) ut.push(O.om.stortUndantag(tal(u.antal), tal(u.av), pkKatText(u.kategori, O.sprak), m.namn));
     const undantagna = m.kategorier.reduce((s, k) => s + k.undantagna, 0);
     if (undantagna) ut.push(O.om.undantagna(tal(undantagna), m.namn));
+    const ejRaknade = pkEjRaknadeText(m, O);
+    if (ejRaknade) ut.push(O.om.uteslutna(m.namn, ejRaknade));
   }
   for (const monster of r.tackning.reglerUtanTraff) ut.push(O.om.regelUtan(monster));
   for (const namn of r.tackning.saknasOveralt) ut.push(O.om.saknasOveralt(namn));
   return ut;
+}
+
+// Det som inte räknas i en modells valda kategorier, per orsak: rivna,
+// designalternativ, rum utan yta och inbäddade element. Tom text om inget.
+function pkEjRaknadeText(m, O) {
+  const perOrsak = new Map();
+  const lagg = (orsak, kat, n) => {
+    if (!n) return;
+    const o = perOrsak.get(orsak) || { antal: 0, kat: [] };
+    o.antal += n;
+    o.kat.push(kat);
+    perOrsak.set(orsak, o);
+  };
+  for (const u of m.tackning?.uteslutna || []) lagg(u.orsak, u.kategori, u.antal);
+  for (const k of m.kategorier || []) lagg('nastlade', k.namn, k.nastladeUteslutna);
+  return [...perOrsak].filter(([orsak]) => O.om.orsak[orsak])
+    .map(([orsak, o]) => O.om.orsak[orsak](pkTalText(o.antal, O.sprak), o.kat.map(k => pkKatText(k, O.sprak)).join(', '))).join('; ');
 }
 
 function pkUndantagBeskrivning(u, setup, O) {
@@ -221,7 +254,74 @@ function pkUndantagBeskrivning(u, setup, O) {
     : `${u.parameter} ${O.operator[u.operator] || u.operator}${['tom', 'inteTom'].includes(u.operator) ? '' : ` ${u.varde}`}`;
   const var_ = [
     u.modeller?.length ? u.modeller.map(id => setup.modeller.find(m => m.id === id)?.namn || '?').join(', ') : O.allaModeller,
-    u.kategorier?.length ? u.kategorier.join(', ') : O.allaKategorier,
+    u.kategorier?.length ? u.kategorier.map(k => pkKatText(k, O.sprak)).join(', ') : O.allaKategorier,
   ].join(' · ');
   return O.undantagRegel(vad, var_);
+}
+
+// ── Kategorinamn på svenska ───────────────────────────────────────────────────
+// ACC ger Revits kategorier på engelska, också för modeller gjorda i en svensk
+// miljö. Revit finns inte på svenska, så namnen nedan är Formas egna. De visas
+// med det engelska namnet bredvid, och det engelska namnet är alltid det som
+// sparas och jämförs. Kategorier utan svenskt namn här, och IFC-klasser, visas
+// på engelska. Användaren kan stänga av översättningen i steg 2.
+const PK_KATEGORI_SV = {
+  // Arkitektur och allmänt
+  'Walls': 'Väggar', 'Doors': 'Dörrar', 'Windows': 'Fönster', 'Floors': 'Bjälklag', 'Ceilings': 'Undertak',
+  'Roofs': 'Tak', 'Gutters': 'Hängrännor', 'Curtain Panels': 'Glasfasadpaneler', 'Curtain Wall Mullions': 'Glasfasadprofiler',
+  'Curtain Systems': 'Glasfasadsystem', 'Stairs': 'Trappor', 'Multistory Stairs': 'Trappor över flera plan',
+  'Railings': 'Räcken', 'Top Rails': 'Överliggare', 'Handrails': 'Ledstänger', 'Ramps': 'Ramper', 'Columns': 'Pelare',
+  'Furniture': 'Möbler', 'Furniture Systems': 'Möbelsystem', 'Casework': 'Fast inredning', 'Generic Models': 'Generiska modeller',
+  'Specialty Equipment': 'Specialutrustning', 'Plumbing Fixtures': 'Sanitetsutrustning', 'Plumbing Equipment': 'VS-utrustning',
+  'Food Service Equipment': 'Storköksutrustning', 'Medical Equipment': 'Medicinsk utrustning', 'Signage': 'Skyltar',
+  'Vertical Circulation': 'Hissar och rulltrappor', 'Audio Visual Devices': 'AV-utrustning', 'Fire Protection': 'Brandskydd',
+  'Temporary Structures': 'Tillfälliga konstruktioner', 'Mass': 'Volymer', 'Parts': 'Delar', 'Assemblies': 'Sammanställningar',
+  'Model Groups': 'Modellgrupper', 'Shaft Openings': 'Schaktöppningar', 'Site': 'Tomt', 'Topography': 'Terräng',
+  'Toposolid': 'Terrängvolymer', 'Roads': 'Vägar', 'Hardscape': 'Hårdgjorda ytor', 'Parking': 'Parkering',
+  'Planting': 'Växtlighet', 'Entourage': 'Miljöobjekt',
+  // Projektgemensamt
+  'Project Information': 'Projektinformation', 'Levels': 'Våningsplan', 'Grids': 'Stomlinjer', 'Rooms': 'Rum',
+  'Areas': 'Areor', 'Spaces': 'Utrymmen', 'MEP Spaces': 'Utrymmen', 'HVAC Zones': 'Klimatzoner', 'Phases': 'Faser',
+  'Piping Systems': 'Rörsystem', 'Duct Systems': 'Kanalsystem', 'Electrical Circuits': 'Elkretsar',
+  // Konstruktion
+  'Structural Columns': 'Bärande pelare', 'Structural Framing': 'Balkar och stag', 'Structural Foundations': 'Grundläggning',
+  'Structural Beam Systems': 'Balksystem', 'Structural Trusses': 'Fackverk', 'Structural Connections': 'Knutpunkter',
+  'Structural Rebar': 'Armering', 'Structural Area Reinforcement': 'Ytarmering', 'Structural Fabric Reinforcement': 'Armeringsnät',
+  'Structural Stiffeners': 'Avstyvningar', 'Structural Tendons': 'Spännkablar',
+  // VVS
+  'Ducts': 'Kanaler', 'Duct Fittings': 'Kanaldelar', 'Duct Accessories': 'Kanaltillbehör', 'Duct Insulations': 'Kanalisolering',
+  'Duct Linings': 'Invändig kanalisolering', 'Flex Ducts': 'Flexibla kanaler', 'Air Terminals': 'Luftdon',
+  'Duct Placeholders': 'Kanalplatshållare', 'Pipes': 'Rör', 'Pipe Fittings': 'Rördelar', 'Pipe Accessories': 'Rörtillbehör',
+  'Pipe Insulations': 'Rörisolering', 'Flex Pipes': 'Flexibla rör', 'Pipe Placeholders': 'Rörplatshållare',
+  'Sprinklers': 'Sprinklerhuvuden', 'Mechanical Equipment': 'Mekanisk utrustning', 'Mechanical Control Devices': 'Mekaniska styrdon',
+  'Zone Equipment': 'Zonutrustning', 'MEP Fabrication Ductwork': 'Prefabricerade kanaler', 'MEP Fabrication Pipework': 'Prefabricerade rör',
+  'MEP Fabrication Containment': 'Prefabricerade kabelstegar',
+  // El och tele
+  'Electrical Equipment': 'Elutrustning', 'Electrical Fixtures': 'Eldon', 'Lighting Fixtures': 'Belysningsarmaturer',
+  'Lighting Devices': 'Belysningsdon', 'Cable Trays': 'Kabelstegar', 'Cable Tray Fittings': 'Kabelstegsdelar',
+  'Conduits': 'Elrör', 'Conduit Fittings': 'Elrörsdelar', 'Communication Devices': 'Kommunikationsdon', 'Data Devices': 'Datadon',
+  'Fire Alarm Devices': 'Brandlarmsdon', 'Nurse Call Devices': 'Patientlarmsdon', 'Security Devices': 'Säkerhetsdon',
+  'Telephone Devices': 'Telefondon', 'Wires': 'Ledningar',
+  // Övrigt som syns i listorna
+  'Detail Items': 'Detaljkomponenter', 'Generic Annotations': 'Generiska anteckningar', 'Materials': 'Material',
+  'Views': 'Vyer', 'Sheets': 'Ritningsblad', 'Schedules': 'Förteckningar', 'Lines': 'Linjer', 'RVT Links': 'Länkade Revit-modeller',
+};
+
+function pkSvenskaKategorier() {
+  try { return localStorage.getItem('pk-kategorinamn') !== 'en'; } catch { return true; }
+}
+
+function pkSattSvenskaKategorier(pa) {
+  try { localStorage.setItem('pk-kategorinamn', pa ? 'sv' : 'en'); } catch {}
+}
+
+// Det svenska namnet, eller null när det inte finns eller är avstängt.
+function pkKatSv(kat) {
+  return pkSvenskaKategorier() ? PK_KATEGORI_SV[kat] || null : null;
+}
+
+// Kategorin som text: "Väggar (Walls)" på svenska, annars det engelska namnet.
+function pkKatText(kat, sprak = 'sv') {
+  const sv = sprak === 'sv' ? pkKatSv(kat) : null;
+  return sv ? `${sv} (${kat})` : kat;
 }

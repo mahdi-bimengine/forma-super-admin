@@ -1,16 +1,16 @@
 # Parameterkontroll – rebuild plan
 
-Status: **built and in use; part 0 still has open questions** (section 10). Revision 2, 2026-11-02.
+Status: **built and in use; part 0 settled** (section 10, the last five questions decided by Mahdi 2026-11-02). Revision 2, 2026-11-02.
 The tool has replaced the old Modellkontroll tab.
 
 ### Build status
 
 | Part | State |
 |---|---|
-| 0 Verify | **Mostly answered** (2026-11-02) with Autodesk's public sample models in R&D BIM ENGINE; see the answers in section 10. Still needs the test model for the cases the samples don't contain (unset numbers and Yes/No, non-shared nested families, phases and design options, unplaced rooms, a Swedish Revit file). |
+| 0 Verify | **Settled** (2026-11-02). Answered with Autodesk's public sample models in R&D BIM ENGINE, and the cases the samples don't contain were decided by Mahdi instead of a test model; see section 10. |
 | 1 Engine and calculation | **Done and verified on real data.** `parameterkontroll-berakna.js` (the calculation) has 24 tests with made-up data in `parameterkontroll-test.html`, all passing; it calculates 2 million values in about 0.2 s. `parameterkontroll-data.js` (fetching from ACC) was run in the live app against the sample models. Every number (140 category counts, 35 Revit and 16 IFC category/parameter combinations) equals an independent count from a full download of the same models, and the self-check is clean. One model takes about 10 s. Running several models at once, cancelling and the cache move to part 2, where they are first needed. |
 | 2 Workspace and Modeller | **Done, tested locally** with made-up models (`parameterkontroll-stub.js`): Docs folder tree with whole-folder ticking, Model Coordination sets, preparation in the background, versions, discipline suggestions from file names, undo, draft in the browser. Not yet tested against real ACC data in the tab. |
-| 3 Kategorier, Undantag and saving | **Done, tested locally**: category grid in three groups, project-wide rows (also ticked in models added later), copying between models, "Ny" markers, exemption rules, saving and opening in `parameterkontroll.json`, conflict choice when someone else saved in between. Change from the plan: exemption counts show after a run, because family/type names and values are only fetched then. The "nested components" switch is hidden until the test model shows such objects exist in ACC's data. |
+| 3 Kategorier, Undantag and saving | **Done, tested locally**: category grid in three groups, project-wide rows (also ticked in models added later), copying between models, "Ny" markers, exemption rules, saving and opening in `parameterkontroll.json`, conflict choice when someone else saved in between. Change from the plan: exemption counts show after a run, because family/type names and values are only fetched then. There is no "nested components" switch: nested elements are never counted (Mahdi's decision, 4.1). Category names are shown in Swedish with the English name next to them, with a switch (5.3). |
 | 4 Parametrar | **Done, tested locally**: shared parameter file (upload or ACC, UTF-16), wildcard rules, pasted list, catalogue feedback (found in X of Y models, near-miss names, data type, not found anywhere), which categories each requirement applies to, threshold, "räknas som tomt", requirement sets saved in the project and exported/imported as files. Change: cross-project reuse goes through export/import of a file, not by reading another project. |
 | 5 Resultat | **Done, tested locally**: key figures, per model › category › parameter, element lists with ElementId (type gaps one row per type), per parameter and per discipline views, coverage panel with one-click "add category", out-of-date banner that fetches only what is new, quick add of category/parameter from the results. |
 | 6 Excel | **Done, tested locally**: all sheets in 7.1, export dialog with size estimate, Swedish/English word list (`parameterkontroll-ord.js`, both languages checked to have the same keys), values written as text (`=A1-WA0` stays text), percentages rounded down, saving to ACC as a new version of a fixed file. ExcelJS 4.4.0 is loaded from jsDelivr when first used. |
@@ -108,17 +108,20 @@ This is what makes the tool trustworthy. The definitions are shown in the app an
 
 - **Counted:** a placed object in the model with its own ID, belonging to a category.
 - **Never counted:** the tree "folders" (category, family and type nodes), and the model root.
-- **Nested components inside a family** (non-shared nested families, for example a handle inside a door) are not counted by default, because you cannot fill in their parameters from the project. A switch, "Räkna med inbäddade komponenter", turns them on.
-- **Shared nested families, curtain panels and mullions, stair parts and railings** are real elements in Revit and are counted under their own category.
+- **Nested elements are not counted** (decided by Mahdi 2026-11-02). A nested element is one whose parent in ACC's tree is another element of a loadable-family category, for example a shared nested handle inside a door. Non-shared nested families are not in ACC's data at all.
+- **Parts of system families are counted** under their own category: curtain panels and mullions, doors in curtain walls, stair runs and landings, railing parts. So are elements in model groups, assemblies, beam systems and trusses. Technically: a parent in Walls, Curtain Systems, Stairs, Multistory Stairs, Railings, Ramps, Roofs, Floors, Ceilings, Model Groups, Assemblies, Structural Beam Systems or Structural Trusses does not make the child nested.
 - **Linked models are not part of the host file.** Add the linked file itself if it should be audited.
-- **Phases, demolished elements and design options:** the rule is decided in part 0. Every element ACC includes is counted, and the run log says how many each rule left out.
+- **Demolished elements are not counted** (decided by Mahdi): "Phase Demolished" has a value other than None/Ingen.
+- **Elements in design options are not counted**, primary options included (decided by Mahdi): "Design Option" has a value other than Main Model/Huvudmodell.
+- **Unplaced and not-enclosed rooms are not counted** (decided by Mahdi): Rooms, Spaces and Areas without an area above 0.
+- What is left out, per model and reason, is listed under "Utanför kontrollen" on screen and in Excel ("Räknas inte i …"), only for the chosen categories. These rules apply to Revit; ACC's IFC data has no such concepts.
 - **Elements exempted on purpose** by an exemption rule (4.8) are not counted, but they are always counted and listed separately.
 
 ### 4.2 When a parameter "has a value"
 
 - **Text:** not empty after trimming spaces, including non-breaking spaces. `" "` is empty.
-- **Number, length, area, integer:** has a value when Revit holds a value. **0 is a value**: ACC stores it (confirmed). ACC leaves empty values out entirely, so an unset number has no value. The test model confirms that Revit does not export an unset number as 0.
-- **Yes/No:** "Nej" is a value: ACC stores it as false (confirmed). Unset is empty. The test model confirms that an unset Yes/No is not exported as Nej.
+- **Number, length, area, integer:** has a value when Revit holds a value. **0 is a value**: ACC stores it (confirmed). ACC leaves empty values out entirely, so an unset number has no value.
+- **Yes/No:** "Nej" is a value: ACC stores it as false (confirmed). Unset is empty. Whether Revit exports an unset Yes/No as Nej or leaves it empty was not tested; Mahdi decided either is acceptable, so no special handling.
 - **Instance before type:** if the instance has the parameter, its value is used. Otherwise its type's value is used. The report shows which (Instans/Typ).
 - **Same name in several property groups** (common in IFC property sets): the element has a value if any one of them has one.
 - **Optional "räknas som tomt" list** per requirement set, for example `-`, `?`, `TBD`, `xxx`. Empty by default. This is not value validation, only a way to stop placeholders from counting as filled. The Excel "Värden" sheet shows the most common values either way, so placeholders are easy to spot.
@@ -221,7 +224,7 @@ Some elements should legitimately not be checked: existing buildings, reference 
 - **Project-wide choices**, two ways:
   - ticking a row selects that category in every model that has it. A switch decides whether it also applies to models added later;
   - non-physical categories that apply to the whole project are listed when ACC includes them: for Revit e.g. Project Information, Levels, Rooms/Spaces, MEP systems; for IFC e.g. IfcProject, IfcSite, IfcBuilding, IfcBuildingStorey. Part 0 confirms which ones ACC includes. If Project Information is not in ACC's data, the app says so ("Saknar du en kategori?") instead of silently leaving it out.
-- Revit and IFC models are shown in separate groups, because their category names differ (Walls vs IfcWall). Category names are shown as ACC gives them, without the "Revit " prefix.
+- Revit and IFC models are shown in separate groups, because their category names differ (Walls vs IfcWall). Category names are shown without the "Revit " prefix, in Swedish with the English name next to them ("Väggar Walls"; reports "Väggar (Walls)"), and searchable in both. The switch "Svenska kategorinamn" turns this off per user. The English name is always what is saved, so setups work the same for everyone.
 - **Three groups of categories** (decided after part 0, because Revit also counts internal objects as elements; the sample model has 140 categories, including 3,210 sketch lines and 1,037 reference planes):
   - *Modellkategorier*: categories with 3D geometry. Open by default.
   - *Projektgemensamma*: Project Information, levels, grids, rooms, spaces, areas, zones, systems. Open by default.
@@ -428,10 +431,10 @@ From the results page, "Skapa ärenden" turns the gaps into ACC issues, so the f
 | Parameter scoped so it applies to no chosen category in a model (e.g. only Revit categories, model is IFC) | Coverage warning per model; never a silent pass. |
 | First run all red because every parameter applies to every category | The results page points to the scope grid and the "Föreslå" helper. |
 | Parameter only on the type | Value taken from the type. Report says "Typ". Excel groups the gap per type. |
-| Unset number or Yes/No looks like 0/No | Decided by part 0. If ACC cannot tell them apart, the app states it openly for those data types instead of guessing. |
-| Nested non-shared components | Excluded by default, with a switch. The count of excluded objects is shown. |
+| Unset number or Yes/No looks like 0/No | Accepted as it is (Mahdi): ACC leaves unset values out, and an unset Yes/No exported as Nej would count as filled. |
+| Nested elements | Never counted. The number left out is shown per model and category. |
 | Linked Revit models | Not included in the host. Stated in "Om kontrollen". Add the linked file itself. |
-| Phases, demolished elements, design options | Rule fixed in part 0. The number left out is shown per model. |
+| Demolished elements, design options, unplaced rooms | Not counted. The number left out is shown per model, reason and category. |
 | Project Information or Rooms not in ACC's data | Not listed (only real categories are), with a "Saknar du en kategori?" note explaining why. |
 | Same model added as both RVT and IFC | Warning: it would be counted twice in discipline totals. |
 | Two files with the same name in different folders | Folder shown in lists. Excel sheet names made unique. |
@@ -486,21 +489,23 @@ Some facts can only be confirmed with real ACC data. They must be settled **befo
 2. **Both.** Each element links to a separate type object (`instanceof_objid`), and type values are also copied onto the elements: 173,088 values identical, 1,797 only on the type, 122 different, where an instance parameter has the same name as a type parameter. Element first, then type, is right.
 3. **Tree**: category node → family node → type node → element. The links (`parent`, `instanceof_objid`) use the object's `lmvId`; `compositeId` uses `svf2Id`. Curtain panels and mullions, and shared nested families, are children of their host element but real elements with their own ElementId. No non-shared nested component appeared as an object (the test model confirms).
 4. **Project Information exists** as its own object, with its parameters. Levels (no ElementId in the data, but derivable), Grids, Rooms (54, no 3D geometry), Areas, HVAC Zones, Phases and Design Options are also there.
-5. Every element has "Phase Created", "Phase Demolished" and "Design Option" as parameters, so exemption rules can use them. Whether demolished elements and secondary options are included: test model.
-6. Category and built-in parameter names are English ("Revit Walls", "Comments") **in this English sample**. Each element also has a language-independent category number (`CategoryId`). A Swedish Revit file in the test model settles the language question.
+5. Every element has "Phase Created", "Phase Demolished" and "Design Option" as parameters, so exemption rules can use them. **Decided by Mahdi:** demolished elements and all design options are not counted (4.1).
+6. Category and built-in parameter names are English ("Revit Walls", "Comments") **in this English sample**. Each element also has a language-independent category number (`CategoryId`). **Mahdi:** a Swedish Revit file also gives English categories. Forma shows them in Swedish with the English name next to them (`PK_KATEGORI_SV` in `parameterkontroll-ord.js`, Forma's own names since Revit has no Swedish version), switchable in step 2; the English name is what is saved.
 7. **IFC**: no category field. The class is in `Element/IfcClass`, the GlobalId in `Element/IfcGUID`, and `externalId` is a tree path, not a GUID. The tree's class level ("IfcWall") and type level carry copies of the storey's values, and are skipped by `Item/Type` = Category/Family. Type property sets are copied onto the element as their own groups ("Pset_SlabCommon (IFC Type)"). There is no type link.
 8. **Index**: one call starts or checks the index for several versions at once. Both samples were done within 30 s, and the answer says when to ask again (`retryAt`). Downloads are plain JSON lines on the same host, with the normal login header. **Queries work**: filter plus chosen columns. `$in`, `$eq`, `$and`, `$or` and `$notnull` were used; `s.props.<field>`, `s.propsIgnored.<field>`, `s.lmvId` and `s.geomHash` all work as columns. Each query takes about 3 s, and empty columns are left out of the row.
 9. Counting per category with one small query over all elements works: 25,824 rows, 0.7 MB, 3 s. No server-side counting was needed.
 10. **ElementId is in the data** (`__revit__/ElementId`) for most elements. Working it out from the UniqueId gives the same number (door 678093).
 11. Not checked yet.
-12. Test model.
-13. Not checked yet (part 7).
+12. **Decided by Mahdi:** unplaced rooms are not of interest, so rooms without area are not counted (4.1).
+13. Done in part 7.
 
 **Also found:**
 - ACC moves some values out of the normal list into `propsIgnored`: GUIDs (including IfcGUID), file paths, ElementId, the links, and the occasional ordinary parameter ("Coefficient of Utilization"). The data layer reads values from both places. Without that, a requirement like "IfcGUID" would wrongly show 0 of 142.
 - Some values are lists (a door "Width" stored as `[3, 3]`). They are handled.
 
-**Test model to set up in R&D BIM ENGINE (your action):**
+**Mahdi's decisions on the rest** (2026-11-02), instead of the test model below: (1) an unset Yes/No may come out as Nej or empty, either is fine; (2) nested elements are not counted; (3) demolished elements and design options are not counted; (4) unplaced rooms are not of interest; (5) a Swedish Revit file gives English categories, and Forma may translate them for the user.
+
+**Test model** (no longer needed for the decisions above; still useful as ground truth against Revit schedules):
 
 A small Revit file, for example `PK-TEST-A.rvt`, with a test shared parameter file containing:
 `PK_Text_Instans` (Text, instance), `PK_Text_Typ` (Text, type), `PK_Tal` (Number), `PK_Langd` (Length), `PK_Heltal` (Integer), `PK_JaNej` (Yes/No), bound to Walls, Doors, Rooms, Generic Models and Project Information.

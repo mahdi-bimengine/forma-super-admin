@@ -30,7 +30,7 @@ function pkArendeGrupper(per) {
     const brister = new Map();
     for (const m of lasbara) for (const kat of m.kategorier) for (const p of kat.parametrar) {
       if (p.status === 'ejHamtad' || p.medVarde === p.antal) continue;
-      const nyckel = `${p.namn} i ${kat.namn}`;
+      const nyckel = `${p.namn} i ${pkKatText(kat.namn)}`;
       brister.set(nyckel, (brister.get(nyckel) || 0) + p.antal - p.medVarde);
     }
     return { ...g, kravVarden, ifyllda, saknas: kravVarden - ifyllda, brister: [...brister].sort((a, b) => b[1] - a[1]) };

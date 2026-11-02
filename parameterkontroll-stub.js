@@ -93,7 +93,8 @@
     listModelSetItems:  async () => FILER.map(f => ({ itemUrn: f.id, versionUrn: `${f.id}?version=3`, name: f.namn, isTipVersion: f.id !== 'urn:test:K' })),
     pkIndexera:         async (_, urns) => { await vanta(600); return Object.fromEntries(urns.map(u => [u, { state: 'FINISHED', indexId: u }])); },
     pkLasKatalog:       async index => { await vanta(200); const m = MODELLER[index.indexId.split('?')[0]]; return { sort: m.ifc ? 'ifc' : 'revit', falt: m.falt, perNamn: new Map() }; },
-    pkLasKategorier:    async (_, index) => { await vanta(300); const m = MODELLER[index.indexId.split('?')[0]]; return { kategoriAntal: m.kategoriAntal, raNamn: Object.fromEntries(Object.keys(m.kategoriAntal).map(k => [k, k])) }; },
+    pkLasKategorier:    async (_, index) => { await vanta(300); const m = MODELLER[index.indexId.split('?')[0]]; return { kategoriAntal: m.kategoriAntal, raNamn: Object.fromEntries(Object.keys(m.kategoriAntal).map(k => [k, k])),
+      uteslutna: m.ifc ? [] : [{ kategori: 'Walls', orsak: 'rivna', antal: 3 }, { kategori: 'Walls', orsak: 'designalternativ', antal: 2 }, { kategori: 'Rooms', orsak: 'utanYta', antal: 1 }] }; },
     pkLasVarden:        async (_, index, __, ___, kategorier, parametrar) => {
       await vanta(500);
       const m = MODELLER[index.indexId.split('?')[0]];

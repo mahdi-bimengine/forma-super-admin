@@ -118,6 +118,7 @@ function pkFaltKarta(falt) {
     kategoriId: hitta('__categoryId__', 'CategoryId'),
     namn:       hitta('__name__', 'name'),
     typ:        hitta('__instanceof__', 'instanceof_objid'),
+    forald:     hitta('__parent__', 'parent'),
     elementId:  hitta('__revit__', 'ElementId'),
     familj:     hitta('__category__', '_RFN'),
     typnamn:    hitta('__category__', '_RFT'),
@@ -176,31 +177,99 @@ function pkElementFilter(karta) {
   return null;
 }
 
+// ── Det som inte räknas ───────────────────────────────────────────────────────
+// Bestämt av Mahdi 2026-11-02: inbäddade element räknas inte, och inte heller
+// rivna element, element i designalternativ eller oplacerade rum. Gäller
+// Revit; IFC har inte de begreppen i ACC:s data.
+//
+// Inbäddat är ett element vars förälder i trädet är ett annat element, till
+// exempel beslag i en dörr eller en del i ett fönster. Delar av systemfamiljer
+// är däremot egna element och räknas: fasadpaneler och profiler i en
+// glasfasad, dörrar i en glasfasad, trapplopp och räckesdelar. Detsamma gäller
+// element i grupper, sammanställningar, balksystem och fackverk.
+const PK_SYSTEMVARDAR = new Set(['Walls', 'Curtain Systems', 'Stairs', 'Multistory Stairs', 'Railings', 'Ramps', 'Roofs', 'Floors', 'Ceilings',
+  'Model Groups', 'Assemblies', 'Structural Beam Systems', 'Structural Trusses']);
+
+// Rum utan yta är oplacerade (eller inte omslutna) och räknas inte.
+const PK_RUMSKATEGORIER = new Set(['Rooms', 'Spaces', 'Areas']);
+
+// Kolumnerna som behövs för att sortera bort element. Varje parameter läses
+// ur både props och propsIgnored, och kan finnas i flera egenskapsgrupper.
+function pkUtelamningsKolumner(karta) {
+  if (karta.sort !== 'revit') return {};
+  const kol = { id: 's.lmvId' };
+  if (karta.s.forald) Object.assign(kol, { f1: `s.propsIgnored.${karta.s.forald}`, f2: `s.props.${karta.s.forald}` });
+  const lagg = (prefix, namn) => (karta.perNamn.get(namn) || []).forEach((nyckel, j) => {
+    kol[`${prefix}${j}a`] = `s.props.${nyckel}`;
+    kol[`${prefix}${j}b`] = `s.propsIgnored.${nyckel}`;
+  });
+  lagg('riv', 'Phase Demolished');
+  lagg('opt', 'Design Option');
+  lagg('yta', 'Area');
+  return kol;
+}
+
+function pkKolumnVarden(rad, prefix) {
+  return Object.entries(rad).filter(([k]) => k.startsWith(prefix)).flatMap(([, v]) => Array.isArray(v) ? v : [v])
+    .filter(v => v !== undefined && v !== null && String(v).trim() !== '');
+}
+
+// Sorterar kategoriläsningens rader. bort: id → orsak ('rivna',
+// 'designalternativ', 'utanYta'); nastlade: id:n för inbäddade element.
+// En ren funktion, så att reglerna kan provas med påhittade rader.
+function pkSorteraElement(rader, namnAv) {
+  const katPerId = new Map(rader.filter(r => r.id != null).map(r => [r.id, namnAv(r.k)]));
+  const bort = new Map(), nastlade = new Set();
+  for (const r of rader) {
+    const kat = namnAv(r.k);
+    let orsak = null;
+    if (pkKolumnVarden(r, 'riv').some(v => !/^(none|ingen)$/i.test(String(v).trim()))) orsak = 'rivna';
+    else if (pkKolumnVarden(r, 'opt').some(v => !/^(main model|huvudmodell)$/i.test(String(v).trim()))) orsak = 'designalternativ';
+    else if (PK_RUMSKATEGORIER.has(kat) && !pkKolumnVarden(r, 'yta').some(v => parseFloat(String(v).replace(',', '.')) > 0)) orsak = 'utanYta';
+    if (orsak) { bort.set(r.id, orsak); continue; }
+    const forald = pkLank(r, 'f');
+    if (forald != null && katPerId.has(forald) && !PK_SYSTEMVARDAR.has(katPerId.get(forald))) nastlade.add(r.id);
+  }
+  return { bort, nastlade };
+}
+
 // Antal element per kategori, och hur många av dem som har 3D-geometri. Det
 // senare skiljer modellkategorier från taggar, mått och vyer i kategoristeget.
+// Inbäddade räknas för sig, och det som inte räknas alls redovisas per orsak.
 async function pkLasKategorier(projectId, index, karta, signal) {
   const ef = pkElementFilter(karta);
   if (!ef) throw new Error('Modellen är varken Revit eller IFC enligt ACC:s egenskapsindex.');
 
-  const kolumner = { k: ef.kolumn, g: 's.geomHash' };
+  const kolumner = { k: ef.kolumn, g: 's.geomHash', ...pkUtelamningsKolumner(karta) };
   if (karta.sort === 'ifc') Object.assign(kolumner, pkIfcKolumner(karta));
-  const rader = await pkFraga(projectId, index.indexId, ef.filter, kolumner, signal);
-
-  const antal = {};
-  const raNamn = {};
   const sedda = new Set();
-  for (const r of rader) {
-    if (!ef.behall(r)) continue;
+  const rader = (await pkFraga(projectId, index.indexId, ef.filter, kolumner, signal)).filter(r => {
+    if (!ef.behall(r) || !ef.namn(r.k)) return false;
     const guid = pkLank(r, 'guid');
-    if (guid) { if (sedda.has(guid)) continue; sedda.add(guid); }
+    if (guid) { if (sedda.has(guid)) return false; sedda.add(guid); }
+    return true;
+  });
+  const utelamnade = karta.sort === 'revit' ? pkSorteraElement(rader, ef.namn) : { bort: new Map(), nastlade: new Set() };
+
+  const antal = {}, raNamn = {}, perOrsak = new Map();
+  for (const r of rader) {
     const namn = ef.namn(r.k);
-    if (!namn) continue;
-    antal[namn] ??= { antal: 0, nastlade: 0, geometri: 0 };
-    antal[namn].antal++;
-    if (r.g) antal[namn].geometri++;
     raNamn[namn] = r.k;
+    antal[namn] ??= { antal: 0, nastlade: 0, geometri: 0 };
+    const orsak = utelamnade.bort.get(r.id);
+    if (orsak) {
+      const nyckel = `${namn}|${orsak}`;
+      perOrsak.set(nyckel, (perOrsak.get(nyckel) || 0) + 1);
+      continue;
+    }
+    if (utelamnade.nastlade.has(r.id)) antal[namn].nastlade++;
+    else antal[namn].antal++;
+    if (r.g) antal[namn].geometri++;
   }
-  return { kategoriAntal: antal, raNamn };
+  // En kategori där allt sorterades bort ska inte synas som en kategori med element.
+  for (const [namn, a] of Object.entries(antal)) if (!a.antal && !a.nastlade) delete antal[namn];
+  const uteslutna = [...perOrsak].map(([nyckel, n]) => { const [kategori, orsak] = nyckel.split('|'); return { kategori, orsak, antal: n }; });
+  return { kategoriAntal: antal, raNamn, uteslutna, utelamnade };
 }
 
 // IFC: elementtyp i trädet och GlobalId, som ACC lägger i propsIgnored.
@@ -240,8 +309,9 @@ function pkLank(rad, namn) {
 }
 
 // Elementen i de valda kategorierna med de valda parametrarnas värden, och de
-// typobjekt elementen hänvisar till.
-async function pkLasVarden(projectId, index, karta, raNamn, kategorier, parametrar, signal) {
+// typobjekt elementen hänvisar till. utelamnade kommer från kategoriläsningen:
+// det som inte räknas hoppas över och inbäddade element märks.
+async function pkLasVarden(projectId, index, karta, raNamn, kategorier, parametrar, signal, utelamnade = null) {
   const ef = pkElementFilter(karta);
   const { s } = karta;
   const raVarden = kategorier.map(k => raNamn[k]).filter(Boolean);
@@ -267,7 +337,7 @@ async function pkLasVarden(projectId, index, karta, raNamn, kategorier, parametr
   for (const [i, omgang] of omgangar.entries()) {
     const kolumner = { ...bas, ...Object.fromEntries(omgang.map(p => [p.kolumn, p.falt])) };
     for (const r of await pkFraga(projectId, index.indexId, filter, kolumner, signal)) {
-      if (!ef.behall(r)) continue;
+      if (!ef.behall(r) || utelamnade?.bort.has(r.id)) continue;
       let el = perId.get(r.id);
       if (!el) {
         if (i > 0) continue;   // finns inte i första omgången: hoppades över där
@@ -283,7 +353,7 @@ async function pkLasVarden(projectId, index, karta, raNamn, kategorier, parametr
           namn:      r.namn || '',
           typId:     karta.sort === 'revit' ? pkLank(r, 'typ') : null,
           elementId: eid != null ? Number(eid) : pkElementId(r.ext),
-          nastlad:   false,
+          nastlad:   !!utelamnade?.nastlade.has(r.id),
           varden:    {},
         };
         perId.set(r.id, el);
@@ -310,8 +380,9 @@ async function pkLasVarden(projectId, index, karta, raNamn, kategorier, parametr
 }
 
 // Hur många element i ej valda kategorier som har värde i någon krävd
-// parameter. Ger "Kanske glömd" i täckningen.
-async function pkLasNarvaro(projectId, index, karta, valda, parametrar, signal) {
+// parameter. Ger "Kanske glömd" i täckningen. Det som inte räknas, och
+// inbäddade element, räknas inte här heller.
+async function pkLasNarvaro(projectId, index, karta, valda, parametrar, signal, utelamnade = null) {
   const ef = pkElementFilter(karta);
   const omgangar = pkParameterKolumner(karta, parametrar).filter(o => o.length);
   const valdaSet = new Set(valda);
@@ -322,7 +393,7 @@ async function pkLasNarvaro(projectId, index, karta, valda, parametrar, signal) 
     const kolumner = { id: 's.lmvId', k: ef.kolumn, ...Object.fromEntries(omgang.map(p => [p.kolumn, p.falt])) };
     if (karta.sort === 'ifc') Object.assign(kolumner, { it: `s.props.${karta.s.itemTyp}` });
     for (const r of await pkFraga(projectId, index.indexId, filter, kolumner, signal)) {
-      if (!ef.behall(r)) continue;
+      if (!ef.behall(r) || utelamnade?.bort.has(r.id) || utelamnade?.nastlade.has(r.id)) continue;
       const kat = ef.namn(r.k);
       if (valdaSet.has(kat)) continue;
       const harVarde = new Set(omgang.filter(p => r[p.kolumn] !== undefined && pkNagotVarde(r[p.kolumn], null)).map(p => p.namn));
@@ -360,14 +431,15 @@ async function pkHamtaModell(projectId, modell, kategorier, parametrar, { index,
     ut.falt = karta.falt;
 
     onSteg?.('kategorier');
-    const { kategoriAntal, raNamn } = await pkLasKategorier(projectId, index, karta, signal);
+    const { kategoriAntal, raNamn, uteslutna, utelamnade } = await pkLasKategorier(projectId, index, karta, signal);
     ut.kategoriAntal = kategoriAntal;
+    ut.uteslutna = uteslutna;
 
     if (kategorier.length && parametrar.length) {
       onSteg?.('varden');
-      Object.assign(ut, await pkLasVarden(projectId, index, karta, raNamn, kategorier, parametrar, signal));
+      Object.assign(ut, await pkLasVarden(projectId, index, karta, raNamn, kategorier, parametrar, signal, utelamnade));
       onSteg?.('narvaro');
-      ut.narvaro = await pkLasNarvaro(projectId, index, karta, kategorier, parametrar, signal);
+      ut.narvaro = await pkLasNarvaro(projectId, index, karta, kategorier, parametrar, signal, utelamnade);
     }
     ut.hamtade = parametrar.map(pkNyckel);
     return ut;
