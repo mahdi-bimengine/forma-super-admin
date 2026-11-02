@@ -528,6 +528,7 @@ function renderProjectView(project) {
   _selectedFile   = null;
   _fids           = [];
   mkReset();
+  pkReset();
   grReset();
   vkReset();
   vhReset();
@@ -594,6 +595,7 @@ function renderSidebar(activeTab) {
       ${navItem('issues',          'Issues',          ICONS.clock)}
       ${navItem('granskningar',    'Granskningar',    ICONS.review)}
       ${navItem('modelldata',      'Modellkontroll',  ICONS.cube)}
+      ${navItem('parameterkontroll', 'Parameterkontroll <span class="text-[9px] font-semibold uppercase bg-amber-100 text-amber-700 rounded px-1 py-px ml-auto">beta</span>', ICONS.cube)}
       ${navItem('ritningsgranskning', 'Ritningsgranskning', ICONS.sheet)}
       ${navItem('veckokontroll',   'Veckokontroll',   ICONS.week)}
       ${navItem('vyhantering',     'Vyhantering',     ICONS.views)}
@@ -615,6 +617,7 @@ function showTab(tab) {
   renderSidebar(tab);
   if (tab === 'overview')        renderOverview();
   if (tab === 'modelldata')      renderModelldata();
+  if (tab === 'parameterkontroll') pkOppnaFlik();
   if (tab === 'ritningsgranskning') renderRitningsgranskning();
   if (tab === 'veckokontroll')   vkOppnaFlik();
   if (tab === 'vyhantering')     vhOppnaFlik();
