@@ -300,7 +300,7 @@ function renderVyhantering() {
 }
 
 function vhKropp() {
-  if (_vp.lage === 'publika') return vpLageHtml() + vpKropp();
+  if (_vp.lage !== 'set') return vpLageHtml() + (_vp.lage === 'matris' ? vmKropp() : vpKropp());
   return vpLageHtml() + vhSetKropp();
 }
 

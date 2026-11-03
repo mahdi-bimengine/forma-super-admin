@@ -34,7 +34,7 @@ function vpReset() {
 
 function vpSattLage(lage) {
   _vp.lage = lage;
-  if (lage === 'publika' && !_vp.rader && !_vp.laddar) vpLadda();
+  if (lage !== 'set' && !_vp.rader && !_vp.laddar) vpLadda();
   vhRita();
 }
 
@@ -45,7 +45,7 @@ function vpLageHtml() {
             class="px-3 py-1 text-xs font-medium rounded transition-all ${_vp.lage === l ? 'bg-white text-ads-text shadow-sm' : 'text-ads-muted hover:text-ads-text'}">${text}</button>`;
   return `
     <div class="mb-4 inline-flex items-center bg-ads-gray rounded p-0.5">
-      ${knapp('set', 'Per model set')}${knapp('publika', 'Alla publika vyer')}
+      ${knapp('set', 'Per model set')}${knapp('publika', 'Alla publika vyer')}${knapp('matris', 'Jämför mot Excel')}
     </div>`;
 }
 
@@ -71,7 +71,7 @@ async function vpLadda() {
           listModelSetViews(projektId, s.id),
         ]);
         const modeller = vkGrupperaDokument(detalj?.documentVersions || [])
-          .map(d => ({ itemId: d.itemId, namn: d.namn }))
+          .map(d => ({ itemId: d.itemId, namn: d.namn, viewables: [...new Set(d.vyer || [])] }))
           .sort((a, b) => a.namn.localeCompare(b.namn, 'sv'));
         for (const v of vyer) {
           if (v.isPrivate) continue;
