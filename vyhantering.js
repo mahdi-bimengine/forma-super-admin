@@ -300,7 +300,7 @@ function renderVyhantering() {
 }
 
 function vhKropp() {
-  if (_vp.lage !== 'set') return vpLageHtml() + (_vp.lage === 'matris' ? vmKropp() : vpKropp());
+  if (_vp.lage !== 'set') return vpLageHtml() + ({ matris: vmKropp, jamfor: vjKropp }[_vp.lage] || vpKropp)();
   return vpLageHtml() + vhSetKropp();
 }
 

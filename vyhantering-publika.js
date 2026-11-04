@@ -45,7 +45,7 @@ function vpLageHtml() {
             class="px-3 py-1 text-xs font-medium rounded transition-all ${_vp.lage === l ? 'bg-white text-ads-text shadow-sm' : 'text-ads-muted hover:text-ads-text'}">${text}</button>`;
   return `
     <div class="mb-4 inline-flex items-center bg-ads-gray rounded p-0.5">
-      ${knapp('set', 'Per model set')}${knapp('publika', 'Alla publika vyer')}${knapp('matris', 'Jämför mot Excel')}
+      ${knapp('set', 'Per model set')}${knapp('publika', 'Alla publika vyer')}${knapp('jamfor', 'Jämför vyer')}${knapp('matris', 'Jämför mot Excel')}
     </div>`;
 }
 
