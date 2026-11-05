@@ -221,6 +221,7 @@ function isRitaRader() {
   const diagram = document.getElementById('is-diagram');
   if (diagram) diagram.innerHTML = isDiagramHtml();
   isRitaMarkering();
+  isvRitaRad();
 }
 
 function isSortera(kol) {
@@ -462,10 +463,12 @@ function isRita() {
     <div class="flex flex-col bg-ads-gray" style="height: calc(100vh - 3rem)">
       ${isHuvudHtml()}
       <div class="flex-1 overflow-y-auto">${isKroppHtml()}</div>
+      ${isvPlatsHtml()}
       ${_is.hamtad ? isAndringsradHtml() : ''}
     </div>
     ${isDialogHtml()}`;
   isVisaMarkeraAlla();
+  isvFastsatt();
 }
 
 function isHuvudHtml() {
@@ -486,6 +489,7 @@ function isHuvudHtml() {
         </nav>` : ''}
       <div class="flex-1"></div>
       ${_is.hamtad ? `
+        ${_is.valjProjekt ? '' : isvKnappHtml()}
         ${bhKnapp('isVaxlaProjektval()', `Projekt (${_is.valda.size}) ▾`)}
         ${_is.yta === 'alla' ? '' : bhKnapp('isHamta()', 'Uppdatera', _is.laddar ? 'disabled' : '')}
         ${_is.yta === 'alla' ? bhKnapp('isOppnaDialog(\'vyer\')', 'Redigera vyer') : ''}
@@ -756,7 +760,7 @@ function isRaderHtml() {
   const html = rader.map(a => {
     const ref = isRef(a);
     return `
-      <tr data-id="${vkEsc(a.id)}" class="border-t border-ads-border/60 hover:bg-ads-gray/40 ${_is.markerade.has(a.id) ? 'bg-ads-blue/5' : isVantande(a) ? 'bg-amber-50/60' : ''}">
+      <tr data-id="${vkEsc(a.id)}" ${isvRadAttr(a)} class="border-t border-ads-border/60 hover:bg-ads-gray/40 ${_is.markerade.has(a.id) ? 'bg-ads-blue/5' : isVantande(a) ? 'bg-amber-50/60' : ''}">
         <td class="pl-3 pr-1 py-1.5"><input type="checkbox" ${_is.markerade.has(a.id) ? 'checked' : ''} onchange="isMarkeraRad(${ref}, this.checked)" class="accent-ads-blue" /></td>
         ${kolumner.map(k => isKolumnCellHtml(k, a, ref, klick)).join('')}
       </tr>`;

@@ -322,7 +322,7 @@ function isClashRadHtml(a) {
   const vant = isVantande(a);
   const kanStanga = a.tillatnaStatusar.includes('closed') && isFarAndra(a, 'status');
   return `
-    <tr class="border-t border-ads-border/60 align-top ${vant ? 'bg-amber-50/60' : ''}">
+    <tr ${isvRadAttr(a)} class="border-t border-ads-border/60 align-top ${vant ? 'bg-amber-50/60' : ''}">
       <td class="pl-3 py-2">
         <input type="checkbox" ${_is.clashValda.has(a.id) ? 'checked' : ''} ${kanStanga && !vant ? '' : 'disabled'}
                onchange="isMarkeraClash(${isRef(a.id)}, this.checked)" class="accent-ads-blue"
