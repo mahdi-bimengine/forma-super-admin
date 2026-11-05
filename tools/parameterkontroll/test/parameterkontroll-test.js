@@ -1,7 +1,7 @@
 // parameterkontroll-test.js — prov av beräkningen med påhittade data.
 //
 // Öppna parameterkontroll-test.html i en lokal kopia. Inget hämtas från ACC.
-// Modell A följer testmodellen i PLAN-PARAMETERKONTROLL.md, avsnitt 10, så att
+// Modell A följer testmodellen i docs/PLAN-PARAMETERKONTROLL.md, avsnitt 10, så att
 // samma siffror kan jämföras när den riktiga testmodellen finns i
 // R&D BIM ENGINE. Varje förväntat tal är uträknat för hand i kommentaren.
 

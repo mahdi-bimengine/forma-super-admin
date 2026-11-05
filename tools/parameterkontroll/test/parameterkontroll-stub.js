@@ -3,7 +3,7 @@
 // Laddas bara för hand i en lokal kopia, aldrig i index.html. Byter ut
 // ACC-anropen mot påhittade data och öppnar fliken:
 //
-//   const s = document.createElement('script'); s.src = 'parameterkontroll-stub.js'; document.head.appendChild(s);
+//   const s = document.createElement('script'); s.src = 'tools/parameterkontroll/test/parameterkontroll-stub.js'; document.head.appendChild(s);
 //
 // Inget hämtas från ACC och inget sparas där.
 

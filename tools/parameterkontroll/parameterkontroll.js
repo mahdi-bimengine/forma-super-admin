@@ -1,5 +1,5 @@
 // parameterkontroll.js — fliken Parameterkontroll: arbetsytan och modellsteget
-// (del 2). Planen står i PLAN-PARAMETERKONTROLL.md.
+// (del 2). Planen står i docs/PLAN-PARAMETERKONTROLL.md.
 //
 // Fliken är en arbetsyta, inte en guide. De fyra stegen går alltid att nå från
 // vänsterspalten och inget nollställs när man byter steg. Tre saker hålls isär:

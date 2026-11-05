@@ -2,7 +2,7 @@
 //
 // Allt läses ur ACC:s egenskapsindex (Model Properties API). Indexet byggs en
 // gång per filversion och ändras sedan inte. Prövat mot Autodesks
-// exempelmodeller i R&D BIM ENGINE 2026-11-02, se PLAN-PARAMETERKONTROLL.md
+// exempelmodeller i R&D BIM ENGINE 2026-11-02, se docs/PLAN-PARAMETERKONTROLL.md
 // avsnitt 10:
 //
 //   - Tomma värden finns inte alls i indexet, varken som "" eller null. En

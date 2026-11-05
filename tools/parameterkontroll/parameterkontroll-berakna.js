@@ -3,7 +3,7 @@
 // Allt här är rena funktioner: modelldata och val in, resultat ut. Inget hämtas
 // och inget ritas. Skärmen, Excel, PDF och historiken räknar från samma
 // resultat, så siffrorna kan inte skilja sig mellan dem. Definitionerna står i
-// PLAN-PARAMETERKONTROLL.md, avsnitt 4.
+// docs/PLAN-PARAMETERKONTROLL.md, avsnitt 4.
 //
 // Modelldata kommer från datadelen och ser ut så här per modell:
 //
