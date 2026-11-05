@@ -37,6 +37,8 @@ const _isv = {
   fel:       false,
   arenden:   new Map(),   // ärende-id → linkedDocument eller null (inte placerat)
   placeringar: new Map(), // projekt-id → löfte: alla ärendens placering är lästa (isvLasPlaceringar)
+  detaljer:  new Map(),   // ärende-id → { laddar, beskrivning, bild, kommentarer, fel }, se isvLasDetaljer
+  hopfallt:  null,        // ärende-id vars detaljrad användaren har stängt
   onskat:    null,        // senast klickade ärende, väntar på att laddas
   arbetar:   false,
   // Val som sparas per webbläsare.
@@ -243,6 +245,128 @@ function isvRitaRadlagen() {
     text.textContent = ISV_RADLAGE[lage];
     cell.appendChild(text);
   });
+  isvRitaDetaljrad();
+}
+
+// ── Det valda ärendet öppnas ──────────────────────────────────────────────────
+// Under den valda raden visas ärendets bild (snapshot), beskrivningen och alla
+// kommentarer. Det läses en gång per ärende: ärendet självt, kommentarerna
+// (sidor om 100) och bilden via en signerad nedladdningsadress.
+
+function isvRitaDetaljrad() {
+  document.querySelectorAll('tr.isv-detalj').forEach(tr => tr.remove());
+  const a = _isv.aktiv;
+  if (!a || _isv.hopfallt === a.id) return;
+  const rad = [...document.querySelectorAll('tr[data-isv]')].find(tr => tr.dataset.isv === a.id);
+  if (!rad) return;
+  const d = _isv.detaljer.get(a.id);
+  if (!d) isvLasDetaljer(a);
+
+  const tr = document.createElement('tr');
+  tr.className = 'isv-detalj';
+  tr.innerHTML = `<td colspan="${rad.cells.length}" class="p-0">${isvDetaljHtml(a, d)}</td>`;
+  rad.after(tr);
+}
+
+function isvDetaljHtml(a, d) {
+  const ram = inne => `
+    <div class="mx-2 mb-2 mt-0.5 p-3 bg-white border border-ads-blue/40 rounded flex gap-4 items-start text-xs"
+         style="box-shadow: inset 3px 0 0 #0696D7">${inne}
+      <button onclick="isvFallIhop()" class="ml-auto text-ads-muted hover:text-ads-text" title="Stäng">✕</button>
+    </div>`;
+  if (!d || d.laddar) return ram('<span class="text-ads-muted">Läser ärendet…</span>');
+  if (d.fel) return ram(`<span class="text-red-700">${vkEsc(d.fel)}</span>`);
+
+  const bild = d.bild
+    ? `<img src="${d.bild}" alt="Ärendets bild" onclick="isvVisaBild('${a.id}')"
+            class="w-56 max-h-40 object-contain border border-ads-border rounded cursor-zoom-in bg-ads-gray shrink-0" title="Klicka för större bild" />`
+    : d.bildLaddar ? '<div class="w-56 h-32 shrink-0 flex items-center justify-center text-ads-muted border border-ads-border rounded">Läser bilden…</div>'
+    : '<div class="w-56 h-32 shrink-0 flex items-center justify-center text-ads-muted border border-dashed border-ads-border rounded">Ingen bild</div>';
+
+  const kommentarer = d.kommentarer.length ? d.kommentarer.map(k => `
+      <div class="py-1.5 border-t border-ads-border/60 first:border-t-0">
+        <div class="text-[11px] text-ads-muted"><span class="font-medium text-ads-text">${vkEsc(k.av)}</span> · ${vkEsc(k.tid)}</div>
+        <div class="whitespace-pre-wrap break-words">${vkEsc(k.text)}</div>
+      </div>`).join('')
+    : '<div class="text-ads-muted italic">Inga kommentarer.</div>';
+
+  return ram(`
+    ${bild}
+    <div class="min-w-0 flex-1 basis-0">
+      <div class="text-[11px] font-semibold uppercase tracking-wider text-ads-muted mb-1">Beskrivning</div>
+      <div class="whitespace-pre-wrap break-words max-h-32 overflow-y-auto">${d.beskrivning ? vkEsc(d.beskrivning) : '<span class="text-ads-muted italic">Ingen beskrivning.</span>'}</div>
+    </div>
+    <div class="min-w-0 flex-1 basis-0">
+      <div class="text-[11px] font-semibold uppercase tracking-wider text-ads-muted mb-1">Kommentarer (${d.kommentarer.length})</div>
+      <div class="max-h-40 overflow-y-auto pr-1">${kommentarer}</div>
+    </div>`);
+}
+
+async function isvLasDetaljer(a) {
+  const d = { laddar: true, beskrivning: '', bild: null, bildLaddar: false, kommentarer: [], fel: null };
+  _isv.detaljer.set(a.id, d);
+  try {
+    const bas = `/construction/issues/v1/projects/${a.accId}/issues/${a.id}`;
+    const [ra, kommentarer] = await Promise.all([
+      bhMedOmforsok(() => apsGet(bas)),
+      isvLasKommentarer(bas),
+    ]);
+    const reg = _is.projekt.get(a.projektId)?.namnRegister;
+    d.beskrivning = ra.description || '';
+    d.kommentarer = kommentarer.map(k => ({
+      av:   reg?.get(k.createdBy)?.namn || k.createdBy || '',
+      tid:  (k.createdAt || '').slice(0, 16).replace('T', ' '),
+      text: k.body || '',
+    }));
+    d.laddar = false;
+    if (ra.snapshotUrn) {
+      d.bildLaddar = true;
+      isvLasBild(ra.snapshotUrn).then(url => { d.bild = url; }, () => {}).finally(() => { d.bildLaddar = false; isvRitaDetaljrad(); });
+    }
+  } catch (err) {
+    d.laddar = false;
+    d.fel = `Kunde inte läsa ärendet: ${String(err.message || err).slice(0, 160)}`;
+  }
+  isvRitaDetaljrad();
+}
+
+// Alla kommentarer, äldst först.
+async function isvLasKommentarer(bas) {
+  const ut = [];
+  for (let offset = 0; ; offset += 100) {
+    const res = await bhMedOmforsok(() => apsGet(`${bas}/comments?sortBy=createdAt&limit=100&offset=${offset}`));
+    ut.push(...(res.results || []));
+    if (offset + 100 >= (res.pagination?.totalResults ?? 0) || !(res.results || []).length) return ut;
+  }
+}
+
+// Bilden ligger i Autodesks lagring (OSS). En signerad adress ger filen utan inloggning.
+async function isvLasBild(snapshotUrn) {
+  const m = String(snapshotUrn).match(/os\.object:([^/]+)\/(.+)$/);
+  if (!m) throw new Error('Okänd bildadress');
+  const sig = await bhMedOmforsok(() => apsGet(`/oss/v2/buckets/${m[1]}/objects/${encodeURIComponent(m[2])}/signeds3download`));
+  const svar = await fetch(sig.url);
+  if (!svar.ok) throw new Error(`Bilden svarade ${svar.status}`);
+  return URL.createObjectURL(await svar.blob());
+}
+
+function isvFallIhop() {
+  _isv.hopfallt = _isv.aktiv?.id || null;
+  isvRitaDetaljrad();
+}
+
+// Bilden i full storlek ovanpå sidan. Klick eller Esc stänger.
+function isvVisaBild(id) {
+  const url = _isv.detaljer.get(id)?.bild;
+  if (!url) return;
+  const ruta = document.createElement('div');
+  ruta.className = 'fixed inset-0 z-[100] bg-black/80 flex items-center justify-center cursor-zoom-out p-6';
+  ruta.innerHTML = `<img src="${url}" alt="Ärendets bild" class="max-w-full max-h-full object-contain shadow-2xl" />`;
+  const stang = () => { ruta.remove(); document.removeEventListener('keydown', esc, true); };
+  const esc = e => { if (e.key === 'Escape') { e.stopPropagation(); stang(); } };
+  ruta.addEventListener('click', stang);
+  document.addEventListener('keydown', esc, true);
+  document.body.appendChild(ruta);
 }
 
 // Föregående/Nästa och piltangenterna: bara ärenden som syns i vyn.
@@ -348,6 +472,8 @@ function isvRadKlick(e, ref) {
 
 function isvVisa(a) {
   if (!a) return;
+  // Ett nytt ärende öppnas alltid; klick på det valda öppnar det igen om det stängts.
+  _isv.hopfallt = null;
   _isv.aktiv  = { id: a.id, nr: a.nr, rubrik: a.rubrik, projekt: a.projekt, accId: a.accId, projektId: a.projektId };
   _isv.onskat = _isv.aktiv;
   _isv.lank   = _isv.arenden.has(a.id) ? _isv.arenden.get(a.id) : null;

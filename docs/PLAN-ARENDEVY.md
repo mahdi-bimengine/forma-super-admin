@@ -52,10 +52,14 @@ selected issue's spot. Only issues placed in Model Coordination are in scope (Ma
    "Bara ärendets modell" greys only unplaced issues. Föregående/Nästa and the up/down arrow keys step
    through the visible rows in table order (not while typing in a field or with a dialog open). Tested on
    R&D: View 1 → #17/#18 visible, 15 unplaced; Samlingsfil → #17/#18 "Syns inte i vald vy".
-3. **C: the selected issue opens up** (not started). Under the row: the snapshot (`snapshotUrn` →
-   `/oss/v2/buckets/{bucket}/objects/{obj}/signeds3download`, tested, a JPG), the description and every
-   comment, scrollable.
-- R&D test data made 2026-11-05: locations "Test - Block A" and "Test - Block B" under Projekt. Not used any more.
+3. **C: the selected issue opens up** (built 2026-11-05). `isvRitaDetaljrad` (run after every row redraw)
+   puts a detail row under the selected row: the snapshot (`snapshotUrn` → `/oss/v2/buckets/{bucket}/objects/
+   {obj}/signeds3download` → blob URL; click for full size, Esc or click closes), the description and every
+   comment oldest first with name (project name register) and time, in boxes that scroll. Read once per issue
+   (`_isv.detaljer`). ✕ closes it; clicking the issue again reopens it. Works for greyed issues too. Tested on
+   R&D #17 (picture only), #18 (test description + 3 test comments) and #3 (no pin, no picture).
+- R&D test data made 2026-11-05: locations "Test - Block A" and "Test - Block B" under Projekt (not used any
+  more); on issue #18 a description and three comments starting with "TEST".
 
 ## What a Model Coordination issue carries (Issues API v1, tested)
 Issues placed in MC have one `linkedDocuments` entry, `type: "TwoDVectorPushpin"` (also for 3D):
