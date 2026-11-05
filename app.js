@@ -126,6 +126,9 @@ async function login() {
   );
 
   localStorage.setItem('pkce_verifier', verifier);
+  // Autodesk skickar alltid tillbaka till startadressen. Kom ihåg projekt och
+  // flik så att de öppnas igen efter inloggningen.
+  if (location.hash) sessionStorage.setItem('aps_atervand', location.hash);
 
   window.location.href = `${APS_AUTH_URL}?` + new URLSearchParams({
     response_type:         'code',
@@ -180,6 +183,12 @@ async function captureTokenFromUrl() {
 async function boot() {
   const hasCode = new URLSearchParams(window.location.search).has('code');
 
+  // Var användaren var: adressen vid omladdning, eller det som sparades innan
+  // inloggningen (Autodesk skickar tillbaka utan adressens #-del).
+  const atervand = sessionStorage.getItem('aps_atervand');
+  sessionStorage.removeItem('aps_atervand');
+  const adress = location.hash || atervand || '';
+
   let token;
   try {
     token = await captureTokenFromUrl();
@@ -190,7 +199,18 @@ async function boot() {
 
   if (!hasCode) token = token || getStoredToken();
 
+  // En sparad token som har gått ut (eller snart gör det) förnyas innan något
+  // hämtas. Går det inte visas inloggningssidan; adressen finns kvar.
+  if (token && !hasCode) {
+    const utgar = Number(sessionStorage.getItem('aps_expires_at'));
+    if (utgar && utgar - Date.now() < 60_000) {
+      token = await fornyaToken();
+      if (!token) sessionStorage.removeItem('aps_token');
+    }
+  }
+
   if (!token) {
+    if (adress && !location.hash) history.replaceState(null, '', adress);
     document.getElementById('login-page').classList.remove('hidden');
     return;
   }
@@ -200,7 +220,7 @@ async function boot() {
   schemalaggFornyelse();
 
   const profile = decodeIdToken(sessionStorage.getItem('aps_id_token'));
-  showApp(profile);
+  showApp(profile, adress);
 }
 
 function showAccessDenied(message) {
@@ -219,7 +239,7 @@ function showAccessDenied(message) {
 
 let _profile = {};
 
-function showApp(profile) {
+function showApp(profile, adress = '') {
   _profile = profile;
   document.getElementById('login-page').classList.add('hidden');
   document.getElementById('app-header').classList.remove('hidden');
@@ -228,16 +248,21 @@ function showApp(profile) {
   const email = profile?.email || '';
   document.getElementById('user-label').textContent = email;
 
-  showProjectPicker();
+  oppnaAdress(adress, 'ersatt');
 }
 
 // ── Project picker ─────────────────────────────────────────────────────────────
 
-async function showProjectPicker() {
+async function showProjectPicker(meddelande = null, historik = 'push') {
   document.getElementById('sidebar').classList.add('hidden');
+  skrivAdress(kontoAdress(), historik);
 
   document.getElementById('main-content').innerHTML = `
     <div class="max-w-5xl mx-auto px-6 py-8">
+
+      ${meddelande ? `
+      <div class="mb-6 rounded border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
+        ${escapeHtmlApp(meddelande)}</div>` : ''}
 
       <div class="flex items-center gap-3.5 mb-7">
         <span class="text-ads-muted text-sm">Konto</span>
@@ -304,7 +329,15 @@ async function loadPickerData(hubIdx) {
       return;
     }
 
+    if (_onskatHubId) {
+      const idx = _hubs.findIndex(h => h.id === _onskatHubId);
+      if (idx >= 0) _hubIdx = idx;
+      _onskatHubId = null;
+    }
+    if (!_hubs[_hubIdx]) _hubIdx = 0;
     const hub = _hubs[_hubIdx];
+    // Bara om projektväljaren fortfarande visas (man kan ha gått vidare).
+    if (document.getElementById('project-grid') === gridEl) skrivAdress(kontoAdress(), 'ersatt');
 
     const nameEl = document.getElementById('account-name');
     if (nameEl) nameEl.textContent = hub.attributes.name;
@@ -344,6 +377,10 @@ function renderSkeletons(container) {
           </div>
         </div>`).join('')}
     </div>`;
+}
+
+function escapeHtmlApp(text) {
+  return String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
 function centeredMsg(text) {
@@ -503,7 +540,9 @@ function selectProject(projectId) {
   renderProjectView(project);
 }
 
-function renderProjectView(project) {
+// historik: 'push' (nytt steg för bakåtknappen), 'ersatt' (byt nuvarande
+// adress) eller 'ingen' (adressen stämmer redan, t.ex. efter bakåtknappen).
+function renderProjectView(project, flik = 'overview', historik = 'push') {
   _currentProject = project;
   pkReset();
   grReset();
@@ -511,9 +550,110 @@ function renderProjectView(project) {
   vhReset();
   bhReset();
   gkReset();
-  renderSidebar('overview');
-  renderOverview();
+  visaFlik(flik, historik);
 }
+
+// ── Adressen ───────────────────────────────────────────────────────────────────
+// Valt konto, projekt och flik står i adressen efter #, till exempel
+// #/b.konto/b.projekt/issues. En omladdning öppnar då samma ställe, och
+// webbläsarens bakåtknapp går mellan flikar och projekt. Projektväljaren har
+// bara kontot: #/b.konto. Inget sparas permanent, så en ny flik börjar i
+// projektväljaren.
+
+const FLIKAR = ['overview', 'data-management', 'issues', 'granskningar', 'parameterkontroll',
+                'ritningsgranskning', 'veckokontroll', 'vyhantering', 'behorigheter', 'assets'];
+
+let _onskatHubId = null;  // kontot projektväljaren ska visa, från adressen
+
+function lasAdress(hash) {
+  const m = /^#\/([^/]+)(?:\/([^/]+)(?:\/([^/]+))?)?$/.exec(hash || '');
+  if (!m) return null;
+  return {
+    hubId:     decodeURIComponent(m[1]),
+    projektId: m[2] ? decodeURIComponent(m[2]) : null,
+    flik:      FLIKAR.includes(m[3]) ? m[3] : 'overview',
+  };
+}
+
+function skrivAdress(adress, historik) {
+  if (historik === 'ingen') return;
+  if ((location.hash || '') === (adress || '')) return;
+  history[historik === 'ersatt' ? 'replaceState' : 'pushState'](null, '', adress || location.pathname);
+}
+
+function kontoAdress() {
+  const hub = _hubs[_hubIdx];
+  return hub ? `#/${encodeURIComponent(hub.id)}` : '';
+}
+
+function projektAdress(flik) {
+  if (!_hubs[_hubIdx] || !_currentProject?.id) return null;
+  return `${kontoAdress()}/${encodeURIComponent(_currentProject.id)}/${flik}`;
+}
+
+// Öppnar det adressen pekar på: ett projekt och en flik, projektväljaren för
+// ett konto, eller projektväljaren som vanligt.
+async function oppnaAdress(hash, historik) {
+  const a = lasAdress(hash);
+  if (!a?.projektId) {
+    _onskatHubId = a?.hubId || null;
+    return showProjectPicker(null, historik);
+  }
+  // Samma projekt: byt bara flik, så att det som är inläst finns kvar.
+  if (_currentProject?.id === a.projektId && _hubs[_hubIdx]?.id === a.hubId) {
+    return visaFlik(a.flik, historik);
+  }
+
+  document.getElementById('sidebar').classList.add('hidden');
+  document.getElementById('main-content').innerHTML = centeredMsg('Öppnar projektet…');
+  try {
+    if (!_hubs.length) _hubs = await listHubs();
+    const idx = _hubs.findIndex(h => h.id === a.hubId);
+    if (idx < 0) {
+      return showProjectPicker('Kontot i adressen finns inte bland dina konton. Välj ett projekt.', 'ersatt');
+    }
+    _hubIdx = idx;
+    const hub = _hubs[idx];
+    if (!_projCache[hub.id]) _projCache[hub.id] = await listProjects(hub.id);
+    const projekt = _projCache[hub.id].find(p => p.id === a.projektId);
+    if (!projekt) {
+      return showProjectPicker('Projektet i adressen finns inte, eller så har du inte tillgång till det. Välj ett projekt.', 'ersatt');
+    }
+    renderProjectView(projekt, a.flik, historik);
+  } catch (err) {
+    showProjectPicker(`Det gick inte att öppna projektet i adressen (${err.message}). Välj ett projekt.`, 'ersatt');
+  }
+}
+
+window.addEventListener('popstate', () => {
+  // Bara när appen visas, inte på inloggningssidan.
+  if (document.getElementById('app-header').classList.contains('hidden')) return;
+  oppnaAdress(location.hash, 'ingen');
+});
+
+// ── Osparat arbete ─────────────────────────────────────────────────────────────
+// Webbläsaren frågar "Vill du lämna sidan?" innan omladdning eller stängning om
+// något inte är sparat eller håller på att skrivas till ACC.
+
+function osparatArbete() {
+  if (typeof _is !== 'undefined') {
+    if (_is.kor && !_is.kor.klar) return 'Ärenden sparas just nu.';
+    if (_is.andringar?.length)    return `${_is.andringar.length} ändringar i Issues är inte sparade.`;
+  }
+  const vyer = [
+    typeof _vh !== 'undefined' ? _vh : null,
+    typeof _vm !== 'undefined' ? _vm : null,
+    typeof _vj !== 'undefined' ? _vj : null,
+  ];
+  if (vyer.some(t => t?.kor && !t.kor.klar)) return 'Vyer uppdateras just nu.';
+  return null;
+}
+
+window.addEventListener('beforeunload', e => {
+  if (!osparatArbete()) return;
+  e.preventDefault();
+  e.returnValue = '';
+});
 
 function renderSidebar(activeTab) {
   const sidebar  = document.getElementById('sidebar');
@@ -590,6 +730,13 @@ function renderSidebar(activeTab) {
 }
 
 function showTab(tab) {
+  visaFlik(tab, 'push');
+}
+
+function visaFlik(tab, historik) {
+  if (!FLIKAR.includes(tab)) tab = 'overview';
+  const adress = projektAdress(tab);
+  if (adress) skrivAdress(adress, historik);
   renderSidebar(tab);
   if (tab === 'overview')        renderOverview();
   if (tab === 'parameterkontroll') pkOppnaFlik();
