@@ -17,6 +17,23 @@ selected issue's spot. Only issues placed in Model Coordination are in scope (Ma
   elements in ACC. The dashboard cards hide while Modellvy is on; the split can be dragged (20–85 %, saved).
   Tested on R&D #17: in that clash only one of the two models had elements within 0.3 m of the pin, so the
   other model is shown unfaded.
+  Parts 2 and 3 were published 2026-11-05.
+- Fix 2026-11-05 (which models load): loading every model in the issue's `viewerState.objectSet` loaded a
+  whole model set in a real project (5 GB and climbing). Now, per Mahdi's rule:
+  - The issue's ACC location (`a.platsVag`) is matched against the view names of the model set that holds
+    the pinned model, deepest location level first, ignoring case, punctuation and "block"/"blk". An exact
+    name is chosen; a single "contains" match is preselected but marked as a guess (amber dropdown); several
+    or none means no view.
+  - With no view, only the pinned model loads. The "Vy" dropdown is always shown and overrides the match;
+    the choice is saved per project, model set and block in localStorage (`isv-vy:…`).
+  - Models are loaded in the model set's latest version (`getModelSetVersion` → `documentVersions`:
+    `versionUrn` + `viewableGuid`, matched to the view's `lineageUrn` + `viewableName`). The element is
+    found again by Revit's `externalId`, since its internal id changes between versions (R&D #17: 5525 → 5208).
+  - Views with more than 8 models ask before loading. Models not in the new list are unloaded first.
+  - The camera always zooms to the issue's spot; "Hela modellen" is gone.
+  Tested on R&D #17/#18 with the private "View 1" picked by hand: 1 model without a view, 2 with it, no
+  reload between #17 and #18 (about 0.05 s). Location matching is tested only with made-up names: R&D
+  has no issue locations or block-named views yet.
 - Part 4 (prefetch next model, optional extra models): not started.
 
 ## What a Model Coordination issue carries (Issues API v1, tested)
