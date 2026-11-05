@@ -44,9 +44,14 @@ selected issue's spot. Only issues placed in Model Coordination are in scope (Ma
    project's saved view. "Bara ärendets modell" loads the clicked issue's model and swaps it only when the
    next issue sits in another model. The whole-view zoom must be immediate (`fitToView(.., .., true)`):
    an animated one finished after the next issue's camera and left the camera far out.
-2. **B: the list follows the view** (not started). Read every issue's pinned model with one list call per
-   project (`fields=linkedDocuments`, about 0.5 kB per issue, tested), grey rows whose model isn't in the
-   view ("Syns inte i vald vy") or that have no pin, and add Föregående/Nästa plus arrow keys.
+2. **B: the list follows the view** (built 2026-11-05). When the panel opens, every issue's pin is read
+   with one paged list call per project (`fields=displayId,linkedDocuments`, same statuses as the tab) into
+   `_isv.arenden`, so clicks no longer fetch the issue. `isvRitaRadlagen` (run from `isvRitaRad`, which
+   `isRitaRader` also calls) fades rows to 45 % and adds a line under the title: "Syns inte i vald vy" when
+   the pin's lineage isn't in `_isv.vy.lineages`, "Inte placerat i någon modell" when there is no pin.
+   "Bara ärendets modell" greys only unplaced issues. Föregående/Nästa and the up/down arrow keys step
+   through the visible rows in table order (not while typing in a field or with a dialog open). Tested on
+   R&D: View 1 → #17/#18 visible, 15 unplaced; Samlingsfil → #17/#18 "Syns inte i vald vy".
 3. **C: the selected issue opens up** (not started). Under the row: the snapshot (`snapshotUrn` →
    `/oss/v2/buckets/{bucket}/objects/{obj}/signeds3download`, tested, a JPG), the description and every
    comment, scrollable.

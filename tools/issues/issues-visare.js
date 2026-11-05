@@ -36,6 +36,7 @@ const _isv = {
   status:    '',
   fel:       false,
   arenden:   new Map(),   // ärende-id → linkedDocument eller null (inte placerat)
+  placeringar: new Map(), // projekt-id → löfte: alla ärendens placering är lästa (isvLasPlaceringar)
   onskat:    null,        // senast klickade ärende, väntar på att laddas
   arbetar:   false,
   // Val som sparas per webbläsare.
@@ -115,6 +116,7 @@ function isvFastsatt() {
   if (!plats) return;
   if (!_isv.ruta) _isv.ruta = isvSkapaRuta();
   plats.appendChild(_isv.ruta);
+  isvLasPlaceringar();
   isvRitaRad();
   _isv.viewer?.resize();
 }
@@ -140,6 +142,10 @@ function isvRitaRad() {
   rad.innerHTML = `
     ${isvVyValHtml()}
     <span class="text-ads-border">|</span>
+    <span class="flex items-center whitespace-nowrap" title="Gå till föregående eller nästa ärende som syns i vyn (också med pil upp och ner)">
+      <button onclick="isvSteg(-1)" class="px-1.5 py-0.5 border border-ads-border rounded-l hover:border-ads-blue">‹ Föregående</button>
+      <button onclick="isvSteg(1)" class="px-1.5 py-0.5 border border-l-0 border-ads-border rounded-r hover:border-ads-blue">Nästa ›</button>
+    </span>
     <span class="font-semibold text-ads-text">${a ? `#${a.nr}` : ''}</span>
     <span class="text-ads-muted truncate">${a ? vkEsc(a.rubrik) : 'Klicka på ett ärende i listan.'}</span>
     <span class="${_isv.fel ? 'text-red-700' : 'text-ads-muted'} whitespace-nowrap">${vkEsc(_isv.status)}</span>
@@ -170,13 +176,93 @@ function isvRitaRad() {
       </div>`
       : `<p class="text-sm text-ads-muted text-center max-w-md px-6">${vkEsc(text)}</p>`;
   }
-  // Markera raden för det aktiva ärendet.
+  isvRitaRadlagen();
+}
+
+// ── Listan följer vyn ─────────────────────────────────────────────────────────
+// Varje ärendes placering läses med ett listanrop per projekt (bara fältet
+// linkedDocuments, ungefär 0,5 kB per ärende). Rader vars modell inte finns i
+// vyn, eller som inte är placerade alls, tonas ner och får en förklaring.
+
+const ISV_RADLAGE = {
+  utanfor:    'Syns inte i vald vy',
+  ejPlacerad: 'Inte placerat i någon modell',
+};
+
+// Läser placeringen för alla ärenden i de hämtade projekten, en gång per projekt.
+function isvLasPlaceringar() {
+  for (const p of _is.projekt.values()) {
+    if (_isv.placeringar.has(p.id)) continue;
+    const lofte = (async () => {
+      const statusar = IS_EJ_STANGDA + (p.medStangda || _is.visaStangda ? ',closed' : '');
+      for (let offset = 0; ; offset += 100) {
+        const res = await bhMedOmforsok(() => apsGet(
+          `/construction/issues/v1/projects/${p.accId}/issues?limit=100&offset=${offset}&fields=displayId,linkedDocuments&filter[status]=${statusar}`));
+        for (const r of res.results || []) {
+          _isv.arenden.set(r.id, (r.linkedDocuments || []).find(d => d.details?.viewerState?.objectSet?.length) || null);
+        }
+        if (offset + 100 >= (res.pagination?.totalResults ?? 0) || !(res.results || []).length) break;
+      }
+    })();
+    lofte.then(() => isvRitaRad(), () => _isv.placeringar.delete(p.id));
+    _isv.placeringar.set(p.id, lofte);
+  }
+}
+
+// Radens läge mot den valda vyn: null (syns, eller okänt än), 'utanfor' eller 'ejPlacerad'.
+function isvRadLage(id) {
+  if (!_isv.arenden.has(id)) return null;
+  const lank = _isv.arenden.get(id);
+  if (!lank) return 'ejPlacerad';
+  const vy = _isv.vy;
+  if (!vy || vy.arendets || !vy.lineages) return null;
+  return vy.lineages.has(isvLineage(lank.urn)) ? null : 'utanfor';
+}
+
+// Markerar aktiv rad och tonar ner raderna som inte syns i vyn.
+function isvRitaRadlagen() {
+  const a = _isv.aktiv;
+  const perId = new Map(isAllaArenden().map(x => [x.id, x]));
   document.querySelectorAll('tr[data-isv]').forEach(tr => {
-    const aktiv = !!a && tr.dataset.isv === a.id;
+    const id = tr.dataset.isv;
+    const aktiv = !!a && id === a.id;
+    const lage = isvRadLage(id);
     tr.style.boxShadow  = aktiv ? 'inset 3px 0 0 #0696D7' : '';
     tr.style.background = aktiv ? 'rgba(6, 150, 215, 0.08)' : '';
+    tr.style.opacity    = lage && !aktiv ? '0.45' : '';
+    tr.dataset.isvLage  = lage || '';
+
+    // Förklaringen läggs under rubriken (eller i första kolumnen efter rutan).
+    tr.querySelector('.isv-radtext')?.remove();
+    if (!lage) return;
+    const rubrik = perId.get(id)?.rubrik || '';
+    const cell = (rubrik && [...tr.cells].find(td => td.textContent.includes(rubrik.slice(0, 25)))) || tr.cells[1];
+    if (!cell) return;
+    const text = document.createElement('div');
+    text.className = 'isv-radtext text-[10px] italic text-ads-muted';
+    text.textContent = ISV_RADLAGE[lage];
+    cell.appendChild(text);
   });
 }
+
+// Föregående/Nästa och piltangenterna: bara ärenden som syns i vyn.
+function isvSteg(riktning) {
+  const rader = [...document.querySelectorAll('tr[data-isv]')].filter(tr => !tr.dataset.isvLage);
+  if (!rader.length) return;
+  const nu = rader.findIndex(tr => tr.dataset.isv === _isv.aktiv?.id);
+  const nasta = rader[nu < 0 ? (riktning > 0 ? 0 : rader.length - 1) : Math.min(rader.length - 1, Math.max(0, nu + riktning))];
+  if (!nasta || nasta.dataset.isv === _isv.aktiv?.id) return;
+  nasta.scrollIntoView({ block: 'nearest' });
+  isvVisa(isAllaArenden().find(x => x.id === nasta.dataset.isv));
+}
+
+document.addEventListener('keydown', e => {
+  if (!isvVisas() || _is.dialog || e.altKey || e.ctrlKey || e.metaKey) return;
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  if (e.target.closest?.('input, select, textarea, [contenteditable="true"]')) return;
+  e.preventDefault();
+  isvSteg(e.key === 'ArrowDown' ? 1 : -1);
+});
 
 // ── Vyn som bakgrund ──────────────────────────────────────────────────────────
 // Man väljer själv en Model Coordination-vy. Dess modeller laddas en gång, i
@@ -346,7 +432,7 @@ async function isvLaddaVald() {
     isvSattStatus(nya ? `Laddar ${nya === 1 ? 'en modell' : `${nya} modeller`}…` : '');
     const t0 = performance.now();
     await isvLaddaModeller(lista);
-    _isv.vy = { projektId: pid, msId, vyId, namn: vy.namn, version: ms.version };
+    _isv.vy = { projektId: pid, msId, vyId, namn: vy.namn, version: ms.version, lineages: new Set(lista.map(x => x.lineage)) };
     const sek = (performance.now() - t0) / 1000;
     isvSattStatus(nya && sek > 0.3 ? `Vyn laddad på ${sek.toFixed(1).replace('.', ',')} s` : '');
 
