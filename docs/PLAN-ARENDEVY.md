@@ -10,7 +10,13 @@ selected issue's spot. Only issues placed in Model Coordination are in scope (Ma
   the live page (not yet published). The issue is fetched per click (one GET); rapid clicking can hit ACC's
   rate limit (429), which `bhMedOmforsok` waits out. Clicking rows on the Clash surface is not tested yet
   (the button and panel show there; the row hook is the same as in Alla ärenden).
-- Part 3 (section box, ghosting, keep models loaded): not started.
+- Part 3 (section box, ghosting, room for the list): built 2026-11-05, not yet published. Section box =
+  pin ± 3 m plus the clicked element (capped at 8 m), camera zoomed to it in the saved direction. Fading =
+  isolate + ghosting of every element whose box comes within 0.3 m of the pin, in all models. Both are
+  checkboxes saved per browser, and are skipped for issues that already have their own cut or hidden
+  elements in ACC. The dashboard cards hide while Modellvy is on; the split can be dragged (20–85 %, saved).
+  Tested on R&D #17: in that clash only one of the two models had elements within 0.3 m of the pin, so the
+  other model is shown unfaded.
 - Part 4 (prefetch next model, optional extra models): not started.
 
 ## What a Model Coordination issue carries (Issues API v1, tested)

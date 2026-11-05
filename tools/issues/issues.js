@@ -574,7 +574,7 @@ function isDashboardHtml() {
       </div>
     </div>
 
-    <div id="is-diagram">${isDiagramHtml()}</div>
+    ${isvVisas() ? '' : `<div id="is-diagram">${isDiagramHtml()}</div>`}
 
     <div class="px-5 py-4">
       <div class="bg-white border border-ads-border rounded">

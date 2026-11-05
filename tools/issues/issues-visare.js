@@ -25,9 +25,26 @@ const _isv = {
   arenden:   new Map(),   // ärende-id → linkedDocument eller null (inte placerat)
   onskat:    null,        // senast klickade ärende, väntar på att laddas
   arbetar:   false,
+  // Val som sparas per webbläsare.
+  snitt:     isvLasVal('isv-snitt', true),   // snittlåda runt ärendet
+  tona:      isvLasVal('isv-tona', true),    // tona ner allt utom elementen vid nålen
+  hojd:      isvLasVal('isv-hojd', 48),      // modellrutans höjd i procent
 };
 
 const ISV_YTOR = ['alla', 'clash'];
+
+// Del 3: fokus på platsen. Mått i meter, räknas om till modellens enheter.
+const ISV_NARA_M     = 0.3;  // element inom så här långt från nålen hör till clashen
+const ISV_MARGINAL_M = 3;    // snittlådan sträcker sig så här långt runt nålen
+const ISV_ELEMENT_M  = 8;    // och tar med det klickade elementet upp till så här långt bort
+
+function isvLasVal(nyckel, standard) {
+  try { const v = JSON.parse(localStorage.getItem(nyckel)); return v ?? standard; } catch { return standard; }
+}
+
+function isvSparaVal(nyckel, varde) {
+  try { localStorage.setItem(nyckel, JSON.stringify(varde)); } catch { /* inte kritiskt */ }
+}
 
 function isvVisas() {
   return _isv.pa && ISV_YTOR.includes(_is.yta) && !!_is.hamtad && !_is.valjProjekt;
@@ -49,7 +66,32 @@ function isvVaxla() {
 // Platshållaren i fliken. Själva rutan sätts in av isvFastsatt.
 function isvPlatsHtml() {
   if (!isvVisas()) return '';
-  return `<div id="isv-plats" class="shrink-0 border-t-2 border-ads-border bg-white" style="height: 48%"></div>`;
+  return `
+    <div id="isv-plats" class="relative shrink-0 border-t-2 border-ads-border bg-white" style="height: ${_isv.hojd}%">
+      <div onmousedown="isvDra(event)" title="Dra för att ändra storlek"
+           class="absolute left-0 right-0 z-10 cursor-row-resize" style="top: -6px; height: 10px"></div>
+    </div>`;
+}
+
+// Dra i kanten ovanför modellen för att dela om utrymmet med listan.
+function isvDra(e) {
+  e.preventDefault();
+  const plats = document.getElementById('isv-plats');
+  const kolumn = plats?.parentElement;
+  if (!kolumn) return;
+  const flytta = ev => {
+    const px = plats.getBoundingClientRect().bottom - ev.clientY;
+    _isv.hojd = Math.round(Math.min(85, Math.max(20, px / kolumn.getBoundingClientRect().height * 100)));
+    plats.style.height = `${_isv.hojd}%`;
+    _isv.viewer?.resize();
+  };
+  const slapp = () => {
+    window.removeEventListener('mousemove', flytta);
+    window.removeEventListener('mouseup', slapp);
+    isvSparaVal('isv-hojd', _isv.hojd);
+  };
+  window.addEventListener('mousemove', flytta);
+  window.addEventListener('mouseup', slapp);
 }
 
 // Anropas sist i isRita.
@@ -85,6 +127,11 @@ function isvRitaRad() {
     <span class="${_isv.fel ? 'text-red-700' : 'text-ads-muted'}">${vkEsc(_isv.status)}</span>
     <div class="flex-1"></div>
     ${_isv.lank && _isv.viewer && _isv.modeller.size && !_isv.fel ? `
+      <label class="flex items-center gap-1 cursor-pointer text-ads-muted" title="Skär bort allt utom några meter runt ärendet">
+        <input type="checkbox" ${_isv.snitt ? 'checked' : ''} onchange="isvVaxlaVal('snitt')" class="accent-ads-blue" /> Snittlåda</label>
+      <label class="flex items-center gap-1 cursor-pointer text-ads-muted" title="Visa elementen vid nålen tydligt och resten genomskinligt">
+        <input type="checkbox" ${_isv.tona ? 'checked' : ''} onchange="isvVaxlaVal('tona')" class="accent-ads-blue" /> Tona ner omgivningen</label>
+      <span class="text-ads-border">|</span>
       <button onclick="isvArendetsVy()" class="hover:text-ads-blue">Ärendets vy</button>
       <button onclick="isvHelaModellen()" class="hover:text-ads-blue">Hela modellen</button>` : ''}
     <button onclick="isvVaxla()" class="text-ads-muted hover:text-ads-text" title="Stäng modellvyn">✕</button>`;
@@ -229,13 +276,102 @@ function isvNalModell(lank) {
 function isvArendetsVy() {
   const v = _isv.viewer, lank = _isv.lank;
   if (!v || !lank) return;
+  v.showAll();
+  v.setCutPlanes([]);
   v.restoreState(lank.details.viewerState, null, true);
   const m = isvNalModell(lank);
   if (m && lank.details.objectId != null) v.select([lank.details.objectId], m);
+  try { isvFokus(v, lank, m); } catch (err) { console.warn('Modellvy: kunde inte fokusera', err); }
 }
 
+// Snittlåda runt nålen och nedtoning av allt utom elementen vid nålen. Ärenden
+// som redan har ett eget snitt eller egna dolda/isolerade element i ACC visas
+// som de sparades, utan att det här skrivs över.
+function isvFokus(v, lank, nalModell) {
+  const vs  = lank.details.viewerState;
+  const pos = lank.details.position;
+  if (!pos) return;
+  const p = new THREE.Vector3(pos.x, pos.y, pos.z);
+  const enhet = 1 / ((nalModell || v.model).getUnitScale?.() || 1);   // modellenheter per meter
+
+  // Elementen nära nålen, i alla modeller. Det är i praktiken de som krockar.
+  const nara = new THREE.Box3(p.clone(), p.clone()).expandByScalar(ISV_NARA_M * enhet);
+  const traffar = [];
+  for (const m of _isv.modeller.values()) {
+    const ids = isvElementIRuta(m, nara);
+    if (m === nalModell && lank.details.objectId != null && !ids.includes(lank.details.objectId)) ids.push(lank.details.objectId);
+    if (ids.length) traffar.push({ m, ids });
+  }
+
+  if (_isv.snitt && !vs.cutplanes?.length) {
+    const lada = new THREE.Box3(p.clone(), p.clone()).expandByScalar(ISV_MARGINAL_M * enhet);
+    if (nalModell && lank.details.objectId != null) {
+      const tak = new THREE.Box3(p.clone(), p.clone()).expandByScalar(ISV_ELEMENT_M * enhet);
+      const el = isvElementGranser(nalModell, lank.details.objectId);
+      if (!el.isEmpty()) lada.union(el.intersect(tak));
+    }
+    v.setCutPlanes(isvLadansPlan(lada));
+    // Ärendets kamera står ofta långt bort. Gå närmare, men behåll riktningen.
+    v.navigation.fitBounds(true, lada);
+  }
+
+  const egnaVal = vs.objectSet.some(o => o.isolated?.length || o.hidden?.length);
+  if (_isv.tona && !egnaVal && traffar.length) {
+    v.setGhosting(true);
+    for (const t of traffar) v.isolate(t.ids, t.m);
+  }
+}
+
+// dbId för alla delar vars utbredning går in i rutan.
+function isvElementIRuta(m, ruta) {
+  const fl = m.getFragmentList?.();
+  if (!fl) return [];
+  const b = new THREE.Box3();
+  const ids = new Set();
+  const antal = fl.getCount();
+  for (let f = 0; f < antal; f++) {
+    fl.getWorldBounds(f, b);
+    if (!b.intersectsBox(ruta)) continue;
+    const d = fl.fragments?.fragId2dbId?.[f] ?? fl.getDbIds?.(f);
+    for (const id of [].concat(d)) if (id != null && id >= 0) ids.add(id);
+  }
+  return [...ids];
+}
+
+function isvElementGranser(m, dbId) {
+  const ut = new THREE.Box3();
+  const trad = m.getInstanceTree?.();
+  const fl = m.getFragmentList?.();
+  if (!trad || !fl) return ut;
+  const b = new THREE.Box3();
+  trad.enumNodeFragments(dbId, f => { fl.getWorldBounds(f, b); ut.union(b); }, true);
+  return ut;
+}
+
+// Sex snittplan som tillsammans bildar en låda. Visaren skär bort det som
+// ligger på planets positiva sida (n·p + d > 0).
+function isvLadansPlan(l) {
+  return [
+    new THREE.Vector4(-1, 0, 0, l.min.x), new THREE.Vector4(1, 0, 0, -l.max.x),
+    new THREE.Vector4(0, -1, 0, l.min.y), new THREE.Vector4(0, 1, 0, -l.max.y),
+    new THREE.Vector4(0, 0, -1, l.min.z), new THREE.Vector4(0, 0, 1, -l.max.z),
+  ];
+}
+
+function isvVaxlaVal(namn) {
+  _isv[namn] = !_isv[namn];
+  isvSparaVal(`isv-${namn}`, _isv[namn]);
+  isvRitaRad();
+  isvArendetsVy();
+}
+
+// Hela modellen utan snitt och nedtoning. "Ärendets vy" tar tillbaka dem.
 function isvHelaModellen() {
-  _isv.viewer?.fitToView();
+  const v = _isv.viewer;
+  if (!v) return;
+  v.setCutPlanes([]);
+  v.showAll();
+  v.fitToView();
 }
 
 function isvStang() {
