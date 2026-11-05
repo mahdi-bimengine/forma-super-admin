@@ -40,6 +40,8 @@ function vkStartaVisare() {
       fel(new Error('APS-visaren kunde inte laddas.'));
       return;
     }
+    // Ingen regionsinställning: visaren (7.109 och senare, index.html laddar
+    // senaste 7.*) hittar själv rätt serverregion för modellen, EU som US.
     Autodesk.Viewing.Initializer({
       env: 'AutodeskProduction',
       api: 'derivativeV2',

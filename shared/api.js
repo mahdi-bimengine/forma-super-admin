@@ -25,11 +25,31 @@ async function apsFornyaToken() {
   return !!(await _pagaendeFornyelse);
 }
 
+// ── Serverregion ──────────────────────────────────────────────────────────────
+// Varje ACC-konto (hub) ligger i en serverregion, US eller EMEA (EU). Regionen
+// står i kontots attributes.region och följer det valda kontot (aktuellRegion i
+// app.js). De flesta tjänster hittar rätt region själva utifrån projekt-id.
+// Model Coordination, Clash och Model Properties tar emot huvudet x-ads-region
+// (utan det gissar Autodesk, vilket fungerar men är långsammare), och Model
+// Derivative har en egen adress för EU.
+
+const APS_REGIONSTYRDA = ['/construction/index/', '/bim360/modelset/', '/bim360/clash/'];
+
+function apsRegion() {
+  return (typeof aktuellRegion === 'function' && aktuellRegion()) || 'US';
+}
+
+function mdBas() {
+  return apsRegion() === 'EMEA' ? '/modelderivative/v2/regions/eu/designdata' : '/modelderivative/v2/designdata';
+}
+
 // Alla anrop mot APS med den inloggades token går hit. Får anropet 401 förnyas
 // token och anropet görs om en gång. Går det inte visas "Logga in igen".
 async function apsFetch(url, opt = {}) {
   if (!_token) throw new Error('No APS token set. Call setToken() first.');
-  const gor = () => fetch(url, { ...opt, headers: { ...(opt.headers || {}), Authorization: `Bearer ${_token}` } });
+  const huvuden = { ...(opt.headers || {}), Authorization: `Bearer ${_token}` };
+  if (APS_REGIONSTYRDA.some(s => url.includes(s))) huvuden['x-ads-region'] = apsRegion();
+  const gor = () => fetch(url, { ...opt, headers: huvuden });
   let res = await gor();
   if (res.status === 401 && await apsFornyaToken()) res = await gor();
   if (res.status === 401) _tokenUtgangen?.();
@@ -335,7 +355,7 @@ async function listProjectUsers(accProjectId) {
 
 async function getManifest(urn) {
   const encoded = toSafeBase64(urn);
-  const res = await apsFetch(`${APS_BASE}/modelderivative/v2/designdata/${encoded}/manifest`);
+  const res = await apsFetch(`${APS_BASE}${mdBas()}/${encoded}/manifest`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`APS error ${res.status}: ${await res.text()}`);
   return res.json();
@@ -343,13 +363,13 @@ async function getManifest(urn) {
 
 async function getDerivativeMetadata(urn) {
   const encoded = toSafeBase64(urn);
-  const res = await apsGet(`/modelderivative/v2/designdata/${encoded}/metadata`);
+  const res = await apsGet(`${mdBas()}/${encoded}/metadata`);
   return res.data.metadata;
 }
 
 async function getDerivativeProperties(urn, guid) {
   const encoded = toSafeBase64(urn);
-  const res = await apsGet(`/modelderivative/v2/designdata/${encoded}/metadata/${guid}/properties`);
+  const res = await apsGet(`${mdBas()}/${encoded}/metadata/${guid}/properties`);
   return res.data.collection;
 }
 

@@ -340,7 +340,7 @@ async function loadPickerData(hubIdx) {
     if (document.getElementById('project-grid') === gridEl) skrivAdress(kontoAdress(), 'ersatt');
 
     const nameEl = document.getElementById('account-name');
-    if (nameEl) nameEl.textContent = hub.attributes.name;
+    if (nameEl) nameEl.innerHTML = escapeHtmlApp(hub.attributes.name) + regionMarke(hub);
 
     if (!_projCache[hub.id]) {
       _projCache[hub.id] = await listProjects(hub.id);
@@ -493,6 +493,29 @@ function projectCard(p) {
     </div>`;
 }
 
+// ── Serverregion ───────────────────────────────────────────────────────────────
+// Det valda kontots region: 'US' eller 'EMEA'. api.js läser den för varje anrop.
+
+function aktuellRegion(hub = _hubs[_hubIdx]) {
+  return hub?.attributes?.region || 'US';
+}
+
+// Kort märkning för gränssnittet: EU eller US (andra regioner med sitt namn).
+function regionEtikett(hub) {
+  const r = aktuellRegion(hub);
+  return r === 'EMEA' ? 'EU' : r;
+}
+
+function regionMarke(hub) {
+  return `<span class="ml-1.5 inline-block rounded border border-ads-border px-1 text-[10px] font-semibold leading-4 text-ads-muted align-middle"
+                title="Serverregion">${regionEtikett(hub)}</span>`;
+}
+
+// ACC:s webbadress för det valda kontot. EU-konton ligger på acc.autodesk.eu.
+function accDoman() {
+  return aktuellRegion() === 'EMEA' ? 'acc.autodesk.eu' : 'acc.autodesk.com';
+}
+
 function toggleAccountMenu(event) {
   event.stopPropagation();
   const menu = document.getElementById('account-menu');
@@ -512,7 +535,7 @@ function toggleAccountMenu(event) {
         class="w-full text-left px-4 py-2 text-sm hover:bg-ads-gray transition-colors ${
           i === _hubIdx ? 'font-semibold text-ads-blue' : 'text-ads-text'
         }"
-      >${h.attributes.name}</button>
+      >${escapeHtmlApp(h.attributes.name)}${regionMarke(h)}</button>
     </li>`).join('');
 
   menu.classList.remove('hidden');
@@ -693,7 +716,7 @@ function renderSidebar(activeTab) {
 
   sidebar.innerHTML = `
     <div class="px-4 pt-3 pb-3 border-b border-dashed border-ads-border shrink-0">
-      <p class="text-[10px] font-semibold uppercase tracking-widest text-orange-400 mb-0.5">${hubName}</p>
+      <p class="text-[10px] font-semibold uppercase tracking-widest text-orange-400 mb-0.5">${hubName} · ${regionEtikett()}</p>
       <div class="flex items-center justify-between gap-2">
         <p class="text-sm font-semibold text-be-charcoal truncate">${projName}</p>
         <button onclick="showProjectPicker()" title="Byt projekt"

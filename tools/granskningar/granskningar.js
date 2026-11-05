@@ -448,7 +448,7 @@ function gkTabell() {
 // Direktlänk till granskningen i ACC. Adressen följer ACC:s egen väg
 // /docs/reviews/projects/:projectId/:reviewId, med projekt-id utan "b.".
 function gkLank(r) {
-  const doman = _hubs[_hubIdx]?.attributes?.region === 'EMEA' ? 'acc.autodesk.eu' : 'acc.autodesk.com';
+  const doman = accDoman();
   const projekt = String(_currentProject?.id || '').replace(/^b\./, '');
   return `https://${doman}/docs/reviews/projects/${projekt}/${r.id}`;
 }
