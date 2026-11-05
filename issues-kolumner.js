@@ -193,8 +193,7 @@ function isKolumnRubrikHtml(k) {
     <th class="px-2 pt-2 pb-1 font-semibold cursor-pointer select-none whitespace-nowrap ${k.hoger ? 'text-right' : ''}"
         onclick="isSortera(_is.ref[${isRef(k.k)}])" ${k.hjalp ? `title="${vkEsc(k.hjalp)}"` : ''}>
       ${vkEsc(k.namn)}${kol === k.k ? (upp ? ' ▲' : ' ▼') : ''}</th>`;
-  // Nr följs av en smal kolumn med länken till ACC.
-  return k.k === 'nr' ? th + '<th class="px-2"></th>' : th;
+  return th;
 }
 
 function isKolumnSokHtml(k, vy) {
@@ -250,7 +249,7 @@ function isKolumnSokHtml(k, vy) {
                class="w-full min-w-[60px] px-1.5 py-0.5 text-xs font-normal border rounded bg-white focus:outline-none focus:ring-1 focus:ring-ads-blue ${ram}" />
       </th>`;
   }
-  return k.k === 'nr' ? ut + '<th></th>' : ut;
+  return ut;
 }
 
 // Förslag i sökfälten: de värden som finns i vyn.
@@ -265,8 +264,7 @@ function isKolumnDatalista(k, vy) {
 function isKolumnCellHtml(k, a, ref, klick) {
   switch (k.k) {
     case 'nr':
-      return `<td class="px-2 py-1.5 text-right font-mono text-xs">${a.nr}</td>
-              <td class="px-1"><a href="${isLank(a)}" target="_blank" rel="noopener" class="text-ads-blue" title="Öppna i ACC">↗</a></td>`;
+      return `<td class="px-2 py-1.5 text-right font-mono text-xs whitespace-nowrap">${isArendeLank(a, `${a.nr} ↗`)}</td>`;
     case 'typ': {
       const typ = a.subtyp || a.typ;
       return `<td class="px-2 py-1.5 text-xs">${klick('typ', typ)}${a.subtyp && a.typ && a.subtyp !== a.typ
@@ -302,7 +300,14 @@ function isKolumnCellHtml(k, a, ref, klick) {
   }
 }
 
-// Antal tabellceller per rad, med kryssrutan och länken efter Nr.
+// Antal tabellceller per rad, med kryssrutan.
 function isAntalCeller() {
-  return 1 + isSynligaKolumner().reduce((n, k) => n + (k.k === 'nr' ? 2 : 1), 0);
+  return 1 + isSynligaKolumner().length;
+}
+
+// Länk till ärendet i ACC. Öppnas alltid i en ny flik, så att listan och
+// eventuella väntande ändringar ligger kvar.
+function isArendeLank(a, text) {
+  return `<a href="${isLank(a)}" target="_blank" rel="noopener" class="text-ads-blue hover:underline"
+             title="Öppna ärendet i ACC i en ny flik">${vkEsc(text)}</a>`;
 }

@@ -418,7 +418,7 @@ function isAndringsTabell(rader, medAngra, medStatus) {
       <tbody>
         ${rader.map(r => `
           <tr class="border-t border-ads-border/60 align-top">
-            <td class="py-1.5 px-2"><div class="font-medium">#${r.nr} ${vkEsc(r.rubrik)}</div><div class="text-[10px] text-ads-muted">${vkEsc(r.projekt)}</div></td>
+            <td class="py-1.5 px-2"><div class="font-medium">${isArendeLank(r, `#${r.nr} ${r.rubrik}`)}</div><div class="text-[10px] text-ads-muted">${vkEsc(r.projekt)}</div></td>
             <td class="px-2 py-1.5 text-xs">
               ${Object.keys(r.efter).filter(k => k !== 'assignedToType').map(k => k === 'watchers' ? `
                 <div><span class="text-ads-muted">${isFaltNamn(k)}:</span> ${isBevakarDiff(r.fore, r.efter)}</div>` : `

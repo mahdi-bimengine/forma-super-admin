@@ -105,7 +105,7 @@ function isFleraTillampa(falt, gor) {
   for (const a of markerade) {
     const svar = gor(a);
     if (typeof svar === 'string') {
-      _is.hoppade.push({ id: a.id, nr: a.nr, rubrik: a.rubrik, projekt: a.projekt, falt, varfor: svar });
+      _is.hoppade.push({ id: a.id, accId: a.accId, nr: a.nr, rubrik: a.rubrik, projekt: a.projekt, falt, varfor: svar });
     } else if (svar) {
       const andring = isHamtaAndring(a);
       const { bevakarSteg, bevakarTyper, ...efter } = svar;
@@ -520,7 +520,7 @@ function isHoppadeHtml() {
     <details class="mt-3 mx-2 p-2.5 rounded border border-amber-200 bg-amber-50 text-xs text-amber-900" open>
       <summary class="cursor-pointer font-medium">${isArendenText(_is.hoppade.length)} hoppas över</summary>
       <div class="mt-1 space-y-0.5">
-        ${_is.hoppade.map(h => `<div>#${h.nr} ${vkEsc(h.rubrik)} <span class="text-amber-700">(${vkEsc(h.projekt)})</span> – ${isFaltNamn(h.falt)}: ${vkEsc(h.varfor)}</div>`).join('')}
+        ${_is.hoppade.map(h => `<div>${isArendeLank(h, `#${h.nr} ${h.rubrik}`)} <span class="text-amber-700">(${vkEsc(h.projekt)})</span> – ${isFaltNamn(h.falt)}: ${vkEsc(h.varfor)}</div>`).join('')}
       </div>
     </details>`;
 }
