@@ -32,9 +32,25 @@ selected issue's spot. Only issues placed in Model Coordination are in scope (Ma
   - Views with more than 8 models ask before loading. Models not in the new list are unloaded first.
   - The camera always zooms to the issue's spot; "Hela modellen" is gone.
   Tested on R&D #17/#18 with the private "View 1" picked by hand: 1 model without a view, 2 with it, no
-  reload between #17 and #18 (about 0.05 s). Location matching is tested only with made-up names: R&D
-  has no issue locations or block-named views yet.
-- Part 4 (prefetch next model, optional extra models): not started.
+  reload between #17 and #18 (about 0.05 s). The location matching was dropped the same day: the browser
+  can never read the location tree (Locations API has no CORS), so `a.platsVag` is always empty in practice.
+
+## New design (Mahdi, 2026-11-05)
+1. **A: the view is the backdrop** (built 2026-11-05). A "Vy" dropdown at the left of the bar lists every
+   view in the project's model sets (grouped per model set) plus "Bara ärendets modell". The choice is saved
+   per project (`isv-vy:<projekt-id>`, value `msId|viewId` or `arende`) and loaded as soon as Modellvy opens.
+   Its models load once, latest version, and stay. Clicking an issue only moves the camera; if its pinned
+   model isn't in the view the panel says so. Clicking an issue from another project switches to that
+   project's saved view. "Bara ärendets modell" loads the clicked issue's model and swaps it only when the
+   next issue sits in another model. The whole-view zoom must be immediate (`fitToView(.., .., true)`):
+   an animated one finished after the next issue's camera and left the camera far out.
+2. **B: the list follows the view** (not started). Read every issue's pinned model with one list call per
+   project (`fields=linkedDocuments`, about 0.5 kB per issue, tested), grey rows whose model isn't in the
+   view ("Syns inte i vald vy") or that have no pin, and add Föregående/Nästa plus arrow keys.
+3. **C: the selected issue opens up** (not started). Under the row: the snapshot (`snapshotUrn` →
+   `/oss/v2/buckets/{bucket}/objects/{obj}/signeds3download`, tested, a JPG), the description and every
+   comment, scrollable.
+- R&D test data made 2026-11-05: locations "Test - Block A" and "Test - Block B" under Projekt. Not used any more.
 
 ## What a Model Coordination issue carries (Issues API v1, tested)
 Issues placed in MC have one `linkedDocuments` entry, `type: "TwoDVectorPushpin"` (also for 3D):

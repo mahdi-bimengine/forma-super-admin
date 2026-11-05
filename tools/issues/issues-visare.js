@@ -1,12 +1,13 @@
 // issues-visare.js — modellvy under ärendelistan (docs/PLAN-ARENDEVY.md, del 2).
 //
 // Med "Modellvy" på delas fliken: ärendena överst, en lätt APS-visare under.
-// Klick på en rad hämtar ärendet och hoppar till platsen där det skapades i
-// Model Coordination. Ärendets viewerState har kameran, nålen och elementet.
+// Man väljer en Model Coordination-vy som bakgrund (isvVyValHtml). Den laddas
+// en gång och ligger kvar; ett klick på ett ärende flyttar bara kameran dit.
+// Ärendets viewerState har kameran, nålen och elementet.
 //
-// Bara modellerna i blockets vy laddas (se isvKontext), aldrig allt som var
-// öppet när ärendet skapades: i ett riktigt projekt är det hela model setet,
-// och det tog över 5 GB minne (2026-11-05).
+// Ärendets egna sparade läge laddas aldrig: där ingår allt som var öppet när
+// ärendet skapades, i ett riktigt projekt hela model setet, och det tog över
+// 5 GB minne (2026-11-05).
 //
 // Modellerna laddas i sina egna interna koordinater (applyRefPoint: false,
 // globalOffset 0), annars pekar den sparade kameran ut i tomma luften. Kameran
@@ -22,9 +23,14 @@ const _isv = {
   viewer:    null,
   modeller:  new Map(),   // versions-URN|vy-guid → { m: laddad modell, lineage }
   mc:        new Map(),   // projekt-id → löfte om model set med senaste filer och vyer
-  kontext:   null,        // aktuellt ärendes model set, vyer och valda vy, se isvKontext
+  mcKlar:    new Map(),   // projekt-id → samma sak när den är läst
+  mcFel:     new Map(),   // projekt-id → felet om den inte gick att läsa
+  projektId: null,        // projektet vars vyer visas
+  vy:        null,        // den laddade vyn { projektId, msId, vyId, namn, version }
+  laddarVy:  false,
+  vyOnskas:  false,       // vyn ska laddas (om) av kön
   storVy:    null,        // { namn, antal } när en vy väntar på bekräftelse
-  tillatStor: null,       // vy-id som användaren bekräftat trots många modeller
+  tillatStor: null,       // "msId|vyId" som användaren bekräftat trots många modeller
   aktiv:     null,        // { id, nr, rubrik, projekt }
   lank:      null,        // ärendets linkedDocument med viewerState
   status:    '',
@@ -68,6 +74,8 @@ function isvVaxla() {
   _isv.pa = !_isv.pa;
   if (!_isv.pa) isvStang();
   isRita();
+  // Den vy som valdes senast i projektet laddas direkt.
+  if (_isv.pa && isvVisas()) isvBegarVy();
 }
 
 // Platshållaren i fliken. Själva rutan sätts in av isvFastsatt.
@@ -123,38 +131,44 @@ function isvSkapaRuta() {
   return ruta;
 }
 
-// Raden ovanför visaren: vilket ärende, läge och knappar.
+// Raden ovanför visaren: vyval först (vyn är bakgrunden), sedan ärendet och knappar.
 function isvRitaRad() {
   const rad = document.getElementById('isv-rad');
   if (!rad) return;
   const a = _isv.aktiv;
+  const syns = !!a && isvSyns();
   rad.innerHTML = `
-    <span class="font-semibold text-ads-text">${a ? `#${a.nr}` : 'Modellvy'}</span>
-    <span class="text-ads-muted truncate">${a ? vkEsc(`${a.rubrik} · ${a.projekt}`) : 'Klicka på ett ärende i listan.'}</span>
-    <span class="${_isv.fel ? 'text-red-700' : 'text-ads-muted'}">${vkEsc(_isv.status)}</span>
+    ${isvVyValHtml()}
+    <span class="text-ads-border">|</span>
+    <span class="font-semibold text-ads-text">${a ? `#${a.nr}` : ''}</span>
+    <span class="text-ads-muted truncate">${a ? vkEsc(a.rubrik) : 'Klicka på ett ärende i listan.'}</span>
+    <span class="${_isv.fel ? 'text-red-700' : 'text-ads-muted'} whitespace-nowrap">${vkEsc(_isv.status)}</span>
     <div class="flex-1"></div>
-    ${a && _isv.lank ? isvVyValHtml() : ''}
-    ${_isv.lank && _isv.viewer && _isv.modeller.size && !_isv.fel ? `
-      <label class="flex items-center gap-1 cursor-pointer text-ads-muted" title="Skär bort allt utom några meter runt ärendet">
+    ${syns && !_isv.fel ? `
+      <label class="flex items-center gap-1 cursor-pointer text-ads-muted whitespace-nowrap" title="Skär bort allt utom några meter runt ärendet">
         <input type="checkbox" ${_isv.snitt ? 'checked' : ''} onchange="isvVaxlaVal('snitt')" class="accent-ads-blue" /> Snittlåda</label>
-      <label class="flex items-center gap-1 cursor-pointer text-ads-muted" title="Visa elementen vid nålen tydligt och resten genomskinligt">
+      <label class="flex items-center gap-1 cursor-pointer text-ads-muted whitespace-nowrap" title="Visa elementen vid nålen tydligt och resten genomskinligt">
         <input type="checkbox" ${_isv.tona ? 'checked' : ''} onchange="isvVaxlaVal('tona')" class="accent-ads-blue" /> Tona ner omgivningen</label>
-      <span class="text-ads-border">|</span>
-      <button onclick="isvArendetsVy()" class="hover:text-ads-blue" title="Gå tillbaka till ärendets plats">Ärendets vy</button>` : ''}
+      <button onclick="isvArendetsVy()" class="hover:text-ads-blue whitespace-nowrap" title="Gå tillbaka till ärendets plats">Ärendets vy</button>` : ''}
     <button onclick="isvVaxla()" class="text-ads-muted hover:text-ads-text" title="Stäng modellvyn">✕</button>`;
+
   const medd = document.getElementById('isv-meddelande');
   if (medd) {
-    // Täcker också förra ärendets modell när det valda ärendet saknar placering.
-    const visa = !_isv.viewer || !_isv.modeller.size || (!!a && !_isv.lank) || _isv.fel || !!_isv.storVy;
+    // Meddelandet täcker vyn när det valda ärendet inte syns i den.
+    const text = _isv.storVy ? null
+      : !_isv.vy && !_isv.laddarVy ? 'Välj en vy i listan uppe till vänster. Den ligger kvar medan du går igenom ärendena.'
+      : !_isv.modeller.size ? (_isv.status || (_isv.vy?.arendets ? 'Klicka på ett ärende för att se dess modell.' : 'Laddar vyn…'))
+      : a && !syns && !_isv.arbetar ? (_isv.status || '')
+      : '';
+    const visa = !!_isv.storVy || !!text;
     medd.style.background = visa && _isv.modeller.size ? 'rgba(255, 255, 255, 0.92)' : '';
     medd.innerHTML = !visa ? '' : _isv.storVy ? `
       <div class="text-sm text-ads-muted text-center max-w-md px-6 pointer-events-auto">
         <p>Vyn "${vkEsc(_isv.storVy.namn)}" har ${_isv.storVy.antal} modeller. Det kan ta lång tid och mycket minne.</p>
-        <p class="mt-2">Välj en mindre vy i listan ovanför, eller
+        <p class="mt-2">Välj en mindre vy, eller
           <button onclick="isvLaddaStorVy()" class="text-ads-blue hover:underline">ladda ändå</button>.</p>
       </div>`
-      : `<p class="text-sm text-ads-muted text-center max-w-md px-6">${
-        vkEsc(_isv.status || 'Klicka på ett ärende som är placerat i Model Coordination.')}</p>`;
+      : `<p class="text-sm text-ads-muted text-center max-w-md px-6">${vkEsc(text)}</p>`;
   }
   // Markera raden för det aktiva ärendet.
   document.querySelectorAll('tr[data-isv]').forEach(tr => {
@@ -164,28 +178,68 @@ function isvRitaRad() {
   });
 }
 
-// Rullistan med model setets vyer. Visas alltid, så att valet går att ändra.
+// ── Vyn som bakgrund ──────────────────────────────────────────────────────────
+// Man väljer själv en Model Coordination-vy. Dess modeller laddas en gång, i
+// model setets senaste version, och ligger kvar medan man går igenom ärendena.
+// Ett klick på ett ärende flyttar bara kameran. Valet sparas per projekt i den
+// här webbläsaren (isv-vy:<projekt-id>).
+
+const ISV_MAX_MODELLER = 8;   // fler modeller än så i en vy laddas bara efter bekräftelse
+const ISV_ARENDETS = 'arende';  // vyvalet "Bara ärendets modell": byts för varje ärende
+
+// Projektet vars vyer visas: det senast klickade ärendets, annars det första.
+function isvProjektId() {
+  if (_isv.projektId && _is.projekt.has(_isv.projektId)) return _isv.projektId;
+  return [..._is.projekt.keys()][0] || null;
+}
+
+// Rullistan med projektets vyer, grupperade per model set.
 function isvVyValHtml() {
-  const k = _isv.kontext;
-  if (!k) return '';
-  if (!k.ms) {
-    const text = k.fel || 'Modellen ingår inte i något model set. Visar bara modellen med nålen.';
-    return `<span class="text-ads-muted" title="${vkEsc(text)}">Bara nålens modell</span>`;
+  const pid = isvProjektId();
+  if (!pid) return '';
+  const info = _isv.mcKlar.get(pid);
+  if (!info) {
+    if (!_isv.mc.has(pid)) isvMcInfo(pid).then(() => isvRitaRad(), () => isvRitaRad());
+    const fel = _isv.mcFel.get(pid);
+    return fel ? `<span class="text-red-700" title="${vkEsc(fel)}">Kunde inte läsa vyerna</span>`
+               : '<span class="text-ads-muted whitespace-nowrap">Läser vyer…</span>';
   }
-  const a = _isv.aktiv;
-  const tips = k.hur === 'plats'   ? `Vald efter platsen (${(a?.platsVag || []).join(' › ')})`
-             : k.hur === 'gissad'  ? `Gissad efter platsen (${(a?.platsVag || []).join(' › ')}). Ändra om den är fel.`
-             : k.hur === 'sparad'  ? 'Ditt eget val för det här blocket. Sparas i den här webbläsaren.'
-             : a?.platsVag?.length ? `Ingen vy matchar platsen (${a.platsVag.join(' › ')}). Välj en vy.`
-             : 'Ärendet har ingen plats i ACC. Välj en vy.';
-  const markera = k.hur === 'gissad' || k.hur === 'ingen';
+  const vald = isvLasVal(`isv-vy:${pid}`, '');
+  const flera = _is.projekt.size > 1;
   return `
-    <label class="flex items-center gap-1 text-ads-muted" title="${vkEsc(tips)}">Vy
+    <label class="flex items-center gap-1.5 text-ads-text font-medium whitespace-nowrap"
+           title="${vkEsc(flera ? `Vyer i ${_is.projekt.get(pid)?.namn || ''}` : 'Vyn som visas bakom ärendena')}">Vy
       <select onchange="isvValjVy(this.value)"
-              class="text-xs border rounded px-1.5 py-0.5 max-w-[14rem] ${markera ? 'border-amber-400 bg-amber-50' : 'border-ads-border bg-white'}">
-        <option value="" ${!k.vyId ? 'selected' : ''}>Bara nålens modell</option>
-        ${k.vyer.map(v => `<option value="${vkEsc(v.id)}" ${v.id === k.vyId ? 'selected' : ''}>${vkEsc(v.namn)}${v.privat ? ' (privat)' : ''}</option>`).join('')}
+              class="text-xs font-normal border rounded px-1.5 py-0.5 max-w-[16rem] ${vald ? 'border-ads-border bg-white' : 'border-amber-400 bg-amber-50'}">
+        <option value="" ${vald ? '' : 'selected'}>Välj vy…</option>
+        <option value="${ISV_ARENDETS}" ${vald === ISV_ARENDETS ? 'selected' : ''}>Bara ärendets modell</option>
+        ${info.filter(ms => ms.vyer.length).map(ms => `
+          <optgroup label="${vkEsc(ms.namn)}">
+            ${ms.vyer.map(v => {
+              const varde = `${ms.id}|${v.id}`;
+              return `<option value="${vkEsc(varde)}" ${varde === vald ? 'selected' : ''}>${vkEsc(v.namn)}${v.privat ? ' (privat)' : ''}</option>`;
+            }).join('')}
+          </optgroup>`).join('')}
       </select></label>`;
+}
+
+function isvValjVy(varde) {
+  const pid = isvProjektId();
+  if (!pid) return;
+  isvSparaVal(`isv-vy:${pid}`, varde);
+  _isv.tillatStor = null;
+  isvBegarVy();
+}
+
+function isvLaddaStorVy() {
+  _isv.tillatStor = isvLasVal(`isv-vy:${isvProjektId()}`, '');
+  isvBegarVy();
+}
+
+// Ber kön ladda (om) den valda vyn.
+function isvBegarVy() {
+  _isv.vyOnskas = true;
+  if (!_isv.arbetar) isvArbeta();
 }
 
 function isvSattStatus(text, fel = false) {
@@ -208,40 +262,147 @@ function isvRadKlick(e, ref) {
 
 function isvVisa(a) {
   if (!a) return;
-  _isv.aktiv  = { id: a.id, nr: a.nr, rubrik: a.rubrik, projekt: a.projekt, accId: a.accId,
-                  projektId: a.projektId, platsVag: a.platsVag || [] };
+  _isv.aktiv  = { id: a.id, nr: a.nr, rubrik: a.rubrik, projekt: a.projekt, accId: a.accId, projektId: a.projektId };
   _isv.onskat = _isv.aktiv;
-  if (_isv.arenden.has(a.id)) _isv.lank = _isv.arenden.get(a.id);
+  _isv.lank   = _isv.arenden.has(a.id) ? _isv.arenden.get(a.id) : null;
+  if (a.projektId !== isvProjektId()) {
+    // Ärendet hör till ett annat projekt: byt till det projektets vy.
+    _isv.projektId = a.projektId;
+    _isv.vyOnskas = true;
+  }
   isvRitaRad();
   if (!_isv.arbetar) isvArbeta();
 }
 
-// Tar alltid det senast klickade ärendet, så snabba klick inte laddar i otakt.
+// En kö: först vyn om den ska bytas, sedan det senast klickade ärendet. Snabba
+// klick hoppar över ärenden som hunnit bli inaktuella.
 async function isvArbeta() {
   _isv.arbetar = true;
   try {
-    while (_isv.onskat) {
-      const a = _isv.onskat;
-      _isv.onskat = null;
+    while (_isv.vyOnskas || _isv.onskat) {
       try {
+        if (_isv.vyOnskas) {
+          _isv.vyOnskas = false;
+          await isvLaddaVald();
+          continue;
+        }
+        const a = _isv.onskat;
+        _isv.onskat = null;
         await isvGaTill(a);
       } catch (err) {
-        if (!_isv.onskat) isvSattStatus(String(err.message || err), true);
+        if (!_isv.onskat && !_isv.vyOnskas) isvSattStatus(String(err.message || err), true);
       }
     }
   } finally {
     _isv.arbetar = false;
+    isvRitaRad();
   }
 }
 
-// ── Vilken vy och vilka modeller ──────────────────────────────────────────────
-// Ärendet öppnas med modellerna i den Model Coordination-vy som hör till dess
-// block, i model setets senaste version. Blocket läses ur ärendets plats i ACC
-// och matchas mot vynamnen. Valet kan alltid ändras i rullistan, och ändringen
-// sparas per projekt, model set och block i den här webbläsaren.
+// Laddar den sparade vyn för projektet, eller tömmer visaren om ingen är vald.
+async function isvLaddaVald() {
+  const pid = isvProjektId();
+  const varde = pid ? isvLasVal(`isv-vy:${pid}`, '') : '';
+  _isv.storVy = null;
+  if (!varde) {
+    isvTom();
+    _isv.vy = null;
+    isvSattStatus('');
+    return;
+  }
+  _isv.laddarVy = true;
+  try {
+    isvSattStatus('Läser vyn…');
+    const info = await isvMcInfo(pid);
+    if (varde === ISV_ARENDETS) return await isvLaddaArendets(pid, info);
+    const [msId, vyId] = varde.split('|');
+    const ms = info.find(s => s.id === msId);
+    const vy = ms?.vyer.find(v => v.id === vyId);
+    if (!vy) {
+      isvTom();
+      _isv.vy = null;
+      isvSparaVal(`isv-vy:${pid}`, '');
+      isvSattStatus('Den sparade vyn finns inte längre. Välj en ny.', true);
+      return;
+    }
 
-const ISV_MAX_MODELLER = 8;   // fler modeller än så i en vy laddas bara efter bekräftelse
+    const lista = [];
+    for (const d of vy.definition) {
+      const lineage = isvLineage(d.lineageUrn);
+      const sammaFil = ms.dok.filter(x => isvLineage(x.documentLineage?.lineageUrn) === lineage);
+      const dok = sammaFil.find(x => d.viewableName && x.viewableName === d.viewableName) || sammaFil[0];
+      if (!dok) continue;
+      const nyckel = `${dok.versionUrn}|${dok.viewableGuid || ''}`;
+      if (!lista.some(x => x.nyckel === nyckel)) lista.push({ nyckel, urn: toSafeBase64(dok.versionUrn), guid: dok.viewableGuid, lineage });
+    }
+    if (!lista.length) throw new Error(`Vyn "${vy.namn}" har inga modeller i model setets senaste version.`);
+    if (lista.length > ISV_MAX_MODELLER && _isv.tillatStor !== varde) {
+      _isv.storVy = { namn: vy.namn, antal: lista.length };
+      isvSattStatus('');
+      return;
+    }
 
+    const nya = lista.filter(x => !_isv.modeller.has(x.nyckel)).length;
+    isvSattStatus(nya ? `Laddar ${nya === 1 ? 'en modell' : `${nya} modeller`}…` : '');
+    const t0 = performance.now();
+    await isvLaddaModeller(lista);
+    _isv.vy = { projektId: pid, msId, vyId, namn: vy.namn, version: ms.version };
+    const sek = (performance.now() - t0) / 1000;
+    isvSattStatus(nya && sek > 0.3 ? `Vyn laddad på ${sek.toFixed(1).replace('.', ',')} s` : '');
+
+    // Står ett ärende redan valt går vi dit, annars visas hela vyn.
+    if (_isv.aktiv && _isv.lank && isvSyns()) await isvArendetsVy();
+    else if (!_isv.onskat) {
+      // Direkt, utan animering: annars hinner animeringen skriva över nästa
+      // ärendes kamera om man klickar medan den pågår.
+      _isv.viewer.setCutPlanes([]); _isv.viewer.showAll(); _isv.viewer.fitToView(undefined, undefined, true);
+      if (_isv.aktiv && _isv.lank) isvSattStatus(`Ärendets modell finns inte i vyn "${vy.namn}".`);
+    }
+  } finally {
+    _isv.laddarVy = false;
+  }
+}
+
+// "Bara ärendets modell": modellen som det valda ärendet sitter i, i model
+// setets senaste version. Finns den inte i något model set tas versionen
+// ärendet skapades i.
+async function isvLaddaArendets(pid, info) {
+  const lank = _isv.lank;
+  _isv.vy = { projektId: pid, vyId: ISV_ARENDETS, namn: 'Bara ärendets modell', arendets: true };
+  if (!lank) { isvTom(); isvSattStatus(''); return; }
+
+  const lineage = isvLineage(lank.urn);
+  const guid = lank.details.viewable?.guid, namn = lank.details.viewable?.name;
+  let post = null;
+  for (const ms of info) {
+    const sammaFil = ms.dok.filter(x => isvLineage(x.documentLineage?.lineageUrn) === lineage);
+    const dok = sammaFil.find(x => guid && x.viewableGuid === guid) || sammaFil.find(x => namn && x.viewableName === namn) || sammaFil[0];
+    if (dok) { post = { nyckel: `${dok.versionUrn}|${dok.viewableGuid || ''}`, urn: toSafeBase64(dok.versionUrn), guid: dok.viewableGuid, lineage }; break; }
+  }
+  if (!post) {
+    const id = lineage.split(':').pop();
+    const o = lank.details.viewerState.objectSet.find(o => {
+      try { return atob(o.seedUrn.replace(/-/g, '+').replace(/_/g, '/')).includes(id); } catch { return false; }
+    });
+    if (o) post = { nyckel: `ärende|${o.seedUrn}`, urn: o.seedUrn, guid, lineage };
+  }
+  if (!post) throw new Error('Hittar inte modellen som ärendet sitter i.');
+
+  const ny = !_isv.modeller.has(post.nyckel);
+  isvSattStatus(ny ? 'Laddar ärendets modell…' : '');
+  await isvLaddaModeller([post]);
+  await isvArendetsVy();
+  isvSattStatus('');
+}
+
+// Tar bort alla laddade modeller.
+function isvTom() {
+  for (const p of _isv.modeller.values()) { try { _isv.viewer?.unloadModel(p.m); } catch { /* redan borta */ } }
+  _isv.modeller.clear();
+}
+
+// Hämtar ärendets placering (en gång) och flyttar kameran dit om dess modell
+// finns i vyn. Ingenting laddas här.
 async function isvGaTill(a) {
   let lank = _isv.arenden.get(a.id);
   if (lank === undefined) {
@@ -250,42 +411,20 @@ async function isvGaTill(a) {
     lank = (ra.linkedDocuments || []).find(d => d.details?.viewerState?.objectSet?.length) || null;
     _isv.arenden.set(a.id, lank);
   }
-  if (_isv.onskat) return;
+  if (_isv.onskat || _isv.vyOnskas) return;
   _isv.lank = lank;
-  if (!lank) {
-    _isv.kontext = null;
-    isvSattStatus('Ärendet är inte placerat i någon modell.');
-    return;
-  }
-
-  isvSattStatus('Letar upp vyn…');
-  _isv.kontext = await isvKontext(a, lank);
-  if (_isv.onskat) return;
-  await isvLaddaKontext();
+  if (!lank)        return isvSattStatus('Ärendet är inte placerat i någon modell.');
+  if (!_isv.vy)     return isvSattStatus('Välj en vy för att se ärendet.');
+  // "Bara ärendets modell" byter modell när ärendet sitter i en annan.
+  if (_isv.vy.arendets && !isvSyns()) { _isv.vyOnskas = true; return; }
+  if (!isvSyns())   return isvSattStatus(`Ärendets modell finns inte i vyn "${_isv.vy.namn}".`);
+  await isvArendetsVy();
+  isvSattStatus('');
 }
 
-// Model set, vyer och vald vy för ärendet. Inget laddas ner här.
-async function isvKontext(a, lank) {
-  const lineage = isvLineage(lank.urn);
-  let info = null, fel = '';
-  try {
-    info = await isvMcInfo(a.projektId);
-  } catch (err) {
-    fel = `Kunde inte läsa Model Coordination: ${String(err.message || err).slice(0, 120)}`;
-  }
-  const ms = info?.find(s => s.dok.some(d => isvLineage(d.documentLineage?.lineageUrn) === lineage)) || null;
-  const k = { projektId: a.projektId, ms, vyer: ms?.vyer || [], block: null, vyId: null, hur: 'ingen', fel };
-  if (!ms) return k;
-
-  const match = isvMatchaVy(a.platsVag, ms.vyer);
-  k.block = match.block;
-  const sparad = isvLasVal(isvValNyckel(k), undefined);
-  if (sparad !== undefined && (sparad === '' || ms.vyer.some(v => v.id === sparad))) {
-    k.vyId = sparad; k.hur = 'sparad';
-  } else if (match.vyId) {
-    k.vyId = match.vyId; k.hur = match.saker ? 'plats' : 'gissad';
-  }
-  return k;
+// Sitter det valda ärendets nål i en modell som är laddad?
+function isvSyns() {
+  return !!_isv.lank && !!_isv.vy && !!isvNalModell(_isv.lank);
 }
 
 // Model sets med senaste versionens filer och vyerna, en gång per projekt.
@@ -308,7 +447,8 @@ function isvMcInfo(projektId) {
         };
       }));
     })();
-    p.catch(() => _isv.mc.delete(projektId));   // försök igen nästa gång om det gick fel
+    p.then(info => { _isv.mcKlar.set(projektId, info); _isv.mcFel.delete(projektId); },
+           err  => { _isv.mc.delete(projektId); _isv.mcFel.set(projektId, String(err.message || err)); });
     _isv.mc.set(projektId, p);
   }
   return _isv.mc.get(projektId);
@@ -316,122 +456,6 @@ function isvMcInfo(projektId) {
 
 function isvLineage(urn) {
   return String(urn || '').split('#')[0].split('?')[0];
-}
-
-function isvValNyckel(k) {
-  return `isv-vy:${k.projektId}:${k.ms?.id}:${k.block ?? '(utan plats)'}`;
-}
-
-// Ord i ett namn, i gemener. "Block"/"Blk" räknas inte, så "Block C",
-// "BLOCK-C" och "BlockC" blir alla ["c"].
-function isvOrd(text) {
-  return String(text || '').toLowerCase().split(/[^0-9a-zåäö]+/i)
-    .map(o => o.replace(/^(block|blk)(?=.)/, ''))
-    .filter(o => o && o !== 'block' && o !== 'blk');
-}
-
-// Platsens nivåer prövas inifrån och ut. En vy vars namn är exakt blocket är
-// säker; en vy som bara innehåller blockets ord är en gissning, och flera
-// lika bra gissningar ger ingen vald vy alls.
-function isvMatchaVy(platsVag, vyer) {
-  for (const niva of [...(platsVag || [])].reverse()) {
-    const ord = isvOrd(niva);
-    if (!ord.length) continue;
-    const exakta = [], innehaller = [];
-    for (const v of vyer) {
-      const vo = isvOrd(v.namn);
-      if (vo.join(' ') === ord.join(' ')) exakta.push(v);
-      else if (isvInnehaller(vo, ord)) innehaller.push(v);
-    }
-    const block = ord.join(' ');
-    if (exakta.length === 1) return { block, vyId: exakta[0].id, saker: true };
-    if (exakta.length > 1) return { block, vyId: null };
-    if (innehaller.length === 1) return { block, vyId: innehaller[0].id, saker: false };
-    if (innehaller.length > 1) return { block, vyId: null };
-  }
-  return { block: null, vyId: null };
-}
-
-function isvInnehaller(helhet, del) {
-  for (let i = 0; i + del.length <= helhet.length; i++) {
-    if (del.every((o, j) => helhet[i + j] === o)) return true;
-  }
-  return false;
-}
-
-// Rullistan: användaren väljer en annan vy, eller bara modellen med nålen.
-function isvValjVy(vyId) {
-  const k = _isv.kontext;
-  if (!k?.ms || !_isv.aktiv) return;
-  k.vyId = vyId;
-  k.hur = 'sparad';
-  isvSparaVal(isvValNyckel(k), vyId);
-  _isv.tillatStor = null;
-  isvKorOm();
-}
-
-function isvLaddaStorVy() {
-  _isv.tillatStor = _isv.kontext?.vyId || null;
-  isvKorOm();
-}
-
-// Kör om det aktuella ärendet i samma kö som klicken. Valet är redan sparat,
-// så isvKontext hittar det.
-function isvKorOm() {
-  if (!_isv.aktiv) return;
-  _isv.onskat = _isv.aktiv;
-  if (!_isv.arbetar) isvArbeta();
-}
-
-// Laddar vyns modeller, eller bara nålens modell om ingen vy är vald.
-async function isvLaddaKontext() {
-  const lank = _isv.lank, k = _isv.kontext;
-  if (!lank) return;
-  const pinLineage = isvLineage(lank.urn);
-  const vy = k?.vyer.find(v => v.id === k.vyId) || null;
-  const lista = [];
-
-  const lagg = (lineage, viewableName, guid) => {
-    const dok = k?.ms?.dok || [];
-    const sammaFil = dok.filter(d => isvLineage(d.documentLineage?.lineageUrn) === lineage);
-    const d = sammaFil.find(x => guid && x.viewableGuid === guid)
-           || sammaFil.find(x => viewableName && x.viewableName === viewableName)
-           || sammaFil[0];
-    if (!d) return;
-    const nyckel = `${d.versionUrn}|${d.viewableGuid || ''}`;
-    if (!lista.some(x => x.nyckel === nyckel)) lista.push({ nyckel, urn: toSafeBase64(d.versionUrn), guid: d.viewableGuid, lineage, namn: d.displayName || '' });
-  };
-
-  if (vy) for (const d of vy.definition) lagg(isvLineage(d.lineageUrn), d.viewableName, null);
-  // Nålens modell är alltid med, även om vyn saknar den.
-  lagg(pinLineage, lank.details.viewable?.name, lank.details.viewable?.guid);
-  if (!lista.some(x => x.lineage === pinLineage)) {
-    // Modellen finns inte i något model set längre: ta versionen ärendet skapades i.
-    const o = lank.details.viewerState.objectSet.find(o => isvAvkoda(o.seedUrn).includes(pinLineage.split(':').pop()));
-    if (o) lista.push({ nyckel: `ärende|${o.seedUrn}`, urn: o.seedUrn, guid: lank.details.viewable?.guid, lineage: pinLineage, namn: '' });
-  }
-  if (!lista.length) throw new Error('Hittar inte modellen som ärendet sitter i.');
-
-  if (vy && lista.length > ISV_MAX_MODELLER && _isv.tillatStor !== vy.id) {
-    _isv.storVy = { namn: vy.namn, antal: lista.length };
-    isvSattStatus('');
-    return;
-  }
-  _isv.storVy = null;
-
-  const nya = lista.filter(x => !_isv.modeller.has(x.nyckel)).length;
-  isvSattStatus(nya ? `Laddar ${nya === 1 ? 'en modell' : `${nya} modeller`}…` : '');
-  const t0 = performance.now();
-  await isvLaddaModeller(lista);
-  if (_isv.onskat) return;
-
-  await isvArendetsVy();
-  const sek = (performance.now() - t0) / 1000;
-  isvSattStatus(nya && sek > 0.3 ? `Klar på ${sek.toFixed(1).replace('.', ',')} s` : '');
-}
-
-function isvAvkoda(b64) {
-  try { return atob(String(b64).replace(/-/g, '+').replace(/_/g, '/')); } catch { return ''; }
 }
 
 // Laddar det som saknas och tar bort det som inte behövs, så att minnet bara
@@ -593,7 +617,9 @@ function isvStang() {
   _isv.modeller.clear();
   _isv.aktiv = null;
   _isv.lank = null;
-  _isv.kontext = null;
+  _isv.vy = null;
+  _isv.laddarVy = false;
+  _isv.vyOnskas = false;
   _isv.storVy = null;
   _isv.tillatStor = null;
   _isv.onskat = null;
