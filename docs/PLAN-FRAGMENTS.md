@@ -54,6 +54,23 @@ BCF-style from the ACC issue itself. Full plan with risks: `C:\Users\MahdiElMahd
     "Ungefärlig placering". Only tested with made-up ids. #17/#18 (Revit model, no IFC export in the light
     model) are greyed "Finns inte i den lätta modellen".
   - R&D test data: #20 "TEST - nål på IFC (Building-Structural)".
+
+## After publishing (Mahdi, 2026-11-06)
+- **File picker** ("Lägg till från ACC") rebuilt because finding IFCs was tedious and the list jumped on every
+  click (the whole window was redrawn). Now: tab "Sök i projektet" lists every IFC in the project via the DM
+  search `filter[fileType]=ifc` per top folder (R&D: 11 files in 1.3 s, folder paths filled in by 1.9 s,
+  cached per folder), newest first, filtered as you type on name and folder; tab "Bläddra i mappar" keeps the
+  tree. Click anywhere on a row, Shift-click for a range, "Markera alla som syns", chosen files as tags with ×.
+  The window is built once and only the changed parts are updated; scroll position is kept (tested: 40 → 40
+  after clicks and Shift-click; tree 60 → 60), and the main settings list keeps its scroll during conversions.
+- **Storage folder is a setting**: "Sparas i ACC: … Ändra". Changing it copies every .frag and writes the index
+  in the new folder, then overwrites the old index with `{ flyttadTill }`, which `ilmLasIndexfil` follows, so
+  everyone finds the new place. Tested: moved R&D's test model from "Modellvy (test)" to "Modellvy (test 2)";
+  a fresh search found the new index with no duplicate warning, and the viewer loaded the copied files.
+  The old files stay (the app cannot delete in ACC).
+- **Mouse like Model Coordination**: left drag orbits, right/middle drag pans, wheel zooms towards the cursor
+  (and on past it), double-click zooms to the element and makes it the orbit centre, click selects. Orbit
+  and zoom speeds halved/0.6 of That Open's default, no drag smoothing. OrbitMode's 300 m max distance raised.
   **3** viewer loads the models, cut/measure/properties. **4** issues in the model (pin, camera, box), greying.
 - One .frag per IFC (only a changed IFC is reconverted). Issues find their element by IFC GlobalId (IFC-pinned:
   stored directly; Revit-pinned: Revit UniqueId → GlobalId by Revit's rule, tested only with made-up data).

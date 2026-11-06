@@ -94,6 +94,7 @@ function isfStarta() {
     world.renderer = new OBC.SimpleRenderer(components, behallare);
     world.camera = new OBC.OrthoPerspectiveCamera(components);
     components.init();
+    isfStallInMusen(world.camera.controls);
     await world.camera.controls.setLookAt(25, 18, 25, 0, 0, 0, false);
     components.get(OBC.Grids).create(world);
     components.get(OBC.Raycasters).get(world);
@@ -542,6 +543,60 @@ function isfArendeVisas() {
   return !!id && !!_isf.platser.get(id);
 }
 
+// ── Mus: som i Model Coordination ────────────────────────────────────────────
+// Mahdi (2026-11-06): kontrollerna ska kännas som Autodesks visare i Model
+// Coordination, och snurra i lugnare takt än That Opens standard:
+//   vänster drag   snurra runt mittpunkten
+//   höger drag     panorera (även mittenknappen)
+//   hjul           zooma mot muspekaren, och vidare förbi punkten
+//   klick          välj element
+//   dubbelklick    zooma in på elementet; det blir ny mittpunkt
+// Rörelserna följer musen direkt (ingen eftersläpning), men byte av vy glider.
+
+const ISF_SNURR_FART = 0.5;   // That Opens standard är 1, vilket upplevdes som för snabbt
+const ISF_ZOOM_FART  = 0.6;
+
+function isfStallInMusen(c) {
+  const A = c.constructor.ACTION;
+  c.mouseButtons.left   = A.ROTATE;
+  c.mouseButtons.right  = A.TRUCK;
+  c.mouseButtons.middle = A.TRUCK;
+  c.mouseButtons.wheel  = A.DOLLY;
+  c.touches.one   = A.TOUCH_ROTATE;
+  c.touches.two   = A.TOUCH_DOLLY_TRUCK;
+  c.touches.three = A.TOUCH_TRUCK;
+  c.azimuthRotateSpeed = ISF_SNURR_FART;
+  c.polarRotateSpeed   = ISF_SNURR_FART;
+  c.dollySpeed         = ISF_ZOOM_FART;
+  c.truckSpeed         = 2;          // panorering följer pekaren
+  c.dollyToCursor      = true;
+  c.infinityDolly      = true;       // zooma vidare in i modellen i stället för att fastna
+  c.minDistance        = 0.5;
+  c.maxDistance        = 1e5;        // That Opens orbitläge sätter 300 m, för lite för stora projekt
+  c.draggingSmoothTime = 0;
+  c.smoothTime         = 0.2;
+}
+
+// Dubbelklick utan verktyg: zooma in på elementet under musen och snurra runt det.
+async function isfZoomaTillElement() {
+  const v = _isf.varld;
+  if (!v || !isfHarModell()) return;
+  const traff = await v.components.get(v.OBC.Raycasters).get(v.world).castRay().catch(() => null);
+  if (!traff?.fragments || traff.localId == null) return;
+  const lada = await traff.fragments.getMergedBox([traff.localId]).catch(() => null);
+  if (!lada || lada.isEmpty()) return;
+  const T = v.THREE;
+  const c = v.world.camera.controls;
+  const mitt = lada.getCenter(new T.Vector3());
+  const radie = Math.max(0.5, lada.getBoundingSphere(new T.Sphere()).radius);
+  const fov = (v.world.camera.three.fov || 45) * Math.PI / 180;
+  // Samma blickriktning som nu, så nära att elementet fyller ungefär halva bilden.
+  const riktning = c.getPosition(new T.Vector3()).sub(c.getTarget(new T.Vector3())).normalize();
+  const oga = mitt.clone().add(riktning.multiplyScalar(radie / Math.sin(fov / 2) * 1.6));
+  await c.setLookAt(oga.x, oga.y, oga.z, mitt.x, mitt.y, mitt.z, true);
+  v.fm.core.update(true);
+}
+
 // ── Mus: välja element, dubbelklick för mätning och snittplan ─────────────────
 
 function isfKopplaMus(behallare) {
@@ -573,8 +628,12 @@ function isfKopplaMus(behallare) {
       v.components.get(OBF.LengthMeasurement).create();
     } else if (_isf.snitt === 'plan') {
       await v.components.get(v.OBC.Clipper).create(v.world);
+    } else {
+      await isfZoomaTillElement();
     }
   });
+  // Högerklick panorerar; webbläsarens meny ska inte komma upp.
+  behallare.addEventListener('contextmenu', e => e.preventDefault());
 }
 
 async function isfValjUnderMusen() {

@@ -50,7 +50,8 @@ const _ilm = {
   jobb:      new Map(),  // "projekt|nyckel" → { pid, nyckel, namn, steg, andel, fel, kalla, ifc, fil }
   ko:        [],         // jobbnycklar i tur
   arbetar:   false,
-  blad:      null,       // filväljaren: { lage: 'ifc'|'mapp', pid, topp, innehall, oppna, valda, noder, vald }
+  blad:      null,       // filväljaren, se ilmOppnaBlad
+  sokvagar:  new Map(),  // "projekt|mapp-id" → löfte om mappens sökväg (ilmMappSokvag)
   drar:      false,      // en fil dras över fönstret
 };
 
@@ -64,7 +65,22 @@ function ilmTolka(text) {
   let d;
   try { d = JSON.parse(text); } catch { throw new Error(`${ILM_FIL} är inte giltig JSON`); }
   if (d?.typ !== ILM_TYP) throw new Error(`${ILM_FIL} har fel innehåll`);
+  // En flyttad modell lämnar en hänvisning till förteckningen i den nya mappen (ilmFlyttaModell).
+  if (d.flyttadTill) return { flyttadTill: d.flyttadTill, mapp: d.mapp || null, filer: [] };
   return { mapp: d.mapp || null, filer: Array.isArray(d.filer) ? d.filer.filter(f => f?.ifc?.itemId) : [] };
+}
+
+// Läser en förteckning (och följer en hänvisning efter en flytt, ett steg).
+async function ilmLasIndexfil(pid, itemId) {
+  let [text, mapp] = await Promise.all([readTextFile(pid, itemId), getItemParent(pid, itemId).catch(() => null)]);
+  let data = ilmTolka(text);
+  if (data.flyttadTill) {
+    itemId = data.flyttadTill;
+    [text, mapp] = await Promise.all([readTextFile(pid, itemId), getItemParent(pid, itemId).catch(() => null)]);
+    data = ilmTolka(text);
+    if (data.flyttadTill) throw new Error(`${ILM_FIL} hänvisar i en ring`);
+  }
+  return { itemId, mapp: mapp ? { id: mapp.id, sokvag: data.mapp?.sokvag || vkMappNamnAv(mapp) } : data.mapp, data };
 }
 
 // Letar upp förteckningen: först där den låg senast, annars med sökning.
@@ -72,9 +88,9 @@ async function ilmHittaIndex(pid) {
   const minne = isvLasVal(`ilm-index:${pid}`, null);
   if (minne) {
     try {
-      const [text, mapp] = await Promise.all([readTextFile(pid, minne), getItemParent(pid, minne)]);
-      const data = ilmTolka(text);
-      return { itemId: minne, mapp: { id: mapp.id, sokvag: data.mapp?.sokvag || vkMappNamnAv(mapp) }, data, dubletter: 0 };
+      const fil = await ilmLasIndexfil(pid, minne);
+      if (fil.itemId !== minne) isvSparaVal(`ilm-index:${pid}`, fil.itemId);
+      return { ...fil, dubletter: 0 };
     } catch { /* borttagen eller flyttad: sök */ }
   }
   const toppar = (await getTopFolders(ilmHub(), pid)).filter(f => !f.attributes?.hidden);
@@ -85,11 +101,11 @@ async function ilmHittaIndex(pid) {
   const filer = [...new Map(traffar.map(t => [t.itemId, t])).values()]
     .sort((a, b) => String(b.andrad || '').localeCompare(String(a.andrad || '')));
   if (!filer.length) return { itemId: null, mapp: null, data: null, dubletter: 0 };
-  const itemId = filer[0].itemId;
-  const [text, mapp] = await Promise.all([readTextFile(pid, itemId), getItemParent(pid, itemId).catch(() => null)]);
-  const data = ilmTolka(text);
-  isvSparaVal(`ilm-index:${pid}`, itemId);
-  return { itemId, mapp: mapp ? { id: mapp.id, sokvag: data.mapp?.sokvag || vkMappNamnAv(mapp) } : data.mapp, data, dubletter: filer.length - 1 };
+  const fil = await ilmLasIndexfil(pid, filer[0].itemId);
+  isvSparaVal(`ilm-index:${pid}`, fil.itemId);
+  // En hänvisning efter en flytt och dess mål räknas inte som dubletter.
+  const foljd = fil.itemId !== filer[0].itemId && filer.some(f => f.itemId === fil.itemId);
+  return { ...fil, dubletter: Math.max(0, filer.length - (foljd ? 2 : 1)) };
 }
 
 // Läser projektets förteckning en gång (eller om, med tvinga) och kollar sedan versionerna.
@@ -529,7 +545,22 @@ function ilmRita() {
       </div>
       <button onclick="ilmStang()" class="ml-auto text-ads-muted hover:text-ads-text text-lg leading-none" title="Stäng (Esc)">✕</button>
     </div>`;
-  inne.innerHTML = huvud + (_ilm.blad ? ilmBladHtml() : ilmHuvudvyHtml(pid));
+  // Filväljaren byggs en gång och uppdateras sedan i delar (ilmBladRita).
+  if (_ilm.blad) {
+    if (inne.dataset.blad !== _ilm.blad.id) {
+      inne.dataset.blad = _ilm.blad.id;
+      inne.innerHTML = huvud + ilmBladSkal(_ilm.blad);
+      ilmBladRita();
+      requestAnimationFrame(() => document.getElementById('ilm-sok')?.focus());
+    }
+    return;
+  }
+  // Huvudvyn ritas om när jobben går framåt; rullningen behålls.
+  const rull = document.getElementById('ilm-rulla')?.scrollTop || 0;
+  inne.dataset.blad = '';
+  inne.innerHTML = huvud + ilmHuvudvyHtml(pid);
+  const rulla = document.getElementById('ilm-rulla');
+  if (rulla) rulla.scrollTop = rull;
 }
 
 function ilmKnapp(klick, text, extra = '', attr = '') {
@@ -566,6 +597,9 @@ function ilmHuvudvyHtml(pid) {
   // Nya filer som inte finns i förteckningen än visas från kön.
   const nya = jobb.filter(j => !filer.some(f => f.ifc.itemId === j.ifc?.itemId));
   const inaktuella = filer.filter(f => ilmArInaktuell(pid, f) && !_ilm.jobb.get(`${pid}|${f.ifc.itemId}`)).length;
+  // Under en flytt läggs inget till och mappen byts inte; under andra jobb byts inte mappen.
+  const flyttar = !!ix.flyttar;
+  const upptagen = flyttar || jobb.some(j => !j.fel);
 
   const rader = [
     ...filer.map(f => ilmFilradHtml(pid, f, _ilm.jobb.get(`${pid}|${f.ifc.itemId}`))),
@@ -573,10 +607,11 @@ function ilmHuvudvyHtml(pid) {
   ].join('');
 
   return `
-    <div class="flex-1 min-h-0 overflow-y-auto px-5 py-4 ${_ilm.drar ? 'bg-ads-blue/5' : ''}">
+    <div id="ilm-rulla" class="flex-1 min-h-0 overflow-y-auto px-5 py-4 ${_ilm.drar ? 'bg-ads-blue/5' : ''}">
       <div class="flex items-baseline gap-2 text-xs text-ads-muted">
-        <span>Sparas i ACC:</span>
+        <span class="whitespace-nowrap">Sparas i ACC:</span>
         <span class="font-medium text-ads-text truncate" title="${vkEsc(ix.mapp.sokvag || '')}">${vkEsc(ix.mapp.sokvag || 'vald mapp')}</span>
+        ${upptagen ? '' : `<button onclick="ilmOppnaBlad('mapp')" class="text-ads-blue hover:underline whitespace-nowrap" title="Välj en annan mapp för modellens filer. Modellen flyttas dit.">Ändra</button>`}
         ${ix.dubletter ? `<span class="text-amber-700">(${ix.dubletter} äldre ${ix.dubletter === 1 ? 'kopia' : 'kopior'} av ${ILM_FIL} finns också i projektet)</span>` : ''}
       </div>
       ${ix.fel ? `<p class="mt-2 text-xs text-red-700">${vkEsc(ix.fel)}</p>` : ''}
@@ -584,8 +619,8 @@ function ilmHuvudvyHtml(pid) {
       <div class="mt-4 flex items-center gap-2">
         <div class="text-[11px] font-semibold uppercase tracking-wider text-ads-muted">IFC-filer i modellen (${filer.length})</div>
         <div class="flex-1"></div>
-        ${ilmKnapp(`ilmOppnaBlad('ifc')`, 'Lägg till från ACC')}
-        ${ilmKnapp(`document.getElementById('ilm-filval').click()`, 'Lägg till från datorn')}
+        ${ilmKnapp(`ilmOppnaBlad('ifc')`, 'Lägg till från ACC', '', flyttar ? 'disabled' : '')}
+        ${ilmKnapp(`document.getElementById('ilm-filval').click()`, 'Lägg till från datorn', '', flyttar ? 'disabled' : '')}
         <input id="ilm-filval" type="file" accept=".ifc" multiple class="hidden" onchange="ilmLaggTillFranDatorn('${pidJs}', this.files); this.value = ''" />
       </div>
       <div class="mt-2 border border-ads-border rounded divide-y divide-ads-border/70">
@@ -644,18 +679,118 @@ function ilmGlomJobb(pid, nyckel) {
   ilmRita();
 }
 
-// ── Filväljaren: mappar och IFC-filer i ACC ───────────────────────────────────
-// Samma träd för båda lägena: 'mapp' väljer modellens mapp (en), 'ifc' väljer
-// IFC-filer (flera). Id:n innehåller tecken som inte passar i onclick, så
-// knapparna får löpnummer som pekar in i blad.noder.
+// ── Filväljaren: IFC-filer och mappar i ACC ───────────────────────────────────
+// 'ifc' har två flikar. "Sök i projektet" (först): alla IFC-filer i projektet
+// med ACC:s sökning på filtyp (en sökning per toppmapp, ungefär 1 s i R&D), med
+// mappens sökväg, version, storlek och datum, senast ändrade först. Sökrutan
+// filtrerar på namn och mapp medan man skriver. "Bläddra i mappar": trädet.
+// 'mapp' väljer modellens mapp i samma träd.
+//
+// Fönstret byggs en gång per filväljare (ilmBladSkal). Därefter ritas bara de
+// delar om som ändras, och listans rullning behålls, så att inget hoppar när man
+// markerar (Mahdi, 2026-11-06). Ett klick var som helst på raden markerar,
+// Shift-klick markerar ett intervall. Id:n innehåller tecken som inte passar i
+// onclick, så raderna får löpnummer som pekar in i blad.noder.
+
+let _ilmBladNr = 0;
 
 function ilmOppnaBlad(lage) {
   const pid = _ilm.projektId;
-  _ilm.blad = { lage, pid, topp: { laddar: true }, innehall: new Map(), oppna: new Set(), valda: new Map(), noder: [], vald: null };
+  const b = {
+    id: String(++_ilmBladNr), lage, pid, flik: lage === 'ifc' ? 'sok' : 'trad', sokord: '', senast: null, synliga: [],
+    topp: { laddar: true }, innehall: new Map(), oppna: new Set(), valda: new Map(), noder: [], vald: null, rull: {},
+    sok: { laddar: lage === 'ifc', fel: null, lista: [], sokvagar: false },
+  };
+  _ilm.blad = b;
   ilmRita();
   getTopFolders(ilmHub(), pid).then(
-    items => { if (_ilm.blad?.pid === pid) _ilm.blad.topp = { items: items.filter(f => !f.attributes?.hidden) }; ilmRita(); },
-    err   => { if (_ilm.blad?.pid === pid) _ilm.blad.topp = { fel: vkFelText(err) }; ilmRita(); });
+    items => { if (_ilm.blad !== b) return; b.topp = { items: items.filter(f => !f.attributes?.hidden) }; ilmBladRita({ behallRull: true }); },
+    err   => { if (_ilm.blad !== b) return; b.topp = { fel: vkFelText(err) }; ilmBladRita({ behallRull: true }); });
+  if (lage === 'ifc') ilmBladSokIfc(b);
+}
+
+// Alla IFC-filer i projektet, senaste versionen av var och en.
+async function ilmSokIfc(pid) {
+  const toppar = (await getTopFolders(ilmHub(), pid)).filter(f => !f.attributes?.hidden);
+  const filer = new Map();
+  const foralder = new Map();
+  for (const t of toppar) {
+    let url = `${APS_BASE}/data/v1/projects/${pid}/folders/${encodeURIComponent(t.id)}/search?filter[fileType]=ifc&page[limit]=200`;
+    for (let sidor = 0; url && sidor < 50; sidor++) {
+      const res = await bhMedOmforsok(() => apsGetUrl(url)).catch(() => null);
+      if (!res) break;
+      for (const it of res.included || []) if (it.type === 'items') foralder.set(it.id, it.relationships?.parent?.data?.id || null);
+      for (const v of res.data || []) {
+        const a = v.attributes || {};
+        if (/deleted/i.test(a.extension?.type || '')) continue;
+        const itemId = v.relationships?.item?.data?.id;
+        if (!itemId || !/\.ifc$/i.test(a.displayName || '')) continue;
+        if ((filer.get(itemId)?.version ?? -1) >= (a.versionNumber ?? 0)) continue;
+        filer.set(itemId, { itemId, namn: a.displayName, version: a.versionNumber ?? null, storlek: a.storageSize ?? null, andrad: a.lastModifiedTime || '' });
+      }
+      url = res.links?.next?.href || null;
+    }
+  }
+  const lista = [...filer.values()];
+  for (const f of lista) f.mappId = foralder.get(f.itemId) || null;
+  lista.sort((a, b) => String(b.andrad).localeCompare(String(a.andrad)));
+  return { lista, toppar: new Map(toppar.map(t => [t.id, vkMappNamnAv(t)])) };
+}
+
+// En mapps sökväg från toppmappen, t.ex. "Project Files / Sample files / Models". Sparas per mapp.
+function ilmMappSokvag(pid, id, toppar) {
+  const k = `${pid}|${id}`;
+  if (!_ilm.sokvagar.has(k)) {
+    const p = (async () => {
+      if (toppar.has(id)) return toppar.get(id);
+      const bas = `/data/v1/projects/${pid}/folders/${encodeURIComponent(id)}`;
+      const [mapp, foralder] = await Promise.all([bhMedOmforsok(() => apsGet(bas)), bhMedOmforsok(() => apsGet(`${bas}/parent`)).catch(() => null)]);
+      const namn = vkMappNamnAv(mapp.data);
+      const fid = foralder?.data?.id;
+      return fid && fid !== id ? `${await ilmMappSokvag(pid, fid, toppar)} / ${namn}` : namn;
+    })();
+    p.catch(() => _ilm.sokvagar.delete(k));
+    _ilm.sokvagar.set(k, p);
+  }
+  return _ilm.sokvagar.get(k);
+}
+
+async function ilmBladSokIfc(b) {
+  try {
+    const { lista, toppar } = await ilmSokIfc(b.pid);
+    if (_ilm.blad !== b) return;
+    b.sok = { laddar: false, fel: null, lista, sokvagar: !lista.length };
+    lista.forEach(f => { f.i = ilmNod({ id: f.itemId, namn: f.namn, sokvag: '', storlek: f.storlek }); });
+    ilmBladRita({ behallRull: b.flik !== 'sok' });
+    // Mapparnas namn hämtas sex åt gången och fylls i allt eftersom.
+    const mappar = [...new Set(lista.map(f => f.mappId).filter(Boolean))];
+    let i = 0;
+    const arbetare = async () => {
+      while (i < mappar.length) {
+        const id = mappar[i++];
+        const sokvag = await ilmMappSokvag(b.pid, id, toppar).catch(() => '');
+        for (const f of lista) if (f.mappId === id) { f.sokvag = sokvag; b.noder[f.i].sokvag = sokvag; }
+        if (_ilm.blad === b) ilmBladFyllSokvag(id, sokvag);
+      }
+    };
+    await Promise.all(Array.from({ length: 6 }, arbetare));
+    if (_ilm.blad !== b) return;
+    b.sok.sokvagar = true;
+    // Söker man på en mapp ska träffarna stämma när namnen har kommit.
+    if (b.sokord && b.flik === 'sok') ilmBladRita({ behallRull: true }); else ilmBladRitaVerktyg();
+  } catch (err) {
+    if (_ilm.blad !== b) return;
+    b.sok = { laddar: false, fel: vkFelText(err), lista: [], sokvagar: true };
+    ilmBladRita({ behallRull: true });
+  }
+}
+
+function ilmBladFyllSokvag(mappId, sokvag) {
+  const b = _ilm.blad;
+  document.querySelectorAll('#ilm-kropp [data-ilm-sokvag]').forEach(el => {
+    const f = b.sok.lista[Number(el.dataset.ilmSokvag)];
+    if (f?.mappId === mappId) { el.textContent = sokvag; el.title = sokvag; }
+  });
 }
 
 function ilmNod(post) {
@@ -665,33 +800,94 @@ function ilmNod(post) {
   return i;
 }
 
+function ilmIModellen(b) {
+  return new Set(ilmFiler(b.pid).map(f => f.ifc.itemId));
+}
+
+function ilmBladFlik(flik) {
+  const b = _ilm.blad;
+  if (!b || b.flik === flik) return;
+  b.rull[b.flik] = document.getElementById('ilm-kropp')?.scrollTop || 0;
+  b.flik = flik;
+  ilmBladRita();
+  if (flik === 'sok') document.getElementById('ilm-sok')?.focus();
+}
+
+function ilmBladSok(text) {
+  const b = _ilm.blad;
+  if (!b) return;
+  b.sokord = text;
+  b.senast = null;
+  b.rull.sok = 0;
+  ilmBladRita();
+}
+
 async function ilmBladOppna(i) {
   const b = _ilm.blad;
   const nod = b?.noder[i];
   if (!nod) return;
-  if (b.oppna.has(nod.id)) { b.oppna.delete(nod.id); return ilmRita(); }
+  if (b.oppna.has(nod.id)) { b.oppna.delete(nod.id); return ilmBladRita({ behallRull: true }); }
   b.oppna.add(nod.id);
   if (!b.innehall.has(nod.id)) {
     b.innehall.set(nod.id, { laddar: true });
-    ilmRita();
+    ilmBladRita({ behallRull: true });
     try {
       const { poster, tips } = await getFolderContentsWithTips(b.pid, nod.id);
       b.innehall.set(nod.id, { poster, tips });
     } catch (err) {
       b.innehall.set(nod.id, { fel: vkFelText(err) });
     }
+    if (_ilm.blad !== b) return;
   }
-  ilmRita();
+  ilmBladRita({ behallRull: true });
 }
 
-function ilmBladValj(i) {
+// Klick på en rad: markera eller avmarkera. Shift-klick tar med alla rader
+// mellan det förra klicket och det här (i sökfliken), åt samma håll.
+function ilmBladKlick(e, i) {
   const b = _ilm.blad;
   const nod = b?.noder[i];
   if (!nod) return;
-  if (b.lage === 'mapp') b.vald = b.vald?.id === nod.id ? null : nod;
-  else if (b.valda.has(nod.id)) b.valda.delete(nod.id);
-  else b.valda.set(nod.id, nod);
-  ilmRita();
+  if (b.lage === 'mapp') {
+    b.vald = b.vald?.id === nod.id ? null : nod;
+    ilmBladRita({ behallRull: true });
+    return;
+  }
+  const iModellen = ilmIModellen(b);
+  if (iModellen.has(nod.id)) return;
+  const ska = !b.valda.has(nod.id);
+  const fran = b.synliga.indexOf(b.senast), till = b.synliga.indexOf(i);
+  if (e?.shiftKey && b.flik === 'sok' && fran >= 0 && till >= 0) {
+    const [a, c] = fran < till ? [fran, till] : [till, fran];
+    for (const j of b.synliga.slice(a, c + 1)) {
+      const n = b.noder[j];
+      if (iModellen.has(n.id)) continue;
+      if (ska) b.valda.set(n.id, n); else b.valda.delete(n.id);
+    }
+  } else if (ska) b.valda.set(nod.id, nod);
+  else b.valda.delete(nod.id);
+  b.senast = i;
+  ilmBladRitaVal();
+}
+
+function ilmBladMarkeraSynliga(pa) {
+  const b = _ilm.blad;
+  if (!b) return;
+  const iModellen = ilmIModellen(b);
+  for (const j of b.synliga) {
+    const n = b.noder[j];
+    if (iModellen.has(n.id)) continue;
+    if (pa) b.valda.set(n.id, n); else b.valda.delete(n.id);
+  }
+  ilmBladRitaVal();
+}
+
+function ilmBladTaBortVal(i) {
+  const b = _ilm.blad;
+  const nod = b?.noder[i];
+  if (!nod) return;
+  b.valda.delete(nod.id);
+  ilmBladRitaVal();
 }
 
 async function ilmBladKlar() {
@@ -701,8 +897,17 @@ async function ilmBladKlar() {
   if (b.lage === 'mapp') {
     if (!b.vald) return;
     const mapp = { id: b.vald.id, sokvag: b.vald.sokvag };
-    _ilm.blad = null;
     const ix = _ilm.index.get(pid);
+    if (ix?.itemId && ix.mapp) {
+      if (ix.mapp.id === mapp.id) { _ilm.blad = null; ilmRita(); return; }
+      const antal = ix.data?.filer?.length || 0;
+      if (!confirm(`Flytta modellen till ${mapp.sokvag}?\n\nModellens ${antal ? `${antal} ${antal === 1 ? 'fil' : 'filer'} och ` : ''}innehållsförteckning kopieras dit, och alla i projektet hittar den där. De gamla filerna ligger kvar i ${ix.mapp.sokvag} tills du tar bort dem.`)) return;
+      _ilm.blad = null;
+      ilmRita();
+      ilmFlyttaModell(pid, mapp);
+      return;
+    }
+    _ilm.blad = null;
     Object.assign(ix, { laddar: true, fel: null });
     ilmRita();
     try {
@@ -720,10 +925,91 @@ async function ilmBladKlar() {
   ilmLaggTillFranAcc(pid, valda);
 }
 
-function ilmBladHtml() {
+// ── Filväljarens delar ────────────────────────────────────────────────────────
+
+function ilmBladSkal(b) {
+  const flik = (k, text) => `<button id="ilm-flik-${k}" onclick="ilmBladFlik('${k}')" class="px-3 py-1 rounded">${text}</button>`;
+  return `
+    ${b.lage === 'ifc' ? `
+      <div class="shrink-0 px-5 pt-3 pb-2 flex flex-col gap-2 border-b border-ads-border/60">
+        <div class="flex items-center gap-1 text-xs bg-ads-gray rounded p-0.5 self-start">
+          ${flik('sok', 'Sök i projektet')}${flik('trad', 'Bläddra i mappar')}
+        </div>
+        <input id="ilm-sok" type="search" autocomplete="off" spellcheck="false" oninput="ilmBladSok(this.value)"
+               placeholder="Sök på filnamn eller mapp, t.ex. block c ark"
+               class="w-full text-sm border border-ads-border rounded px-3 py-1.5 focus:outline-none focus:border-ads-blue" />
+        <div id="ilm-verktyg" class="flex items-center gap-3 text-[11px] text-ads-muted min-h-[1.25rem]"></div>
+      </div>` : ''}
+    <div id="ilm-kropp" class="flex-1 min-h-0 overflow-y-auto px-3 py-2 text-xs"></div>
+    <div id="ilm-fot" class="shrink-0 border-t border-ads-border bg-ads-gray/50 rounded-b-lg"></div>`;
+}
+
+// Ritar om filväljarens lista (med behållen rullning när behallRull), verktygsraden och foten.
+function ilmBladRita({ behallRull = false } = {}) {
   const b = _ilm.blad;
-  const iModellen = new Set(ilmFiler(b.pid).map(f => f.ifc.itemId));
-  const rad = (djup, inne) => `<div class="flex items-center gap-1.5 py-0.5" style="padding-left: ${djup * 16}px">${inne}</div>`;
+  const kropp = document.getElementById('ilm-kropp');
+  if (!b || !kropp) return;
+  for (const k of ['sok', 'trad']) {
+    const el = document.getElementById(`ilm-flik-${k}`);
+    if (el) el.className = `px-3 py-1 rounded ${b.flik === k ? 'bg-white shadow-sm text-ads-text font-medium' : 'text-ads-muted hover:text-ads-text'}`;
+  }
+  const sok = document.getElementById('ilm-sok');
+  if (sok) sok.classList.toggle('hidden', b.flik !== 'sok');
+  const rull = behallRull ? kropp.scrollTop : (b.rull[b.flik] || 0);
+  kropp.innerHTML = b.flik === 'sok' ? ilmBladListaHtml(b) : ilmBladTradHtml(b);
+  kropp.scrollTop = rull;
+  ilmBladRitaVerktyg();
+  ilmBladRitaFot();
+}
+
+// Efter ett klick: bara raderna, verktygsraden och foten, inget ritas om.
+function ilmBladRitaVal() {
+  const b = _ilm.blad;
+  if (!b) return;
+  document.querySelectorAll('#ilm-kropp [data-ilm-rad]').forEach(el => {
+    const n = b.noder[Number(el.dataset.ilmRad)];
+    const ruta = el.querySelector('input[type=checkbox]');
+    if (!ruta || ruta.disabled) return;
+    const vald = !!n && b.valda.has(n.id);
+    ruta.checked = vald;
+    el.classList.toggle('bg-ads-blue/10', vald);
+  });
+  ilmBladRitaVerktyg();
+  ilmBladRitaFot();
+}
+
+function ilmBladListaHtml(b) {
+  const s = b.sok;
+  if (s.laddar) return '<p class="p-3 text-ads-muted">Söker efter IFC-filer i projektet…</p>';
+  if (s.fel) return `<p class="p-3 text-red-700">Sökningen gick inte: ${vkEsc(s.fel)}. Prova fliken Bläddra i mappar.</p>`;
+  const ord = b.sokord.toLowerCase().split(/\s+/).filter(Boolean);
+  const traffar = s.lista.filter(f => { const t = `${f.namn} ${f.sokvag || ''}`.toLowerCase(); return ord.every(o => t.includes(o)); });
+  b.synliga = traffar.map(f => f.i);
+  if (!s.lista.length) return '<p class="p-3 text-ads-muted">Hittade inga IFC-filer i projektet.</p>';
+  if (!traffar.length) return `<p class="p-3 text-ads-muted">Inga IFC-filer matchar ”${vkEsc(b.sokord)}”.</p>`;
+  const iModellen = ilmIModellen(b);
+  return traffar.map(f => {
+    const finns = iModellen.has(f.itemId);
+    const vald = b.valda.has(f.itemId);
+    const datum = (f.andrad || '').slice(0, 10);
+    return `
+      <div data-ilm-rad="${f.i}" ${finns ? '' : `onclick="ilmBladKlick(event, ${f.i})" onmousedown="if (event.shiftKey) event.preventDefault()"`}
+           class="flex items-center gap-2.5 px-2 py-1.5 rounded select-none ${finns ? 'opacity-50' : `cursor-pointer hover:bg-ads-gray ${vald ? 'bg-ads-blue/10' : ''}`}">
+        <input type="checkbox" tabindex="-1" class="pointer-events-none accent-ads-blue" ${finns || vald ? 'checked' : ''} ${finns ? 'disabled' : ''} />
+        <div class="min-w-0 flex-1">
+          <div class="truncate font-medium text-ads-text" title="${vkEsc(f.namn)}">${vkEsc(f.namn)}${finns ? ' <span class="font-normal text-ads-muted">· ingår redan</span>' : ''}</div>
+          <div class="truncate text-[11px] text-ads-muted" data-ilm-sokvag="${s.lista.indexOf(f)}" title="${vkEsc(f.sokvag || '')}">${vkEsc(f.sokvag || '…')}</div>
+        </div>
+        <div class="shrink-0 text-right text-[11px] text-ads-muted leading-tight">
+          <div>${f.version ? `V${f.version} · ` : ''}${ilmStorlek(f.storlek)}</div><div>${vkEsc(datum)}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function ilmBladTradHtml(b) {
+  const iModellen = ilmIModellen(b);
+  const rad = (djup, inne, attr = '', klass = '') => `<div ${attr} class="flex items-center gap-1.5 py-0.5 pr-2 rounded ${klass}" style="padding-left: ${djup * 16 + 4}px">${inne}</div>`;
   const mappar = (items, djup, foralder) => items.map(f => {
     const namn = vkMappNamnAv(f);
     const sokvag = foralder ? `${foralder} / ${namn}` : namn;
@@ -733,8 +1019,8 @@ function ilmBladHtml() {
     const vald = b.lage === 'mapp' && b.vald?.id === f.id;
     let html = rad(djup, `
       <button onclick="ilmBladOppna(${i})" class="w-4 text-ads-muted hover:text-ads-text">${oppen ? '▾' : '▸'}</button>
-      ${b.lage === 'mapp' ? `<input type="radio" name="ilm-mapp" ${vald ? 'checked' : ''} onclick="ilmBladValj(${i})" class="accent-ads-blue" />` : ''}
-      <button onclick="${b.lage === 'mapp' ? `ilmBladValj(${i})` : `ilmBladOppna(${i})`}" class="text-left truncate ${vald ? 'font-semibold text-ads-blue' : 'text-ads-text'}">📁 ${vkEsc(namn)}</button>`);
+      ${b.lage === 'mapp' ? `<input type="radio" name="ilm-mapp" ${vald ? 'checked' : ''} onclick="ilmBladKlick(event, ${i})" class="accent-ads-blue" />` : ''}
+      <button onclick="${b.lage === 'mapp' ? `ilmBladKlick(event, ${i})` : `ilmBladOppna(${i})`}" class="text-left truncate ${vald ? 'font-semibold text-ads-blue' : 'text-ads-text'}">📁 ${vkEsc(namn)}</button>`);
     if (oppen) {
       if (!inne || inne.laddar) html += rad(djup + 1, '<span class="text-ads-muted">Läser…</span>');
       else if (inne.fel) html += rad(djup + 1, `<span class="text-red-700">${vkEsc(inne.fel)}</span>`);
@@ -749,11 +1035,14 @@ function ilmBladHtml() {
             const storlek = tip?.attributes?.storageSize ?? null;
             const j = ilmNod({ id: p.id, namn: p.attributes.displayName, sokvag, storlek });
             const finns = iModellen.has(p.id);
+            const markerad = b.valda.has(p.id);
             return rad(djup + 1, `
               <span class="w-4"></span>
-              <input type="checkbox" ${finns || b.valda.has(p.id) ? 'checked' : ''} ${finns ? 'disabled' : ''} onclick="ilmBladValj(${j})" class="accent-ads-blue" />
-              <button ${finns ? 'disabled' : `onclick="ilmBladValj(${j})"`} class="text-left truncate ${finns ? 'text-ads-muted' : 'text-ads-text'}">${vkEsc(p.attributes.displayName)}</button>
-              <span class="text-[11px] text-ads-muted whitespace-nowrap">${tip?.attributes?.versionNumber ? `V${tip.attributes.versionNumber}` : ''} ${ilmStorlek(storlek)}${finns ? ' · ingår redan' : ''}</span>`);
+              <input type="checkbox" tabindex="-1" class="pointer-events-none accent-ads-blue" ${finns || markerad ? 'checked' : ''} ${finns ? 'disabled' : ''} />
+              <span class="truncate ${finns ? 'text-ads-muted' : 'text-ads-text'}">${vkEsc(p.attributes.displayName)}</span>
+              <span class="ml-auto text-[11px] text-ads-muted whitespace-nowrap">${tip?.attributes?.versionNumber ? `V${tip.attributes.versionNumber} · ` : ''}${ilmStorlek(storlek)}${finns ? ' · ingår redan' : ''}</span>`,
+              `data-ilm-rad="${j}" ${finns ? '' : `onclick="ilmBladKlick(event, ${j})"`}`,
+              finns ? 'opacity-60' : `cursor-pointer select-none hover:bg-ads-gray ${markerad ? 'bg-ads-blue/10' : ''}`);
           }).join('');
           if (!under.length && !ifc.length) html += rad(djup + 1, '<span class="text-ads-muted italic">Inga mappar eller IFC-filer.</span>');
         }
@@ -761,19 +1050,97 @@ function ilmBladHtml() {
     }
     return html;
   }).join('');
-
   const topp = b.topp;
-  const trad = topp.laddar ? '<p class="text-ads-muted">Läser mapparna…</p>'
-    : topp.fel ? `<p class="text-red-700">${vkEsc(topp.fel)}</p>`
+  return topp.laddar ? '<p class="p-2 text-ads-muted">Läser mapparna…</p>'
+    : topp.fel ? `<p class="p-2 text-red-700">${vkEsc(topp.fel)}</p>`
     : mappar(topp.items, 0, '');
+}
+
+function ilmBladRitaVerktyg() {
+  const b = _ilm.blad;
+  const el = document.getElementById('ilm-verktyg');
+  if (!b || !el) return;
+  if (b.flik !== 'sok' || b.sok.laddar || b.sok.fel) { el.innerHTML = ''; return; }
+  const iModellen = ilmIModellen(b);
+  const valbara = b.synliga.filter(j => !iModellen.has(b.noder[j].id));
+  const allaValda = valbara.length && valbara.every(j => b.valda.has(b.noder[j].id));
+  el.innerHTML = `
+    <span>${b.sokord ? `${b.synliga.length} av ${b.sok.lista.length}` : b.sok.lista.length} IFC-filer${b.sok.sokvagar ? '' : ' · hämtar mappnamn…'}</span>
+    <span class="flex-1"></span>
+    ${valbara.length ? `<button onclick="ilmBladMarkeraSynliga(${allaValda ? 'false' : 'true'})" class="text-ads-blue hover:underline">${allaValda ? 'Avmarkera alla som syns' : `Markera alla som syns (${valbara.length})`}</button>` : ''}
+    <span>Shift-klick markerar flera i rad</span>`;
+}
+
+function ilmBladRitaFot() {
+  const b = _ilm.blad;
+  const el = document.getElementById('ilm-fot');
+  if (!b || !el) return;
   const antal = b.lage === 'mapp' ? (b.vald ? 1 : 0) : b.valda.size;
-  return `
-    <div class="flex-1 min-h-0 overflow-y-auto px-5 py-3 text-xs">${trad}</div>
-    <div class="shrink-0 flex items-center gap-2 px-5 py-3 border-t border-ads-border bg-ads-gray/50 rounded-b-lg">
-      <span class="text-xs text-ads-muted truncate">${b.lage === 'mapp' ? (b.vald ? vkEsc(b.vald.sokvag) : 'Ingen mapp vald') : `${antal} ${antal === 1 ? 'fil vald' : 'filer valda'}`}</span>
+  const etiketter = b.lage === 'ifc' && antal ? `
+    <div class="px-5 pt-2 flex flex-wrap gap-1 max-h-20 overflow-y-auto">
+      ${[...b.valda.values()].map(n => `
+        <span class="inline-flex items-center gap-1 max-w-[16rem] bg-white border border-ads-blue/40 rounded-full pl-2.5 pr-1 py-0.5 text-[11px] text-ads-text" title="${vkEsc(n.sokvag ? `${n.sokvag} / ${n.namn}` : n.namn)}">
+          <span class="truncate">${vkEsc(n.namn)}</span>
+          <button onclick="ilmBladTaBortVal(${b.noder.indexOf(n)})" class="w-4 h-4 leading-none rounded-full text-ads-muted hover:text-white hover:bg-ads-muted" title="Ta bort ur urvalet">×</button>
+        </span>`).join('')}
+    </div>` : '';
+  el.innerHTML = `${etiketter}
+    <div class="flex items-center gap-2 px-5 py-3">
+      <span class="text-xs text-ads-muted truncate">${b.lage === 'mapp' ? (b.vald ? vkEsc(b.vald.sokvag) : 'Ingen mapp vald') : antal ? `${antal} ${antal === 1 ? 'fil vald' : 'filer valda'}` : 'Klicka på de filer som ska ingå'}</span>
       <div class="flex-1"></div>
       ${ilmKnapp('_ilm.blad = null; ilmRita()', 'Tillbaka')}
       ${ilmKnapp('ilmBladKlar()', b.lage === 'mapp' ? 'Välj mappen' : `Lägg till${antal ? ` (${antal})` : ''}`,
                  antal ? 'border-ads-blue bg-ads-blue text-white hover:bg-ads-blue-dark' : '', antal ? '' : 'disabled')}
     </div>`;
+}
+
+// ── Byta mapp ─────────────────────────────────────────────────────────────────
+// Modellen flyttas till den nya mappen: varje .frag kopieras dit, en ny
+// förteckning skrivs där, och den gamla förteckningen skrivs om till en
+// hänvisning { flyttadTill } så att alla som hittar den gamla följer med
+// (ilmHittaIndex). De gamla filerna ligger kvar; ACC lät inte appen ta bort filer.
+
+async function ilmFlyttaModell(pid, mapp) {
+  const ix = _ilm.index.get(pid);
+  const fran = ix.mapp;
+  const nyckel = `${pid}|flytt`;
+  const j = { pid, nyckel: 'flytt', namn: `Flyttar modellen till ${mapp.sokvag}`, kalla: 'flytt', steg: 'Flyttar', andel: 0, fel: null };
+  _ilm.jobb.set(nyckel, j);
+  ix.flyttar = true;
+  ilmRita();
+  try {
+    const farsk = await ilmHittaIndex(pid);
+    const data = farsk.data || { filer: [] };
+    let klara = 0;
+    for (const f of data.filer) {
+      ilmSteg(j, `Kopierar ${f.ifc.namn}`, klara / Math.max(1, data.filer.length));
+      if (f.frag?.itemId) {
+        const bytes = await ilmHamtaFil(pid, f.frag.itemId, () => {});
+        const finns = await ilmFilIMapp(pid, mapp.id, f.frag.namn);
+        const storage = await createStorage(pid, mapp.id, f.frag.namn);
+        await uploadToStorage(storage, new Blob([bytes]));
+        const item = finns ? (await createVersion(pid, finns, f.frag.namn, storage), finns) : await createItem(pid, mapp.id, f.frag.namn, storage);
+        const tip = await ilmTip(pid, item);
+        f.frag = { ...f.frag, itemId: item, versionId: tip.versionId || null };
+        if (f.frag.versionId) isfCacheSpara(f.frag.versionId, new Uint8Array(bytes)).catch(() => {});
+      }
+      klara++;
+    }
+    ilmSteg(j, 'Sparar', 1);
+    data.mapp = { id: mapp.id, sokvag: mapp.sokvag };
+    const text = JSON.stringify({ typ: ILM_TYP, version: 1, mapp: data.mapp, filer: data.filer }, null, 2);
+    const iNya = await ilmFilIMapp(pid, mapp.id, ILM_FIL);
+    const nyttItem = await writeTextFile(pid, mapp.id, ILM_FIL, text, iNya);
+    // Den gamla förteckningen pekar vidare; skrivs sist så att den är senast ändrad.
+    const hanvisning = JSON.stringify({ typ: ILM_TYP, version: 1, flyttadTill: nyttItem, mapp: data.mapp, flyttad: new Date().toISOString() }, null, 2);
+    if (farsk.itemId && farsk.mapp && farsk.itemId !== nyttItem) await writeTextFile(pid, farsk.mapp.id, ILM_FIL, hanvisning, farsk.itemId);
+    isvSparaVal(`ilm-index:${pid}`, nyttItem);
+    Object.assign(ix, { laddar: false, fel: null, itemId: nyttItem, mapp: data.mapp, data, dubletter: 0, flyttar: false });
+    _ilm.jobb.delete(nyckel);
+  } catch (err) {
+    console.warn('Modellinställningar: flytta', err);
+    j.fel = `Flytten gick inte: ${vkFelText(err)}. Modellen ligger kvar i ${fran?.sokvag || 'den gamla mappen'}.`;
+    ix.flyttar = false;
+  }
+  ilmUppdateraVyer(pid);
 }
