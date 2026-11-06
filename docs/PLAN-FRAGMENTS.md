@@ -6,6 +6,61 @@ project exports IFC) to That Open's Fragments (.frag), store them in ACC, and sh
 BCF-style from the ACC issue itself. Full plan with risks: `C:\Users\MahdiElMahdi\.claude\plans\cozy-meandering-biscuit.md`
 (parts 1–4). Fragments can only be made from IFC, not from .rvt.
 
+## New brief (Mahdi, 2026-11-06, Instruktioner.docx) — this replaces the plan's parts 2–4
+- Drop Model Coordination views and the Autodesk viewer entirely (too slow). The viewer under the issue list is
+  Fragments only.
+- Two buttons: "Visa modell" (toggle) and "Modellinställningar" (popup with an animation). In the popup the user
+  picks the IFC files that make up the model (from Data Management, from the computer, or drag and drop) and
+  updates the model. The choices are remembered per project. A red bubble on the button shows that an IFC has a
+  newer version. The Fragments model is stored in ACC so everyone in the project can use it.
+- IFC files picked from the computer are uploaded to ACC (Mahdi's OK 2026-11-06), so everyone can update the
+  model and the red bubble works for them.
+- The viewer has cut and measure (and properties, asked for earlier the same day) and shows the issues.
+- Parts: **1** remove Autodesk, two buttons, popup shell, empty Fragments viewer (built 2026-11-06, tested
+  locally with made-up issues: libraries incl. components-front load, viewer survives redraws and reopening,
+  popup animates, Esc closes, arrow keys step; not yet tested signed in on R&D). **2** settings: pick IFC,
+  convert in the background, store .frag + index in an ACC folder chosen once per project, version check
+  (built 2026-11-06, tested signed in on R&D, test folder "Project Files / Modellvy (test)": folder picked in
+  the popup; Building-Architecture/Structural added from ACC and converted in the worker (17/18 kB); a copy of
+  Building-Hvac.ifc dropped as "from the computer" was uploaded to the folder and converted; a new IFC version
+  made outside the app gave the red bubble after reload, "Uppdatera modellen" converted V2 and the bubble went;
+  removing and re-adding reused the same .frag file as version 2; the index is found by search without the
+  browser's memory (1.9 s); upload in parts tested with 5 MB parts (3 parts, identical download). Not tested:
+  a real file over 50 MB, a user without write permission, two users saving at the same time. A 12 MB
+  "TEST multipart.bin" is left in the test folder (the API delete was refused); delete it by hand.)
+  Index `arenden-lattmodell.json` format is at the top of `issues-lattmodell.js`. Conversion runs in
+  `issues-frag-omvandla.js` (module worker, esm.sh with `?deps=three@0.182.0,web-ifc@0.0.77`).
+  New .frag files are put in the browser cache (IndexedDB `forma-lattmodell`, keyed by the .frag version id).
+  **3** viewer (built 2026-11-06, tested signed in on R&D with Building-Architecture/Structural/Hvac): the three
+  models load in 2 s the first time and 0.4 s from the browser cache (no downloads); a model updated in the
+  settings is swapped by itself (Hvac .frag V2 → V3). Models are loaded with the IFC lineage as model id, and
+  Fragments' `autoCoordinate` shifts each to line up with the first (Structural moved 7 m and matched).
+  Tools: ⌂ whole model; Snitt = section box of six `OBC.Clipper` planes (normal pointing inwards keeps the
+  inside; three.js clips the negative side) or free planes by double-click; Mät = `LengthMeasurement` from
+  components-front (double-click two points, snaps to corners/edges, mm; its labels need a CSS2DRenderer,
+  added on first use; Delete removes the one under the mouse); Egenskaper = click selects (highlight) and a
+  side panel shows attributes, type, storey and property/quantity sets from `getItemsData` (IsDefinedBy).
+  The small box 30 m left of the house is part of the sample IFC, which is why "whole model" is off-centre.
+  **4** issues in the model (built 2026-11-06, tested on R&D #19 and #20, both pinned in MC on IFC models):
+  - The coordinate rule, measured, not assumed: Autodesk shows an IFC with its IfcMapConversion applied
+    (#19's zone corners in Autodesk's viewer = web-ifc corners through the map, to 0.2 mm). The .frag is
+    web-ifc's coordinates (m, Y up) + `getCoordinates()` (the shift COORDINATE_TO_ORIGIN made, which changes
+    between conversions), and the viewer adds each model's autoCoordinate offset (`matrixWorld`).
+    `getMergedBox`/`getBoxes` already return viewer coordinates. Result: #19 0.36 m from its zone (the pin
+    really sits there in MC), #20 0.04 m from its wall in the shifted Structural model.
+  - The converter skipped IfcSpatialZone (#19 sat on one); it and IFC4.3 infra classes are added, and
+    `ILM_FORMAT` 2 makes older .frag files show as "Behöver göras om" with the red bubble.
+  - Revit-pinned issues: UniqueId → GlobalId by Revit's export rule, pin at the element's centre, marked
+    "Ungefärlig placering". Only tested with made-up ids. #17/#18 (Revit model, no IFC export in the light
+    model) are greyed "Finns inte i den lätta modellen".
+  - R&D test data: #20 "TEST - nål på IFC (Building-Structural)".
+  **3** viewer loads the models, cut/measure/properties. **4** issues in the model (pin, camera, box), greying.
+- One .frag per IFC (only a changed IFC is reconverted). Issues find their element by IFC GlobalId (IFC-pinned:
+  stored directly; Revit-pinned: Revit UniqueId → GlobalId by Revit's rule, tested only with made-up data).
+- Files: `tools/issues/issues-visare.js` (panel, list hooks, detail row), `issues-frag.js` (viewer, `isf`),
+  `issues-lattmodell.js` (settings, `ilm`), import map in `index.html` (incl. `potree-core` and
+  `@thatopen/components-front` for measuring).
+
 Rules from Mahdi:
 - Test only with the IFCs in R&D "Project Files / Sample files / Models"
   (Building-Architecture/Hvac/Landscaping/Structural, Infra-Bridge/Landscaping/Plumbing/Rail/Road). All are in
@@ -15,6 +70,20 @@ Rules from Mahdi:
   model's `refPointTransformation` (AEC data, read without geometry; R&D L1D1 model: rotated about 118°, SWEREF
   in feet) to go internal → shared. Check with the element's id. BCF from Forma was considered and rejected
   as the alignment source (manual, goes stale, Autodesk's own conversion). BCF stays an optional export.
+
+## Viewer tools (Mahdi, 2026-11-06): cut, properties, measure
+Part 3 (Modellvy on Fragments) must include these, as toolbar buttons in the model bar:
+- **Cut:** the issue's section box (six `OBC.Clipper` planes) can be dragged bigger or smaller, plus free cut
+  planes (double-click a face to add one, drag to move, delete). "Återställ" returns to the issue's box.
+- **Properties:** click an element → a side panel with name, IFC class, GlobalId, property sets and
+  quantities, read from the .frag itself (`model.getItemsData`, with relations `IsDefinedBy`), so no ACC calls.
+  Check in part 1 that the converter keeps the property sets (it should; test on Building-Architecture).
+- **Measure:** distance between two points with snapping to edges and corners, shown in mm/m; area if cheap.
+  That Open's measuring tools are in `@thatopen/components-front` 3.6.0, a library not yet loaded: add it to the
+  import map (`?external=three,web-ifc,camera-controls,@thatopen/fragments,@thatopen/components`) and test
+  that it loads in part 1a, like the others.
+- The Autodesk fallback has the same three as built-in extensions (`Autodesk.Section`, `Autodesk.Measure`,
+  the property panel), if they are wanted there too.
 
 ## Part 1a results (2026-11-06, R&D, Building-Architecture.ifc)
 - **Libraries load on the live site** through an import map, dynamically imported from the classic scripts,

@@ -1,5 +1,9 @@
 # Ärendevy: issues above, live model below
 
+**Replaced 2026-11-06:** the Autodesk viewer and Model Coordination views below were removed from the Issues
+tab (too slow, Mahdi). The model is now That Open Fragments made from chosen IFC files: docs/PLAN-FRAGMENTS.md.
+This file keeps the history and what ACC issues store, which part 4 still uses.
+
 Goal: in the Issues tab, show the issue list on top and a light APS viewer below that jumps to the
 selected issue's spot. Only issues placed in Model Coordination are in scope (Mahdi, 2026-11-05).
 

@@ -190,19 +190,43 @@ async function createStorage(projectId, folderId, fileName) {
   return res.data.id;
 }
 
-async function uploadToStorage(storageId, content) {
+// Filer större än en del laddas upp i delar (S3 multipart): adresserna hämtas
+// högst 25 åt gången och samma uploadKey följer med till kvitteringen.
+const UPLOAD_DEL = 50 * 1024 * 1024;
+
+async function uploadToStorage(storageId, content, onProgress) {
   const { bucket, key } = parseStorageId(storageId);
   const base = `/oss/v2/buckets/${bucket}/objects/${encodeURIComponent(key)}/signeds3upload`;
+  const storlek = content?.size ?? content?.byteLength ?? 0;
+  const antal = Math.max(1, Math.ceil(storlek / UPLOAD_DEL));
 
-  const signed = await apsGet(base);
-  const url    = signed.urls?.[0];
-  if (!url) throw new Error('APS lämnade ingen uppladdningsadress.');
+  if (antal === 1) {
+    const signed = await apsGet(base);
+    const url    = signed.urls?.[0];
+    if (!url) throw new Error('APS lämnade ingen uppladdningsadress.');
 
-  // Går direkt till S3 och ska inte ha någon Authorization-header.
-  const put = await fetch(url, { method: 'PUT', body: content });
-  if (!put.ok) throw new Error(`Uppladdningen misslyckades (${put.status}).`);
+    // Går direkt till S3 och ska inte ha någon Authorization-header.
+    const put = await fetch(url, { method: 'PUT', body: content });
+    if (!put.ok) throw new Error(`Uppladdningen misslyckades (${put.status}).`);
+    onProgress?.(1);
+    return apsPost(base, { uploadKey: signed.uploadKey });
+  }
 
-  return apsPost(base, { uploadKey: signed.uploadKey });
+  const blob = content instanceof Blob ? content : new Blob([content]);
+  let uploadKey = null;
+  for (let forsta = 1; forsta <= antal; forsta += 25) {
+    const n = Math.min(25, antal - forsta + 1);
+    const signed = await apsGet(`${base}?parts=${n}&firstPart=${forsta}${uploadKey ? `&uploadKey=${encodeURIComponent(uploadKey)}` : ''}`);
+    uploadKey = signed.uploadKey;
+    if ((signed.urls || []).length < n) throw new Error('APS lämnade för få uppladdningsadresser.');
+    for (let j = 0; j < n; j++) {
+      const del = forsta - 1 + j;
+      const put = await fetch(signed.urls[j], { method: 'PUT', body: blob.slice(del * UPLOAD_DEL, (del + 1) * UPLOAD_DEL) });
+      if (!put.ok) throw new Error(`Uppladdningen av del ${del + 1} av ${antal} misslyckades (${put.status}).`);
+      onProgress?.((del + 1) / antal);
+    }
+  }
+  return apsPost(base, { uploadKey });
 }
 
 async function createItem(projectId, folderId, fileName, storageId) {

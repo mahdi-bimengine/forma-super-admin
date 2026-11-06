@@ -35,6 +35,24 @@
   <style>
     body { font-family: 'Inter', system-ui, sans-serif; }
   </style>
+  <!-- That Open (Fragments) for the light model in Issues. Exact versions; one shared copy of three.
+       Loaded only when the model is shown (tools/issues/issues-frag.js). The map must be complete:
+       components imports three/examples/..., and a failed import is remembered for the page.
+       web-ifc's .js and .wasm must be the same version (wasm path is set in the code). -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://esm.sh/three@0.182.0",
+      "three/": "https://esm.sh/three@0.182.0/",
+      "web-ifc": "https://esm.sh/web-ifc@0.0.77",
+      "camera-controls": "https://esm.sh/camera-controls@3.1.2?external=three",
+      "potree-core": "https://esm.sh/potree-core@2.0.17?external=three",
+      "@thatopen/fragments": "https://esm.sh/@thatopen/fragments@3.6.0?external=three,web-ifc",
+      "@thatopen/components": "https://esm.sh/@thatopen/components@3.6.0?external=three,web-ifc,camera-controls,@thatopen/fragments",
+      "@thatopen/components-front": "https://esm.sh/@thatopen/components-front@3.6.0?external=three,web-ifc,camera-controls,potree-core,@thatopen/fragments,@thatopen/components"
+    }
+  }
+  </script>
 </head>
 <body class="bg-ads-gray text-ads-text min-h-screen flex flex-col">
 
@@ -142,6 +160,8 @@
   <script src="tools/issues/issues-platser.js"></script>
   <script src="tools/issues/issues-medlem.js"></script>
   <script src="tools/issues/issues-visare.js"></script>
+  <script src="tools/issues/issues-frag.js"></script>
+  <script src="tools/issues/issues-lattmodell.js"></script>
   <script src="tools/granskningar/granskningar.js"></script>
   <script src="tools/granskningar/granskningar-filter.js"></script>
   <script src="tools/granskningar/granskningar-spara.js"></script>
