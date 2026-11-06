@@ -79,9 +79,20 @@ Issues placed in MC have one `linkedDocuments` entry, `type: "TwoDVectorPushpin"
 No clash group or clash test id is stored on the issue.
 
 ## Viewer findings
-- Load each `objectSet[].seedUrn` with `loadDocumentNode(doc, node, { keepCurrentModels: true,
-  globalOffset: {0,0,0}, applyRefPoint: false })`. With `applyRefPoint: true` the models move to survey
-  coordinates and the saved camera points at empty space.
+- Load with `applyRefPoint: false`. With `applyRefPoint: true` the models move to survey coordinates and
+  the saved camera points at empty space.
+- Fix 2026-11-06 (precision): loading with `globalOffset: {0,0,0}` broke models far out in real-world
+  coordinates (Building-Architecture.ifc sits about 9 000 km out in mm: sizes up to 0.6 m wrong). Now the first
+  model gets the viewer's own offset (its centre), every other model the same (`_isv.offset`), and the issue's
+  pin, camera (eye/target/pivot) and cut planes are moved by `viewerState.globalOffset − _isv.offset`
+  (`isvForskjutning`, `isvFlyttatLage`). MC stored `globalOffset` 0 and full coordinates in model units for
+  all tested issues (#17/#18 Revit in ft, #19 IFC in mm). Tested: #17, #18, #19 land 0 m from their element;
+  View 1's two models get the same offset.
+- Fix 2026-11-06 (element): for IFC models MC stores the GlobalId as `externalId`, and its `objectId` is a
+  different element in our viewer (#19: MC 39 = "house - gross volume", ours 39 = "sand bedding"). Our viewer
+  uses "0", "1"… as IFC externalIds and has the GlobalId as property `IfcGUID`. `isvElementId` tries Revit's
+  externalId mapping, then `model.search(guid)` (without an attribute filter, which found nothing) with an
+  exact `IfcGUID` check, and selects nothing rather than a wrong element.
 - Call `restoreState(viewerState)` after geometry has loaded, otherwise the viewer's own fit-to-view
   overrides it. Then `select([objectId], pinnedModel)`.
 - Timing: two R&D models loaded and positioned in about 2 to 4 s. Switching to another issue in the same

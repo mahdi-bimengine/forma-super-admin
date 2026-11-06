@@ -9,9 +9,14 @@
 // ärendet skapades, i ett riktigt projekt hela model setet, och det tog över
 // 5 GB minne (2026-11-05).
 //
-// Modellerna laddas i sina egna interna koordinater (applyRefPoint: false,
-// globalOffset 0), annars pekar den sparade kameran ut i tomma luften. Kameran
-// sätts först när geometrin är laddad, annars skriver visaren över den.
+// Modellerna laddas i sina egna koordinater (applyRefPoint: false), annars
+// pekar den sparade kameran ut i tomma luften. Den första modellen flyttas med
+// visarens egen förskjutning (globalOffset) nära origo och de andra flyttas
+// lika mycket (_isv.offset). Utan förskjutning tappar grafiken precision för
+// modeller långt ut i verkliga koordinater: en IFC 9 000 km ut fick mått som
+// var upp till 0,6 m fel (2026-11-06). Ärendets nål, kamera och snitt sparades
+// med Model Coordinations förskjutning och räknas om till vår (isvForskjutning).
+// Kameran sätts först när geometrin är laddad, annars skriver visaren över den.
 //
 // Fliken ritas om helt vid varje ändring, så visaren ligger i en egen ruta
 // (_isv.ruta) som flyttas tillbaka in i platshållaren efter varje omritning.
@@ -22,6 +27,7 @@ const _isv = {
   ruta:      null,        // den bestående rutan med visaren
   viewer:    null,
   modeller:  new Map(),   // versions-URN|vy-guid → { m: laddad modell, lineage }
+  offset:    null,        // { x, y, z } som alla laddade modeller är flyttade med, null när visaren är tom
   mc:        new Map(),   // projekt-id → löfte om model set med senaste filer och vyer
   mcKlar:    new Map(),   // projekt-id → samma sak när den är läst
   mcFel:     new Map(),   // projekt-id → felet om den inte gick att läsa
@@ -611,6 +617,7 @@ async function isvLaddaArendets(pid, info) {
 function isvTom() {
   for (const p of _isv.modeller.values()) { try { _isv.viewer?.unloadModel(p.m); } catch { /* redan borta */ } }
   _isv.modeller.clear();
+  _isv.offset = null;
 }
 
 // Hämtar ärendets placering (en gång) och flyttar kameran dit om dess modell
@@ -686,14 +693,24 @@ async function isvLaddaModeller(lista) {
   for (const [nyckel, post] of _isv.modeller) {
     if (!behov.has(nyckel)) { v.unloadModel(post.m); _isv.modeller.delete(nyckel); }
   }
+  // En tom visare väljer en ny förskjutning efter nästa modell.
+  if (!_isv.modeller.size) _isv.offset = null;
   for (const x of lista) {
     if (_isv.modeller.has(x.nyckel)) continue;
     const doc = await isvLaddaDokument(x.urn);
     const nod = (x.guid && doc.getRoot().search({ guid: x.guid })[0]) || doc.getRoot().getDefaultGeometry();
     if (!nod) throw new Error('Modellen har ingen 3D-vy.');
     if (_isv.viewer !== v) throw new Error('Modellvyn stängdes.');
-    const m = await v.loadDocumentNode(doc, nod, { keepCurrentModels: true, globalOffset: { x: 0, y: 0, z: 0 }, applyRefPoint: false });
+    // Den första modellen får visarens egen förskjutning (mitten av modellen),
+    // de andra samma, så att de ligger rätt mot varandra.
+    const val = { keepCurrentModels: true, applyRefPoint: false };
+    if (_isv.offset) val.globalOffset = { ..._isv.offset };
+    const m = await v.loadDocumentNode(doc, nod, val);
     if (_isv.viewer !== v) throw new Error('Modellvyn stängdes.');
+    if (!_isv.offset) {
+      const g = m.getData?.()?.globalOffset || {};
+      _isv.offset = { x: +g.x || 0, y: +g.y || 0, z: +g.z || 0 };
+    }
     _isv.modeller.set(x.nyckel, { m, lineage: x.lineage });
   }
   await Promise.all([..._isv.modeller.values()].map(p => isvVantaPaGeometri(p.m)));
@@ -720,14 +737,24 @@ function isvNalModell(lank) {
   return null;
 }
 
-// Elementets id kan skilja mellan versioner. Revits unika id (externalId) är
-// detsamma, så det slås upp i den laddade versionen.
-function isvElementId(m, lank) {
+// Elementets id (objectId) kan skilja mellan versioner och mellan Model
+// Coordinations visare och vår, så elementet slås upp på ärendets externalId:
+// - Revit: Revits unika id, som är visarens egen externalId.
+// - IFC: elementets GlobalId. Vår visare numrerar IFC-element "0", "1"… som
+//   externalId och har GlobalId som egenskapen IfcGUID, så den söks fram. MC:s
+//   objectId pekade på ett annat element hos oss (R&D #19, 2026-11-06).
+// Hittas inget väljs inget element hellre än fel element.
+async function isvElementId(m, lank) {
   const ext = lank.details.externalId;
-  if (!m || !ext) return Promise.resolve(lank.details.objectId ?? null);
-  return new Promise(klar => {
-    m.getExternalIdMapping(karta => klar(karta?.[ext] ?? lank.details.objectId ?? null), () => klar(lank.details.objectId ?? null));
-  });
+  if (!m || !ext) return lank.details.objectId ?? null;
+  const karta = await new Promise(klar => m.getExternalIdMapping(klar, () => klar(null)));
+  if (karta?.[ext] != null) return karta[ext];
+  const traffar = await new Promise(klar => m.search(ext, klar, () => klar([])));
+  for (const id of traffar || []) {
+    const egen = await new Promise(klar => m.getProperties(id, klar, () => klar(null)));
+    if (egen?.properties?.some(p => p.displayName === 'IfcGUID' && String(p.displayValue) === ext)) return id;
+  }
+  return null;
 }
 
 async function isvArendetsVy() {
@@ -737,19 +764,49 @@ async function isvArendetsVy() {
   const dbId = await isvElementId(m, lank);
   v.showAll();
   v.setCutPlanes([]);
-  v.restoreState(lank.details.viewerState, null, true);
+  const d = isvForskjutning(lank);
+  v.restoreState(isvFlyttatLage(lank.details.viewerState, d), null, true);
   if (m && dbId != null) v.select([dbId], m);
-  try { isvFokus(v, lank, m, dbId); } catch (err) { console.warn('Modellvy: kunde inte fokusera', err); }
+  try { isvFokus(v, lank, m, dbId, d); } catch (err) { console.warn('Modellvy: kunde inte fokusera', err); }
+}
+
+// Hur långt ärendets sparade punkter ska flyttas för att hamna rätt i vår
+// visare: Model Coordinations förskjutning (sparad i ärendet) minus vår.
+// Punkt i modellen = sparad punkt + deras förskjutning = vår punkt + vår.
+function isvForskjutning(lank) {
+  const g = lank.details.viewerState?.globalOffset || {};
+  const o = _isv.offset || { x: 0, y: 0, z: 0 };
+  return { x: (+g.x || 0) - o.x, y: (+g.y || 0) - o.y, z: (+g.z || 0) - o.z };
+}
+
+// En kopia av ärendets viewerState med kameran och snitten flyttade till vår
+// förskjutning. Förskjutningen i kopian sätts till vår, så att visaren inte
+// flyttar något en gång till.
+function isvFlyttatLage(vs, d) {
+  const ny = JSON.parse(JSON.stringify(vs || {}));
+  const flytta = p => {
+    if (Array.isArray(p) && p.length >= 3) return [+p[0] + d.x, +p[1] + d.y, +p[2] + d.z];
+    if (p && typeof p === 'object' && 'x' in p) return { x: +p.x + d.x, y: +p.y + d.y, z: +p.z + d.z };
+    return p;
+  };
+  if (ny.viewport) for (const f of ['eye', 'target', 'pivotPoint']) if (ny.viewport[f]) ny.viewport[f] = flytta(ny.viewport[f]);
+  // Plan a·x + b·y + c·z + w = 0: flyttas punkterna med d blir w' = w − (a,b,c)·d.
+  if (Array.isArray(ny.cutplanes)) ny.cutplanes = ny.cutplanes.map(c => {
+    const [a, b, cc, w] = c.map(Number);
+    return [a, b, cc, w - (a * d.x + b * d.y + cc * d.z)];
+  });
+  ny.globalOffset = { ...(_isv.offset || { x: 0, y: 0, z: 0 }) };
+  return ny;
 }
 
 // Snittlåda runt nålen och nedtoning av allt utom elementen vid nålen. Ärenden
 // som redan har ett eget snitt eller egna dolda/isolerade element i ACC visas
 // som de sparades, utan att det här skrivs över.
-function isvFokus(v, lank, nalModell, dbId) {
+function isvFokus(v, lank, nalModell, dbId, d) {
   const vs  = lank.details.viewerState;
   const pos = lank.details.position;
   if (!pos) return;
-  const p = new THREE.Vector3(pos.x, pos.y, pos.z);
+  const p = new THREE.Vector3(+pos.x + d.x, +pos.y + d.y, +pos.z + d.z);
   const enhet = 1 / ((nalModell || v.model).getUnitScale?.() || 1);   // modellenheter per meter
 
   // Elementen nära nålen, i alla modeller. Det är i praktiken de som krockar.
@@ -827,6 +884,7 @@ function isvStang() {
   _isv.viewer = null;
   _isv.ruta = null;
   _isv.modeller.clear();
+  _isv.offset = null;
   _isv.aktiv = null;
   _isv.lank = null;
   _isv.vy = null;
