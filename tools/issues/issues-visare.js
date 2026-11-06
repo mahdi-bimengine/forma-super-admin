@@ -43,6 +43,12 @@ function isvVisas() {
   return _isv.pa && ISV_YTOR.includes(_is.yta) && !!_is.hamtad && !_is.valjProjekt;
 }
 
+// En fils lineage-URN utan versions- och frågedel (ärendets linkedDocuments.urn
+// jämförs med IFC-filens item-id i den lätta modellen).
+function isvLineage(urn) {
+  return String(urn || '').split('#')[0].split('?')[0];
+}
+
 // Projektet vars modell visas: det senast klickade ärendets, annars det första.
 function isvProjektId() {
   if (_isv.projektId && _is.projekt.has(_isv.projektId)) return _isv.projektId;
