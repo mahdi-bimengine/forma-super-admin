@@ -164,7 +164,9 @@ from his palette (stored for the whole project).
   hidden folders and folders without IFC were left out, a 403 folder was counted, ticks/folder tri-state/shift,
   save with add + remove, a failed conversion with "Försök igen", the IFC folder chosen before the storage folder
   was written into the index, changing the IFC folder moved model files to the "outside" group, and the tree came
-  back from IndexedDB on reopening. Not yet tested signed in on R&D, including the "Öppna i ACC" folder link.
+  back from IndexedDB on reopening. Tested signed in on R&D the same day: IFC folder "Project Files" read in 11 s
+  (238 folders, 11 IFC, folders without IFC left out), saved in the index; "Öppna i ACC" opened the storage folder;
+  Infra-Rail.ifc added (converted in 8 s) and removed again. Its .frag stays in "Modellvy (test 2)".
 - Part 3 (colours) not built. Palette, measured from Mahdi's image (4 × 10 + "no colour"):
   `#000000 #3C3C3C #4D4D4D #666666 #808080 #999999 #BBBBBB #CCCCCC #DCDCDC #FFFFFF`
   `#A61A1A #916010 #5D822C #12437F #006EAF #268D82 #8558C5 #C72877 #A84A39 #523609`
