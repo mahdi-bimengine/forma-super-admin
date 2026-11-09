@@ -169,8 +169,8 @@ function isvRitaRad() {
     <span class="${_isv.fel ? 'text-red-700' : 'text-ads-muted'} whitespace-nowrap">${vkEsc(_isv.status || isfStatus())}</span>
     <div class="flex-1"></div>
     ${isfArendeVisas() ? `
-      <label class="flex items-center gap-1 cursor-pointer text-ads-muted whitespace-nowrap" title="Skär bort allt utom några meter runt ärendet">
-        <input type="checkbox" ${_isf.arendeSnitt ? 'checked' : ''} onchange="isfVaxlaArendeval('arendeSnitt')" class="accent-ads-blue" /> Snittlåda</label>
+      <label class="flex items-center gap-1 cursor-pointer text-ads-muted whitespace-nowrap" title="Skär bort allt över ärendet och visa det uppifrån, som en planritning">
+        <input type="checkbox" ${_isf.arendeSnitt ? 'checked' : ''} onchange="isfVaxlaArendeval('arendeSnitt')" class="accent-ads-blue" /> Plansnitt</label>
       <label class="flex items-center gap-1 cursor-pointer text-ads-muted whitespace-nowrap" title="Visa elementen vid nålen tydligt och resten genomskinligt">
         <input type="checkbox" ${_isf.tona ? 'checked' : ''} onchange="isfVaxlaArendeval('tona')" class="accent-ads-blue" /> Tona ner omgivningen</label>
       <button onclick="isfGaTillArende(_isv.aktiv, _isv.lank)" class="hover:text-ads-blue whitespace-nowrap" title="Gå tillbaka till ärendets plats">Ärendets vy</button>` : ''}

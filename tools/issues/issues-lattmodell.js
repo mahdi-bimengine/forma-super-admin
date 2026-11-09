@@ -2387,7 +2387,18 @@ function ilmSattIfcMapp(pid, mapp) {
 // hänvisning { flyttadTill } så att alla som hittar den gamla följer med
 // (ilmHittaIndex). De gamla filerna ligger kvar; ACC lät inte appen ta bort filer.
 
-async function ilmFlyttaModell(pid, mapp) {
+// Flytten går i samma kö som alla sparningar av förteckningen, så att en färg
+// som väljs under flytten sparas efteråt i den nya mappen och inte samtidigt
+// i den gamla (troligen Mahdis "Fold…"-fel 2026-11-09).
+function ilmFlyttaModell(pid, mapp) {
+  _ilm.skriver++;
+  const p = _ilm.skrivKo.then(() => ilmFlyttaModellNu(pid, mapp));
+  _ilm.skrivKo = p.catch(() => {});
+  p.finally(() => { _ilm.skriver--; });
+  return p;
+}
+
+async function ilmFlyttaModellNu(pid, mapp) {
   const ix = _ilm.index.get(pid);
   const fran = ix.mapp;
   const nyckel = `${pid}|flytt`;

@@ -51,14 +51,15 @@ const _isf = {
   lage:      new Map(), // ärende-id → 'ja' | 'nej': finns ärendets modell eller element i den lätta modellen
   markor:    null,      // nålen i scenen
   tonade:    false,     // omgivningen är nedtonad
-  arendeSnitt: isvLasVal('isf-arendesnitt', true),  // snittlåda runt ärendet
+  arendeSnitt: isvLasVal('isf-arendesnitt', true),  // plansnitt vid ärendet, sett uppifrån
   tona:      isvLasVal('isf-tona', true),           // tona ner allt utom elementen vid nålen
   lador:     new Map(), // modell-id → löfte om { ids, boxar } för nedtoningen
 };
 
 // Fokus på ärendet. Mått i meter.
 const ISF_NARA_M     = 0.3;  // element inom så här långt från nålen hör till ärendet (krockar)
-const ISF_MARGINAL_M = 3;    // snittlådan sträcker sig så här långt runt nålen
+const ISF_MARGINAL_M = 3;    // vyn visar minst så här långt runt nålen
+const ISF_PLAN_OVER_M = 1.2; // plansnittet ligger så här högt över ärendet, som en planritning (Mahdi, 2026-11-09)
 const ISF_ELEMENT_M  = 8;    // och tar med elementet upp till så här långt bort
 const ISF_EXAKT_M    = 0.5;  // en omräknad nål längre än så från sitt element räknas som fel
 
@@ -503,7 +504,7 @@ function isfArendeLage(id) {
 async function isfRensaArende() {
   const v = _isf.varld;
   if (!v) return;
-  if (_isf.markor) { _isf.markor.removeFromParent(); _isf.markor.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); _isf.markor = null; }
+  if (_isf.markor) { _isf.markor.removeFromParent(); _isf.markor.traverse(o => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); }); _isf.markor = null; }
   if (_isf.tonade) {
     _isf.tonade = false;
     _isf.behall.clear();
@@ -539,13 +540,12 @@ async function isfGaTillArende(arende, lank) {
   }
   const T = v.THREE;
 
-  // Nålen: en orange kula som syns genom det som ligger framför.
-  const kula = new T.Mesh(new T.SphereGeometry(0.12, 24, 16),
-                          new T.MeshBasicMaterial({ color: '#E8590C', depthTest: false, transparent: true, opacity: 0.95 }));
-  kula.renderOrder = 999;
-  kula.position.copy(plats.punkt);
-  _isf.markor = kula;
-  v.world.scene.three.add(kula);
+  // Markören: en cirkel med vit kant i ärendets statusfärg från ACC, lika stor
+  // på skärmen oavsett avstånd och synlig genom det som ligger framför.
+  const markor = isfMarkorSprite(T, IS_STATUS[arende.status]?.farg || '#E8590C');
+  markor.position.copy(plats.punkt);
+  _isf.markor = markor;
+  v.world.scene.three.add(markor);
 
   // Området runt ärendet: några meter runt nålen plus elementet (begränsat).
   const lada = new T.Box3(plats.punkt.clone(), plats.punkt.clone()).expandByScalar(ISF_MARGINAL_M);
@@ -553,12 +553,18 @@ async function isfGaTillArende(arende, lank) {
     const tak = new T.Box3(plats.punkt.clone(), plats.punkt.clone()).expandByScalar(ISF_ELEMENT_M);
     lada.union(plats.elementLada.clone().intersect(tak));
   }
+  // Plansnittet: ett vågrätt plan en bit över ärendet; allt ovanför skärs bort
+  // och kameran ser ner på ärendet uppifrån (Mahdi, 2026-11-09).
   if (_isf.arendeSnitt) {
+    // Eget läge ('arende'): planet ritas inte ut och dubbelklick lägger inte till fler.
+    isfSnitt('plan');
     const clipper = v.components.get(v.OBC.Clipper);
-    if (_isf.snitt !== 'lada') isfSnitt('lada');
-    clipper.enabled = true;
-    isfSnittlada(lada);
-  } else if (_isf.snitt === 'lada') {
+    clipper.createFromNormalAndCoplanarPoint(v.world, new T.Vector3(0, -1, 0), plats.punkt.clone().add(new T.Vector3(0, ISF_PLAN_OVER_M, 0)));
+    clipper.visible = false;
+    _isf.snitt = 'arende';
+    isfRitaVerktyg();
+    v.fm.core.update(true);
+  } else if (_isf.snitt) {
     isfSnitt(null);
   }
 
@@ -567,9 +573,11 @@ async function isfGaTillArende(arende, lank) {
   if (_isf.tona) await isfTonaNer(plats);
   if (nr !== _isfArendeNr) return;
 
-  // Kameran: ärendets egen blickriktning, så nära att området fyller bilden.
-  const riktning = plats.kamera ? plats.kamera.mal.clone().sub(plats.kamera.oga).normalize() : new T.Vector3(-1, -0.8, -1).normalize();
-  const mitt = lada.getCenter(new T.Vector3());
+  // Kameran: med plansnitt rakt uppifrån mot ärendet, annars ärendets egen
+  // blickriktning; så nära att området fyller bilden.
+  const riktning = _isf.arendeSnitt ? new T.Vector3(0, -1, 0.0001).normalize()
+    : plats.kamera ? plats.kamera.mal.clone().sub(plats.kamera.oga).normalize() : new T.Vector3(-1, -0.8, -1).normalize();
+  const mitt = _isf.arendeSnitt ? plats.punkt.clone() : lada.getCenter(new T.Vector3());
   const radie = lada.getBoundingSphere(new T.Sphere()).radius;
   const fov = (v.world.camera.three.fov || 45) * Math.PI / 180;
   const avstand = Math.max(2, radie / Math.sin(fov / 2) * 0.9);
@@ -578,6 +586,31 @@ async function isfGaTillArende(arende, lank) {
   v.fm.core.update(true);
   if (nr !== _isfArendeNr) return;
   isvSattStatus(plats.exakt ? '' : 'Ungefärlig placering: nålen visas mitt på elementet.');
+}
+
+// Markören: en rund bild (canvas) med statusfärgen och vit kant, som alltid
+// vänder sig mot kameran och har samma storlek på skärmen.
+function isfMarkorSprite(T, farg) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.shadowColor = 'rgba(0,0,0,0.45)';
+  g.shadowBlur = 10;
+  g.beginPath();
+  g.arc(64, 64, 46, 0, Math.PI * 2);
+  g.fillStyle = '#FFFFFF';
+  g.fill();
+  g.shadowBlur = 0;
+  g.beginPath();
+  g.arc(64, 64, 36, 0, Math.PI * 2);
+  g.fillStyle = farg;
+  g.fill();
+  const tex = new T.CanvasTexture(c);
+  tex.colorSpace = T.SRGBColorSpace;
+  const sprite = new T.Sprite(new T.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
+  sprite.scale.set(0.045, 0.045, 1);
+  sprite.renderOrder = 999;
+  return sprite;
 }
 
 // Allt blir genomskinligt utom ärendets element och det som ligger vid nålen.
@@ -754,7 +787,7 @@ function isfRitaVerktyg() {
   const knapp = (pa, klick, text, titel, extra = '') => `
     <button onclick="${klick}" title="${titel}"
             class="px-2.5 py-1 ${extra} ${pa ? 'bg-ads-blue text-white' : 'bg-white text-ads-text hover:bg-ads-gray'}">${text}</button>`;
-  const snittText = { lada: 'Snitt: låda', plan: 'Snitt: plan' }[_isf.snitt] || 'Snitt';
+  const snittText = { lada: 'Snitt: låda', plan: 'Snitt: plan', arende: 'Plansnitt' }[_isf.snitt] || 'Snitt';
   const antalDolda = [..._isf.dolda].filter(id => _isf.laddade.has(id)).length;
   const prick = ilmHarUppdateringar(_isf.projektId)
     ? '<span class="inline-block w-2 h-2 ml-1 rounded-full bg-red-600 align-middle" title="Det finns nyare IFC-versioner"></span>' : '';

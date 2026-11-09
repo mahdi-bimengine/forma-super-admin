@@ -245,3 +245,11 @@ the search; "I modellen" was remembered after a page reload (then set back to "A
 - "Färga modellen efter disciplin" is a dialog (Mahdi, 2026-11-09): every discipline code in the model with its
   files and a colour swatch that opens the palette; suggested colour = the colour the files already share, else
   `ILM_DISCIPLIN_FARG`, else a spare. "Färga modellen" saves all in one write. Tested locally.
+- Going to an issue (Mahdi, 2026-11-09): a plan section instead of the section box. A horizontal plane 1.2 m above
+  the issue (`ISF_PLAN_OVER_M`) cuts away everything above, in its own mode (`_isf.snitt = 'arende'`, plane not
+  drawn, no double-click planes); the camera looks straight down at the issue. The marker is a circle with a white
+  border in the issue's ACC status colour (`IS_STATUS[status].farg`), a sprite of constant screen size drawn over
+  everything. The option in the row is called "Plansnitt". Tested on R&D #19 (open = orange) by loading the new
+  functions into the live page before publishing.
+- Moving the storage folder now runs in the same write queue as every index save (`ilmFlyttaModell`), so a colour
+  chosen during a move is saved afterwards in the new folder. Likely cause of the "Fold…" error.
