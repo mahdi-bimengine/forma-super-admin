@@ -151,3 +151,26 @@ Part 3 (Modellvy on Fragments) must include these, as toolbar buttons in the mod
    time from the IFC's own placement (IfcSite / IfcMapConversion read with web-ifc), or by a one-time fit
    during conversion. Test on 2–3 sample IFCs (Building and Infra, which have different placements).
 3. Then report part 1a to Mahdi and continue with part 2 of the plan.
+
+## Modellinställningar rebuilt (Mahdi, 2026-11-09)
+Mahdi found picking IFCs too fiddly and could not see where the model was stored. Decisions: one IFC folder per
+project (shared), its tree shown without folders that hold no IFC and without folders with "arkiv" in the name;
+search and filters (in model / not / new version, date older or newer than 14 days, discipline code); the IFC
+date shown on every file, yellow after 14 days; the discipline code is suggested from the file names and set per
+project; the storage folder is always chosen, never automatic; upload from the computer removed; colours per model
+from his palette (stored for the whole project).
+- Parts 1+2 (one window: IFC folder, tree, tick and save, filters, dates, discipline code, files outside the IFC
+  folder) built 2026-11-09 and tested locally with made-up folders (stub injected in the console): Arkiv folders,
+  hidden folders and folders without IFC were left out, a 403 folder was counted, ticks/folder tri-state/shift,
+  save with add + remove, a failed conversion with "Försök igen", the IFC folder chosen before the storage folder
+  was written into the index, changing the IFC folder moved model files to the "outside" group, and the tree came
+  back from IndexedDB on reopening. Not yet tested signed in on R&D, including the "Öppna i ACC" folder link.
+- Part 3 (colours) not built. Palette, measured from Mahdi's image (4 × 10 + "no colour"):
+  `#000000 #3C3C3C #4D4D4D #666666 #808080 #999999 #BBBBBB #CCCCCC #DCDCDC #FFFFFF`
+  `#A61A1A #916010 #5D822C #12437F #006EAF #268D82 #8558C5 #C72877 #A84A39 #523609`
+  `#EC4A41 #FAA21B #87B340 #4679B9 #0696D7 #32BCAD #A76EF5 #E84396 #F26A52 #7D510E`
+  `#F1A7A7 #FDDAA4 #B7D78C #A3BCDC #9BD5EF #84D7CE #C9A7F9 #FF9DCE #FFB3A6 #BB7A14`
+  Known traps (checked in @thatopen/fragments 3.6.0): setColor, setOpacity and highlight share one highlight slot
+  per element and merge, but `resetHighlight([id])` after a selection clears the model colour too, so re-apply it;
+  `#0696D7` is also `ISF_VALD_FARG`, so pick another selection colour on such a model; `ilmUppdateraVyer` →
+  `isfLaddaProjekt` ends with `isfGaTillArende`, so a colour save would move the camera back to the issue.
