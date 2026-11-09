@@ -118,53 +118,75 @@
   <link rel="stylesheet" href="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/style.min.css"/>
   <script src="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/viewer3D.min.js"></script>
 
-  <script src="shared/api.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll-berakna.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll-data.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll-kategorier.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll-spara.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll-parametrar.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll-resultat.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll-ord.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll-excel.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll-historik.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll-motor.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll-pdf.js"></script>
-  <script src="tools/parameterkontroll/parameterkontroll-arenden.js"></script>
-  <script src="tools/ritningsgranskning/ritningsgranskning-las.js"></script>
-  <script src="tools/ritningsgranskning/ritningsgranskning-regler.js"></script>
-  <script src="tools/ritningsgranskning/ritningsgranskning.js"></script>
-  <script src="tools/ritningsgranskning/ritningsgranskning-rapport.js"></script>
-  <script src="tools/veckokontroll/veckokontroll.js"></script>
-  <script src="tools/veckokontroll/veckokontroll-las.js"></script>
-  <script src="tools/veckokontroll/veckokontroll-kor.js"></script>
-  <script src="tools/veckokontroll/veckokontroll-baspunkt.js"></script>
-  <script src="tools/veckokontroll/veckokontroll-not.js"></script>
-  <script src="tools/veckokontroll/veckokontroll-parameter.js"></script>
-  <script src="tools/vyhantering/vyhantering.js"></script>
-  <script src="tools/vyhantering/vyhantering-publika.js"></script>
-  <script src="tools/vyhantering/vyhantering-matris.js"></script>
-  <script src="tools/vyhantering/vyhantering-jamfor.js"></script>
-  <script src="tools/behorigheter/behorigheter-modell.js"></script>
-  <script src="tools/behorigheter/behorigheter-las.js"></script>
-  <script src="tools/behorigheter/behorigheter-skriv.js"></script>
-  <script src="tools/behorigheter/behorigheter.js"></script>
-  <script src="tools/issues/issues-las.js"></script>
-  <script src="tools/issues/issues-skriv.js"></script>
-  <script src="tools/issues/issues-flera.js"></script>
-  <script src="tools/issues/issues-kolumner.js"></script>
-  <script src="tools/issues/issues.js"></script>
-  <script src="tools/issues/issues-ytor.js"></script>
-  <script src="tools/issues/issues-modell.js"></script>
-  <script src="tools/issues/issues-platser.js"></script>
-  <script src="tools/issues/issues-medlem.js"></script>
-  <script src="tools/issues/issues-visare.js"></script>
-  <script src="tools/issues/issues-frag.js"></script>
-  <script src="tools/issues/issues-lattmodell.js"></script>
-  <script src="tools/granskningar/granskningar.js"></script>
-  <script src="tools/granskningar/granskningar-filter.js"></script>
-  <script src="tools/granskningar/granskningar-spara.js"></script>
-  <script src="shared/app.js"></script>
+  <!-- Appens egna filer, i den ordning de ska köras (shared/api.js först, shared/app.js sist).
+       GitHub Pages låter webbläsaren använda en sparad kopia i upp till 10 minuter, så en ny
+       publicering syntes inte direkt. Därför frågar webbläsaren först om varje fil har ändrats
+       (ett litet anrop; svaret är 304 och kopian används när filen är oförändrad), och lägger
+       sedan in filerna. async = false gör att de körs i listans ordning. Filer som laddas på
+       annat sätt (omvandlingens worker) kollas också, men läggs inte in här. -->
+  <script>
+    (() => {
+      const filer = [
+        'shared/api.js',
+        'tools/parameterkontroll/parameterkontroll-berakna.js',
+        'tools/parameterkontroll/parameterkontroll-data.js',
+        'tools/parameterkontroll/parameterkontroll.js',
+        'tools/parameterkontroll/parameterkontroll-kategorier.js',
+        'tools/parameterkontroll/parameterkontroll-spara.js',
+        'tools/parameterkontroll/parameterkontroll-parametrar.js',
+        'tools/parameterkontroll/parameterkontroll-resultat.js',
+        'tools/parameterkontroll/parameterkontroll-ord.js',
+        'tools/parameterkontroll/parameterkontroll-excel.js',
+        'tools/parameterkontroll/parameterkontroll-historik.js',
+        'tools/parameterkontroll/parameterkontroll-motor.js',
+        'tools/parameterkontroll/parameterkontroll-pdf.js',
+        'tools/parameterkontroll/parameterkontroll-arenden.js',
+        'tools/ritningsgranskning/ritningsgranskning-las.js',
+        'tools/ritningsgranskning/ritningsgranskning-regler.js',
+        'tools/ritningsgranskning/ritningsgranskning.js',
+        'tools/ritningsgranskning/ritningsgranskning-rapport.js',
+        'tools/veckokontroll/veckokontroll.js',
+        'tools/veckokontroll/veckokontroll-las.js',
+        'tools/veckokontroll/veckokontroll-kor.js',
+        'tools/veckokontroll/veckokontroll-baspunkt.js',
+        'tools/veckokontroll/veckokontroll-not.js',
+        'tools/veckokontroll/veckokontroll-parameter.js',
+        'tools/vyhantering/vyhantering.js',
+        'tools/vyhantering/vyhantering-publika.js',
+        'tools/vyhantering/vyhantering-matris.js',
+        'tools/vyhantering/vyhantering-jamfor.js',
+        'tools/behorigheter/behorigheter-modell.js',
+        'tools/behorigheter/behorigheter-las.js',
+        'tools/behorigheter/behorigheter-skriv.js',
+        'tools/behorigheter/behorigheter.js',
+        'tools/issues/issues-las.js',
+        'tools/issues/issues-skriv.js',
+        'tools/issues/issues-flera.js',
+        'tools/issues/issues-kolumner.js',
+        'tools/issues/issues.js',
+        'tools/issues/issues-ytor.js',
+        'tools/issues/issues-modell.js',
+        'tools/issues/issues-platser.js',
+        'tools/issues/issues-medlem.js',
+        'tools/issues/issues-visare.js',
+        'tools/issues/issues-frag.js',
+        'tools/issues/issues-lattmodell.js',
+        'tools/granskningar/granskningar.js',
+        'tools/granskningar/granskningar-filter.js',
+        'tools/granskningar/granskningar-spara.js',
+        'shared/app.js',
+      ];
+      const ocksa = ['tools/issues/issues-frag-omvandla.js'];
+      const kolla = f => fetch(f, { cache: 'no-cache' }).then(r => r.blob()).catch(() => null);
+      Promise.all([...filer, ...ocksa].map(kolla)).then(() => {
+        for (const f of filer) {
+          const s = document.createElement('script');
+          s.src = f;
+          s.async = false;
+          document.body.appendChild(s);
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
