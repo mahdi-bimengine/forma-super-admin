@@ -225,5 +225,8 @@ Tested locally with made-up data (stub injected in the console): guide → folde
 conversion with status chips and a failed file; Fler filter with two chips; reopen with filters and folders
 remembered and the search cleared; settings page, picker and back, old files, Esc back to the main view; / and Esc
 in the search; new version → red pill, chip and blue "Uppdatera modellen (1)"; the Modeller menu (red row,
-"Uppdatera" queues the job, "⚙ Modellinställningar…" opens the window) and the bubble on "Visa modell". Not yet
-tested signed in on R&D.
+"Uppdatera" queues the job, "⚙ Modellinställningar…" opens the window) and the bubble on "Visa modell". Tested
+signed in on R&D the same day (read only, nothing changed in ACC): the header has only "Visa modell"; Modeller →
+"⚙ Modellinställningar…" opened the main view (27 IFC files, 3 in the model); the settings page showed both folders
+and found the leftover Infra-Rail .frag under "Gamla modellfiler"; Esc went back; "Fler filter" opened; / focused
+the search; "I modellen" was remembered after a page reload (then set back to "Alla").
