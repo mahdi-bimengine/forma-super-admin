@@ -405,6 +405,14 @@ async function ilmArbeta() {
   _ilm.arbetar = false;
 }
 
+// Tar bort projektets filer som väntar i kön (inte den som görs om just nu).
+function ilmTomKo(pid) {
+  const bort = _ilm.ko.filter(k => k.startsWith(`${pid}|`) && _ilm.jobb.get(k)?.steg === 'I kö');
+  _ilm.ko = _ilm.ko.filter(k => !bort.includes(k));
+  for (const k of bort) _ilm.jobb.delete(k);
+  ilmUppdateraVyer(pid);
+}
+
 // Förloppet skrivs direkt i radens text, så att listan inte ritas om hela
 // tiden (då missas klick). Ett nytt steg ritar om.
 function ilmSteg(j, steg, andel = null) {
@@ -1543,7 +1551,17 @@ function ilmInstHtml(pid) {
   const ix = _ilm.index.get(pid);
   const pidJs = vkEsc(pid);
   const ifc = ilmIfcMapp(pid);
-  const upptagen = !!ix?.flyttar || [..._ilm.jobb.values()].some(j => j.pid === pid && !j.fel);
+  // Lagringsmappen kan inte bytas medan filer görs om eller väntar i kön (de
+  // sparas i den gamla mappen) eller medan modellen flyttas. Varför står synligt.
+  const pagar = [..._ilm.jobb.values()].filter(j => j.pid === pid && !j.fel && j.kalla !== 'flytt');
+  const upptagen = !!ix?.flyttar || pagar.length > 0;
+  const iKo = _ilm.ko.filter(k => k.startsWith(`${pid}|`) && _ilm.jobb.get(k)?.steg === 'I kö').length;
+  const varfor = !ix?.mapp || !upptagen ? '' : ix.flyttar ? 'Modellen flyttas just nu.' : `
+    <div class="mt-1 rounded bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+      Kan inte ändras medan modellen uppdateras: ${pagar.length} ${pagar.length === 1 ? 'fil' : 'filer'} kvar
+      (${pagar.slice(0, 3).map(j => `${vkEsc(j.namn)}: ${vkEsc(j.steg || 'I kö')}`).join(', ')}${pagar.length > 3 ? ', …' : ''}).
+      Vänta tills ${pagar.length === 1 ? 'den är klar' : 'de är klara'}${iKo ? `, eller ${ilmLank(`ilmTomKo('${pidJs}')`, `ta bort ${iKo === 1 ? 'filen som väntar' : `de ${iKo} som väntar`} i kön`)}` : ''}.
+    </div>`;
   const avsnitt = (rubrik, inne) => `
     <section class="py-4 border-t border-ads-border/60 first:border-0">
       <h4 class="text-[11px] font-semibold uppercase tracking-wider text-ads-muted mb-2">${rubrik}</h4>${inne}</section>`;
@@ -1566,6 +1584,7 @@ function ilmInstHtml(pid) {
         ${mappRad('Modellen sparas i', ix?.mapp, 'Den som uppdaterar modellen behöver kunna skapa filer i mappen. Byts mappen kopieras modellen dit.',
                   `${ix?.mapp ? ilmAccLank(pid, ix.mapp) : ''}${ilmLank(`ilmOppnaBlad('lagring')`, ix?.mapp ? 'Ändra' : 'Välj mapp',
                     upptagen && ix?.mapp ? 'disabled title="Vänta tills modellen är klar"' : '')}`)}
+        ${varfor ? `<div class="pl-[10.75rem]">${varfor}</div>` : ''}
         <div class="mt-1">${ilmVarningarHtml(pid)}</div>`)}
       ${avsnitt('Uppdatering', `
         <label class="flex items-start gap-2 ${ix?.mapp ? 'cursor-pointer' : 'opacity-50'}">

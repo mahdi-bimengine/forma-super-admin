@@ -234,3 +234,7 @@ the search; "I modellen" was remembered after a page reload (then set back to "A
   German "Archiv") are hidden like "arkiv" (`ILM_ARKIV = /arkiv|archiv/i`). "Architecture" and "Arkitekt" stay.
   Trees cached in the browser before the change are cleaned when shown (`ilmRensaTrad`); the chosen IFC folder
   is never hidden, whatever its name.
+- Greyed-out "Ändra" for the storage folder (Mahdi, 2026-11-09): it is blocked on purpose while files are being
+  converted or wait in the queue (they are saved in the old folder), but nothing said so. The settings page now
+  says why, lists the files and their step, and offers to remove the queued ones (`ilmTomKo`; the file being
+  converted must finish). Tested locally with made-up data; the button came back when the last file was done.
