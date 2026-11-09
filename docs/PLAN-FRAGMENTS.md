@@ -253,3 +253,28 @@ the search; "I modellen" was remembered after a page reload (then set back to "A
   functions into the live page before publishing.
 - Moving the storage folder now runs in the same write queue as every index save (`ilmFlyttaModell`), so a colour
   chosen during a move is saved afterwards in the new folder. Likely cause of the "Fold…" error.
+- The "Fold…" error in full (Mahdi, 2026-11-09): "Folder urn:… do not exist or were deleted in database". The
+  browser remembered the index in a storage folder that had since been deleted. A write that gets this answer now
+  forgets the remembered index, searches the project again and writes there (`ILM_BORTTAGEN_MAPP`,
+  `ilmHittaIndex(pid, utanMinne)`); with no model left it says the folder is gone and the guide asks for a new one.
+  A move no longer fails if the old folder is already deleted. Tested locally with made-up data.
+
+## Modellinställningar as a guided workflow (Mahdi, 2026-11-09)
+Mahdi wanted a guided process where no step can lock another, instead of loose settings, and the button next to
+"Visa modell". Decisions: colours and file choices are saved with Nästa; the window opens on Översikt when the
+model exists; ✕ (discard what is not saved) and 💾 (save a draft and continue later) sit left of Tillbaka/Nästa;
+Översikt offers "Fortsätt setup" and "Ändra setup"; files outside a new IFC folder are not kept; a banner shows the
+queue while the window is closed, and the browser asks before the page is closed while something is running.
+- Code: the window is now its own file, `issues-lattmodell-fonster.js` (steps, draft, banner, and the list, filter,
+  folder tree and palette code moved from `issues-lattmodell.js`, which keeps data, queue and tree).
+- Steps: Översikt · 1 IFC-mapp · 2 Lagring · 3 Filer · 4 Färger. Steps 3–4 open once both folders exist.
+- One queue (`ilmKoa`/`ilmArbeta`): conversions and the move of the storage folder (`kalla: 'flytt'`) run in turn;
+  a move waits for the conversions queued before it. Nothing is greyed out: a converting file can be unticked
+  (`ilmAvbryt`: out of the queue, or removed from the model when done).
+- Draft: `ilm-utkast:<id>` (step, chosen folders, ticks, colours, discipline code), only in that browser. After an
+  IFC folder change, files outside the new folder are unticked in step 3 until step 3 is saved (`ilm-rensa:<id>`,
+  survives ✕ and 💾).
+- Header: [Visa modell | ⚙] with the red bubble on ⚙.
+Tested locally with made-up data: the whole setup from an empty project, 💾 and resume, a move queued behind a
+running conversion (it waited, the queued file was dropped when unticked), the banner, colours by discipline and per
+file in one write, an IFC folder change with ✕ in between, Esc. Not yet tested signed in on R&D.
