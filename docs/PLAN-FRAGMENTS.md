@@ -197,3 +197,33 @@ from his palette (stored for the whole project).
   per element and merge, but `resetHighlight([id])` after a selection clears the model colour too, so re-apply it;
   `#0696D7` is also `ISF_VALD_FARG`, so pick another selection colour on such a model; `ilmUppdateraVyer` →
   `isfLaddaProjekt` ends with `isfGaTillArende`, so a colour save would move the camera back to the issue.
+
+## Simpler for new users, deeper for experts (Mahdi, 2026-11-09: "Bygg alla" of the ranked interface list)
+- 1 **Kom igång**: until both the IFC folder and the storage folder are chosen, the window shows only those two
+  steps (the next one has the blue button). If the index could not be read, the guide warns before a new storage
+  folder is picked, so a project does not get two models.
+- 2 **⚙ Inställningar**: folders (with "Öppna i ACC"), automatic update, discipline code (with an example and
+  "Färga modellen efter disciplin") and old model files moved to their own page. The main view keeps one line:
+  "IFC-filer från … · modellen sparas i …" (a click opens the settings).
+- 3 **Filters**: search plus Alla / I modellen / Inte i modellen, and a red "Ny version (n)" only when there is
+  one. Date, discipline and order sit under "Fler filter"; active ones show as chips with ✕.
+- 4 **Calmer rows**: name, one status chip (I modellen, Ny version, Behöver uppdateras, Borttagen i ACC), colour
+  and date. Version, size and discipline code with "Visa detaljer" (per browser, `ilm-detaljer`) and in the name's
+  tooltip.
+- 5 **One blue button per state**: Spara ändringar (with Ångra val as a link), else Uppdatera modellen (n), else
+  none. Settings: Klar. Guide: the next step.
+- 6 **Plain words**: "Bearbetar" instead of "Gör om", "Uppdaterad" instead of "Omgjord", no ".frag" or
+  "förteckning" in the window; ? marks explain the rest.
+- 7 **One entry point**: the "Modellinställningar" button left the tab header; the red bubble moved to "Visa
+  modell". The window opens from the viewer's Modeller list (which also gets a red dot, a red marker per outdated
+  model and an "Uppdatera" row), from the empty viewer ("Kom igång") and from a failed load.
+- 8 **Memory per project** (`ilm-minne:<id>`): Visa, date, discipline, order and expanded folders. Not the search
+  text, and not "Ny version" (it would show an empty list once everything is updated).
+- 9 **Shortcuts**: / search, Ctrl+S save, Esc empties the search or closes the top layer; listed with the
+  shift-click tip under the ? on the status line.
+Tested locally with made-up data (stub injected in the console): guide → folder picker → main view; tick, Ctrl+S,
+conversion with status chips and a failed file; Fler filter with two chips; reopen with filters and folders
+remembered and the search cleared; settings page, picker and back, old files, Esc back to the main view; / and Esc
+in the search; new version → red pill, chip and blue "Uppdatera modellen (1)"; the Modeller menu (red row,
+"Uppdatera" queues the job, "⚙ Modellinställningar…" opens the window) and the bubble on "Visa modell". Not yet
+tested signed in on R&D.

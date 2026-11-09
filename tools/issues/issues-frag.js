@@ -330,15 +330,17 @@ function isfMeddelande(projektId) {
   if (!_isf.varld) return 'Startar modellvisaren…';
   if (ilmLaddar(projektId)) return 'Läser modellinställningarna…';
   if (!ilmFiler(projektId).length) {
-    return `Projektet har ingen modell än.<br>Välj vilka IFC-filer den ska bestå av i
-      <button onclick="ilmOppna()" class="text-ads-blue hover:underline">Modellinställningar</button>.`;
+    return `Projektet har ingen modell än.<br><span class="text-xs">Välj vilka IFC-filer den ska bestå av.</span>
+      <div class="mt-3"><button onclick="ilmOppna('${vkEsc(projektId)}')"
+        class="text-xs border rounded px-3 py-1.5 border-ads-blue bg-ads-blue text-white hover:bg-ads-blue-dark">Kom igång</button></div>`;
   }
   if (_isf.laddning && !isfHarModell()) {
     const l = _isf.laddning;
     return `Laddar modellen (${l.klara + 1} av ${l.totalt})…<br><span class="text-xs">${vkEsc(l.namn)}</span>`;
   }
   if (!isfHarModell() && _isf.laddFel.length) {
-    return `<span class="text-red-700">Modellen gick inte att ladda.</span><br><span class="text-xs">${_isf.laddFel.map(vkEsc).join('<br>')}</span>`;
+    return `<span class="text-red-700">Modellen gick inte att ladda.</span><br><span class="text-xs">${_isf.laddFel.map(vkEsc).join('<br>')}</span>
+      <div class="mt-2 text-xs"><button onclick="ilmOppna('${vkEsc(projektId)}')" class="text-ads-blue hover:underline">Öppna modellinställningarna</button></div>`;
   }
   return '';
 }
@@ -754,10 +756,12 @@ function isfRitaVerktyg() {
             class="px-2.5 py-1 ${extra} ${pa ? 'bg-ads-blue text-white' : 'bg-white text-ads-text hover:bg-ads-gray'}">${text}</button>`;
   const snittText = { lada: 'Snitt: låda', plan: 'Snitt: plan' }[_isf.snitt] || 'Snitt';
   const antalDolda = [..._isf.dolda].filter(id => _isf.laddade.has(id)).length;
+  const prick = ilmHarUppdateringar(_isf.projektId)
+    ? '<span class="inline-block w-2 h-2 ml-1 rounded-full bg-red-600 align-middle" title="Det finns nyare IFC-versioner"></span>' : '';
   ruta.innerHTML = `
     <div class="relative flex items-stretch text-xs border border-ads-border rounded shadow divide-x divide-ads-border bg-white">
       ${knapp(false, 'isfVisaAllt()', '⌂', 'Visa hela modellen', 'rounded-l')}
-      ${knapp(_isf.modellMeny, 'isfVaxlaModellMeny()', `Modeller${antalDolda ? ` (${antalDolda} dolda)` : ''}`, 'Vilka modeller som syns, deras färg och datum')}
+      ${knapp(_isf.modellMeny, 'isfVaxlaModellMeny()', `Modeller${antalDolda ? ` (${antalDolda} dolda)` : ''}${prick}`, 'Vilka modeller som syns, deras färg och datum, och modellinställningarna')}
       ${_isf.modellMeny ? isfModellMenyHtml() : ''}
       ${knapp(!!_isf.snitt, `isfSnitt(${_isf.snitt ? 'null' : "'lada'"})`, snittText,
               _isf.snitt ? 'Ta bort snittet' : 'Snittlåda: dra i pilarna för att flytta sidorna')}
@@ -803,23 +807,32 @@ function isfModellMenyHtml() {
     const dold = _isf.dolda.has(f.ifc.itemId);
     const datum = ilmIfcDatum(pid, f);
     const gammal = ilmArGammal(datum);
+    const ny = ilmArInaktuell(pid, f);
     return `
       <label class="flex items-center gap-2 px-3 py-1 hover:bg-ads-gray cursor-pointer ${dold ? 'text-ads-muted' : 'text-ads-text'}">
         <input type="checkbox" ${dold ? '' : 'checked'} onchange="isfVaxlaModell(${i})" class="accent-ads-blue" />
         <span class="shrink-0 w-3 h-3 rounded-full border border-ads-border" style="${ilmFargRuta(f.farg || null)}"></span>
         <span class="truncate flex-1" title="${vkEsc(f.ifc.sokvag ? `${f.ifc.sokvag} / ${f.ifc.namn}` : f.ifc.namn)}">${vkEsc(f.ifc.namn)}</span>
+        ${ny ? '<span class="shrink-0 w-2 h-2 rounded-full bg-red-600" title="Det finns en nyare version av IFC-filen"></span>' : ''}
         <span class="shrink-0 text-[10px] ${gammal ? 'text-amber-800 bg-amber-100 rounded px-1' : 'text-ads-muted'}"
               title="När IFC-versionen i modellen laddades upp till ACC">${ilmDatum(datum) || ''}</span>
       </label>`;
   }).join('');
+  const nya = ilmFiler(pid).filter(f => ilmArInaktuell(pid, f) && !ilmUpptagen(pid, f.ifc.itemId)).length;
   return `
-    <div class="absolute bottom-full left-6 mb-1 w-80 bg-white border border-ads-border rounded shadow-lg py-1 text-xs">
-      <div class="px-3 pt-1 pb-1.5 flex items-center gap-2 text-[11px] text-ads-muted border-b border-ads-border/60">
+    <div class="absolute bottom-full left-6 mb-1 w-80 bg-white border border-ads-border rounded shadow-lg text-xs">
+      <div class="px-3 pt-2 pb-1.5 flex items-center gap-2 text-[11px] text-ads-muted border-b border-ads-border/60">
         <span class="font-semibold uppercase tracking-wider">Modeller</span><span class="flex-1"></span>
         ${_isf.dolda.size ? '<button onclick="isfVisaAllaModeller()" class="text-ads-blue hover:underline">Visa alla</button>' : ''}
-        <button onclick="isfVaxlaModellMeny(); ilmOppna()" class="text-ads-blue hover:underline" title="Färger och vilka IFC-filer som ingår">Ändra…</button>
       </div>
+      ${nya ? `
+        <div class="px-3 py-1.5 flex items-center gap-2 bg-red-50 text-red-700 border-b border-ads-border/60">
+          <span class="flex-1">${nya} ${nya === 1 ? 'IFC-fil har' : 'IFC-filer har'} en ny version.</span>
+          <button onclick="ilmUppdateraAlla('${vkEsc(pid)}')" class="font-medium hover:underline">Uppdatera</button>
+        </div>` : ''}
       <div class="max-h-64 overflow-y-auto py-1">${rader || '<div class="px-3 py-2 text-ads-muted">Inga modeller laddade.</div>'}</div>
+      <button onclick="isfVaxlaModellMeny(); ilmOppna('${vkEsc(pid)}')" title="Välj vilka IFC-filer som ingår, deras färger och var modellen sparas"
+              class="w-full text-left px-3 py-2 border-t border-ads-border/60 text-ads-blue hover:bg-ads-gray rounded-b">⚙ Modellinställningar…</button>
     </div>`;
 }
 

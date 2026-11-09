@@ -69,17 +69,16 @@ function isvProjektId() {
   return [..._is.projekt.keys()][0] || null;
 }
 
-// "Visa modell" och "Modellinställningar" i flikens huvud. Den röda bubblan
-// visar att en vald IFC har en nyare version i ACC (ilmHarUppdateringar).
+// "Visa modell" i flikens huvud. Den röda bubblan visar att en vald IFC har en
+// nyare version i ACC (ilmHarUppdateringar). Modellinställningarna öppnas från
+// modellens verktygsrad (Modeller) eller från rutan när projektet saknar modell.
 function isvKnappHtml() {
   if (!ISV_YTOR.includes(_is.yta)) return '';
   ilmStartaKoll();
   return `
-    <button onclick="isvVaxla()" title="Visa projektets modell under listan. Klicka på ett ärende för att gå till platsen."
-            class="text-xs border rounded px-2.5 py-1.5 transition-colors ${_isv.pa
-              ? 'bg-be-charcoal text-white border-be-charcoal' : 'bg-white text-ads-text border-ads-border hover:border-ads-blue'}">Visa modell</button>
-    <button id="ilm-knapp" onclick="ilmOppna()" title="Välj vilka IFC-filer modellen består av, och uppdatera den."
-            class="relative text-xs border rounded px-2.5 py-1.5 bg-white text-ads-text border-ads-border hover:border-ads-blue">${ilmKnappInre()}</button>`;
+    <button onclick="isvVaxla()" title="Visa projektets modell under listan. Klicka på ett ärende för att gå till platsen. Vilka IFC-filer som ingår väljs under Modeller i modellens verktygsrad."
+            class="relative text-xs border rounded px-2.5 py-1.5 transition-colors ${_isv.pa
+              ? 'bg-be-charcoal text-white border-be-charcoal' : 'bg-white text-ads-text border-ads-border hover:border-ads-blue'}">Visa modell<span id="ilm-bubbla">${ilmBubblaHtml()}</span></button>`;
 }
 
 function isvVaxla() {
