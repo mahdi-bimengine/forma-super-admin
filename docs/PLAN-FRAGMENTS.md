@@ -167,7 +167,14 @@ from his palette (stored for the whole project).
   back from IndexedDB on reopening. Tested signed in on R&D the same day: IFC folder "Project Files" read in 11 s
   (238 folders, 11 IFC, folders without IFC left out), saved in the index; "Öppna i ACC" opened the storage folder;
   Infra-Rail.ifc added (converted in 8 s) and removed again. Its .frag stays in "Modellvy (test 2)".
-- Part 3 (colours) not built. Palette, measured from Mahdi's image (4 × 10 + "no colour"):
+- Part 3 (colours) built 2026-11-09: a swatch on every model file opens the palette (`ILM_PALETT`); the colour is
+  stored as `farg` per file in the index (shared), shown at once, and saved after 0.7 s so quick clicks become one
+  write; unsaved colours ride along with any other write and survive a re-conversion. The viewer applies them in
+  `isfFargaModeller`. Tested locally with a hand-made two-element IFC converted by the real worker: colour on both
+  elements; selection visible on a coloured model (the element is cleared first, otherwise the library's merge
+  keeps the model colour); colour and dimming restored after deselecting; amber selection on a blue model; dimming
+  kept through colour changes and "no colour"; no camera move on a colour change. Not yet tested signed in on R&D.
+  Palette, measured from Mahdi's image (4 × 10 + "no colour"):
   `#000000 #3C3C3C #4D4D4D #666666 #808080 #999999 #BBBBBB #CCCCCC #DCDCDC #FFFFFF`
   `#A61A1A #916010 #5D822C #12437F #006EAF #268D82 #8558C5 #C72877 #A84A39 #523609`
   `#EC4A41 #FAA21B #87B340 #4679B9 #0696D7 #32BCAD #A76EF5 #E84396 #F26A52 #7D510E`

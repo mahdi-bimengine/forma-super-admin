@@ -29,7 +29,9 @@
 //     filer: [{ kalla: 'acc'|'dator',
 //               ifc:  { itemId, namn, sokvag, version, versionId, storlek, datum, enhet, karta },
 //               frag: { itemId, namn, versionId, storlek, format },
-//               omvandlad, omvandladAv }] }
+//               farg, omvandlad, omvandladAv }] }
+// farg är modellens färg i visaren ('#RRGGBB' ur ILM_PALETT) eller null
+// (modellens egna färger). Den gäller alla i projektet.
 // mapp är lagringsmappen. disciplin säger var i filnamnet disciplinkoden står:
 // null = föreslås av verktyget, -1 = används inte, n = del n (från 0) när
 // namnet delas vid - _ . och mellanslag. En äldre version av appen skriver bara
@@ -64,7 +66,19 @@ const ILM_GAMMAL_DAGAR = 14;     // IFC-filer äldre än så får gult datum
 const ILM_KANDA_KODER = new Set(['A', 'B', 'E', 'F', 'G', 'I', 'K', 'L', 'M', 'P', 'R', 'S', 'T', 'U', 'V', 'W', 'Y', 'Z',
   'EL', 'VS', 'VE', 'SP', 'BR', 'ARK', 'KON', 'VVS', 'RÖR', 'SPR', 'TELE', 'STYR', 'MARK', 'GEO', 'LAND', 'KONST']);
 
+// Färgerna en modell kan få (Mahdi, 2026-11-09, uppmätta ur hans bild). Fyra rader om tio.
+const ILM_PALETT = [
+  ['#000000', '#3C3C3C', '#4D4D4D', '#666666', '#808080', '#999999', '#BBBBBB', '#CCCCCC', '#DCDCDC', '#FFFFFF'],
+  ['#A61A1A', '#916010', '#5D822C', '#12437F', '#006EAF', '#268D82', '#8558C5', '#C72877', '#A84A39', '#523609'],
+  ['#EC4A41', '#FAA21B', '#87B340', '#4679B9', '#0696D7', '#32BCAD', '#A76EF5', '#E84396', '#F26A52', '#7D510E'],
+  ['#F1A7A7', '#FDDAA4', '#B7D78C', '#A3BCDC', '#9BD5EF', '#84D7CE', '#C9A7F9', '#FF9DCE', '#FFB3A6', '#BB7A14'],
+];
+const ILM_FARG_VANTA_MS = 700;   // flera snabba färgklick sparas som en
+
 const _ilm = {
+  fargVantar: new Map(), // projekt-id → Map(ifc-item → färg) som inte är sparad än
+  fargTimer:  new Map(), // projekt-id → väntande sparning
+  fargMeny:   null,      // { pid, itemId } när paletten är öppen
   oppen:     false,
   projektId: null,
   index:     new Map(),  // projekt-id → { laddar, fel, itemId, mapp, data, dubletter, lokalt }
@@ -196,6 +210,12 @@ async function ilmSkrivIndexNu(pid, andra, valdMapp) {
   if (!data.ifcMapp) data.ifcMapp = ilmIfcMapp(pid);
   if (data.disciplin === undefined) data.disciplin = ilmDisciplinVal(pid);
   andra(data);
+  // Färger som valts men inte sparats än följer med varje sparning, så att en
+  // omvandling som blir klar under tiden inte tar bort dem.
+  for (const [id, farg] of _ilm.fargVantar.get(pid) || []) {
+    const f = data.filer.find(x => x.ifc.itemId === id);
+    if (f) f.farg = farg;
+  }
   data.mapp = { id: mapp.id, sokvag: mapp.sokvag || data.mapp?.sokvag || '' };
   const text = ilmIndexText(data);
   const itemId = await writeTextFile(pid, mapp.id, ILM_FIL, text, farsk.itemId);
@@ -407,7 +427,11 @@ async function ilmKorJobb(j) {
     // Namnet tas från ACC:s version av filen (den inloggades profil kan sakna namn).
     omvandlad: new Date().toISOString(), omvandladAv: fragTip.av || _profile?.name || _profile?.email || '',
   };
-  await ilmSkrivIndex(pid, d => { d.filer = d.filer.filter(x => x.ifc.itemId !== ifc.itemId).concat(post); });
+  await ilmSkrivIndex(pid, d => {
+    // En uppdaterad IFC behåller sin färg.
+    const fore = d.filer.find(x => x.ifc.itemId === ifc.itemId);
+    d.filer = d.filer.filter(x => x.ifc.itemId !== ifc.itemId).concat({ ...post, farg: fore?.farg ?? null });
+  });
   _ilm.tips.set(`${pid}|${ifc.itemId}`, tip);
   // Den nya modellen sparas i webbläsaren direkt, så att den inte behöver hämtas igen.
   if (post.frag.versionId) isfCacheSpara?.(post.frag.versionId, frag).catch(() => {});
@@ -800,6 +824,98 @@ function ilmGlomJobb(pid, nyckel) {
   ilmRita();
 }
 
+// ── Färger ────────────────────────────────────────────────────────────────────
+// En färg per modell, vald i paletten och sparad i förteckningen för alla i
+// projektet. Färgen syns direkt; själva sparningen väntar en kort stund så att
+// flera snabba klick blir en sparning. Paletten ligger i fönstret, utanför
+// listan, så att den inte försvinner när listan ritas om.
+
+function ilmFarg(pid, itemId) {
+  return ilmFiler(pid).find(f => f.ifc.itemId === itemId)?.farg || null;
+}
+
+function ilmFargRuta(farg) {
+  // Ingen färg: vit med ett rött snedstreck, som i paletten.
+  const ingen = 'background: linear-gradient(to top right, #fff calc(50% - 1px), #DC2626 calc(50% - 1px), #DC2626 calc(50% + 1px), #fff calc(50% + 1px))';
+  return farg ? `background: ${farg}` : ingen;
+}
+
+function ilmFargMeny(e, pid, itemId) {
+  e.stopPropagation();
+  const knapp = e.currentTarget;
+  const fonster = document.querySelector('#ilm-ruta .ilm-fonster');
+  if (_ilm.fargMeny?.itemId === itemId) { ilmStangFargMeny(); return; }
+  ilmStangFargMeny();
+  if (!fonster || !knapp) return;
+  _ilm.fargMeny = { pid, itemId, knapp };
+  const nu = ilmFarg(pid, itemId);
+  const namn = ilmFiler(pid).find(f => f.ifc.itemId === itemId)?.ifc.namn || '';
+  const cirkel = (farg, titel) => `
+    <button onclick="ilmValjFarg(${farg ? `'${farg}'` : 'null'})" title="${titel}"
+            class="w-6 h-6 rounded-full border ${farg === nu ? 'ring-2 ring-offset-2 ring-ads-blue' : ''} ${farg === '#FFFFFF' || !farg ? 'border-ads-border' : 'border-transparent'} hover:scale-110 transition-transform"
+            style="${ilmFargRuta(farg)}"></button>`;
+  const meny = document.createElement('div');
+  meny.id = 'ilm-fargmeny';
+  meny.className = 'absolute z-30 bg-white rounded-lg shadow-xl border border-ads-border p-3';
+  meny.innerHTML = `
+    <div class="text-[11px] text-ads-muted mb-2 max-w-[19rem] truncate" title="${vkEsc(namn)}">Färg för ${vkEsc(namn)}</div>
+    <div class="grid grid-cols-10 gap-1.5">${ILM_PALETT.flat().map(f => cirkel(f, f)).join('')}</div>
+    <div class="mt-2 flex items-center gap-2">${cirkel(null, 'Ingen färg: modellens egna färger')}<span class="text-[11px] text-ads-muted">Ingen färg</span></div>`;
+  meny.addEventListener('mousedown', ev => ev.stopPropagation());
+  fonster.appendChild(meny);
+  // Under rutan, eller ovanför om den inte får plats.
+  const f = fonster.getBoundingClientRect(), k = knapp.getBoundingClientRect(), m = meny.getBoundingClientRect();
+  const vanster = Math.max(8, Math.min(k.right - f.left - m.width, f.width - m.width - 8));
+  const under = k.bottom - f.top + 6;
+  meny.style.left = `${vanster}px`;
+  meny.style.top = `${under + m.height > f.height - 8 ? Math.max(8, k.top - f.top - m.height - 6) : under}px`;
+  setTimeout(() => document.addEventListener('mousedown', ilmFargUtanfor), 0);
+  document.getElementById('ilm-rulla')?.addEventListener('scroll', ilmStangFargMeny, { once: true });
+}
+
+// Ett klick utanför stänger paletten; ett klick på samma färgruta stänger den via ilmFargMeny.
+function ilmFargUtanfor(e) {
+  if (_ilm.fargMeny?.knapp?.contains(e.target)) return;
+  ilmStangFargMeny();
+}
+
+function ilmStangFargMeny() {
+  _ilm.fargMeny = null;
+  document.getElementById('ilm-fargmeny')?.remove();
+  document.removeEventListener('mousedown', ilmFargUtanfor);
+}
+
+function ilmValjFarg(farg) {
+  const m = _ilm.fargMeny;
+  ilmStangFargMeny();
+  if (m) ilmSattFarg(m.pid, m.itemId, farg);
+}
+
+function ilmSattFarg(pid, itemId, farg) {
+  const f = ilmFiler(pid).find(x => x.ifc.itemId === itemId);
+  if (!f || (f.farg || null) === farg) return;
+  f.farg = farg;
+  if (!_ilm.fargVantar.has(pid)) _ilm.fargVantar.set(pid, new Map());
+  _ilm.fargVantar.get(pid).set(itemId, farg);
+  ilmRita();
+  isfModellAndrad?.(pid);
+  clearTimeout(_ilm.fargTimer.get(pid));
+  _ilm.fargTimer.set(pid, setTimeout(() => ilmSparaFarger(pid), ILM_FARG_VANTA_MS));
+}
+
+async function ilmSparaFarger(pid) {
+  const vantar = _ilm.fargVantar.get(pid);
+  if (!vantar?.size) return;
+  const sparas = new Map(vantar);
+  try {
+    await ilmSkrivIndex(pid, () => {});   // de väntande färgerna läggs i av ilmSkrivIndexNu
+    // Det som valts under sparningen ligger kvar till nästa gång.
+    for (const [id, farg] of sparas) if (vantar.get(id) === farg) vantar.delete(id);
+  } catch (err) {
+    alert(`Färgen kunde inte sparas i ACC: ${vkFelText(err)}\n\nDen syns bara för dig tills sidan laddas om.`);
+  }
+}
+
 // ── Filter ────────────────────────────────────────────────────────────────────
 
 function ilmFilterAktivt() {
@@ -888,6 +1004,7 @@ function ilmStang() {
   if (!_ilm.blad && ilmHarAndringar(_ilm.projektId)
       && !confirm('Du har kryssat i eller ur filer utan att spara.\n\nStäng ändå? Valen finns kvar nästa gång du öppnar fönstret.')) return;
   const ruta = document.getElementById('ilm-ruta');
+  ilmStangFargMeny();
   _ilm.oppen = false;
   _ilm.blad = null;
   document.removeEventListener('keydown', ilmTangent, true);
@@ -901,6 +1018,7 @@ function ilmStang() {
 function ilmTangent(e) {
   if (e.key !== 'Escape' || !_ilm.oppen) return;
   e.stopPropagation();
+  if (_ilm.fargMeny) { ilmStangFargMeny(); return; }
   if (_ilm.blad) { _ilm.blad = null; ilmRitaNu(); return; }
   ilmStang();
 }
@@ -1298,6 +1416,9 @@ function ilmFilRad(pid, f, djup, modell, del, orsak = '') {
         ${orsak ? `<div class="text-[11px] text-amber-700 truncate" title="${vkEsc(f.sokvag)}">${vkEsc(orsak)}${f.sokvag ? ` · ${vkEsc(f.sokvag)}` : ''}</div>` : ''}
       </div>
       <span class="shrink-0 flex items-center gap-1 text-[11px]">${ilmFilStatus(pid, id, imod, j)}</span>
+      ${imod ? `<button onclick="ilmFargMeny(event, '${vkEsc(pid)}', '${vkEsc(id)}')" title="${imod.farg ? `Färg i modellen: ${imod.farg}` : 'Ingen färg: modellens egna färger. Klicka för att välja.'}"
+                        class="shrink-0 w-4 h-4 rounded-full border border-ads-border hover:ring-2 hover:ring-ads-blue/40" style="${ilmFargRuta(imod.farg)}"></button>`
+             : '<span class="shrink-0 w-4"></span>'}
       <span class="shrink-0 w-24 text-right text-[11px] text-ads-muted whitespace-nowrap">${f.version ? `V${f.version} · ` : ''}${ilmStorlek(f.storlek)}</span>
       <span class="shrink-0 w-[5.5rem] text-right text-[11px] whitespace-nowrap ${gammal ? 'text-amber-800 bg-amber-100 rounded px-1' : 'text-ads-muted'}"
             title="${vkEsc(datumTitel)}">${ilmDatum(f.datum) || '–'}</span>

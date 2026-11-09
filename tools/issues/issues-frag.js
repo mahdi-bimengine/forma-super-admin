@@ -31,7 +31,9 @@ const _isf = {
   projektId: null,   // projektet vars modell visas
   fel:       null,   // text om visaren inte gick att starta
   db:        null,   // löfte om webbläsarens modellcache (isfCacheDb)
-  laddade:   new Map(), // modell-id (IFC-lineage) → { versionId, namn }
+  laddade:   new Map(), // modell-id (IFC-lineage) → { versionId, namn, koord, farg (den som är lagd på) }
+  vantar:    false,     // ett ärende klickades medan modellerna laddades: gå dit efteråt
+  behall:    new Map(), // modell-id → Set med element som inte tonas ner (isfTonaNer)
   laddar:    false,
   laddaIgen: false,
   laddning:  null,   // { klara, totalt, namn } medan modeller hämtas
@@ -59,6 +61,16 @@ const ISF_ELEMENT_M  = 8;    // och tar med elementet upp till så här långt b
 const ISF_EXAKT_M    = 0.5;  // en omräknad nål längre än så från sitt element räknas som fel
 
 const ISF_VALD_FARG = '#0696D7';
+// Markeringen på en modell med en blå färg nära ISF_VALD_FARG (finns i paletten).
+const ISF_VALD_FARG_BLA_MODELL = '#F59E0B';
+
+function isfValdFarg(modelId) {
+  const farg = _isf.laddade.get(modelId)?.farg;
+  if (!farg) return ISF_VALD_FARG;
+  const a = parseInt(farg.slice(1), 16), b = parseInt(ISF_VALD_FARG.slice(1), 16);
+  const d = Math.hypot(((a >> 16) & 255) - ((b >> 16) & 255), ((a >> 8) & 255) - ((b >> 8) & 255), (a & 255) - (b & 255));
+  return d < 120 ? ISF_VALD_FARG_BLA_MODELL : ISF_VALD_FARG;
+}
 
 function isfBibliotek() {
   if (!_isf.bibliotek) {
@@ -149,11 +161,15 @@ function isfModellAndrad(projektId) {
   if (_isf.varld && projektId === _isf.projektId && !ilmLaddar(projektId)) isfLaddaProjekt(projektId);
 }
 
-// Laddar det som saknas och tar bort det som inte längre ingår. En körning åt
-// gången; ändras förteckningen under tiden körs den en gång till.
+// Laddar det som saknas, tar bort det som inte längre ingår och lägger på
+// modellernas färger. En körning åt gången; ändras förteckningen under tiden
+// körs den en gång till. Kameran går till ärendet bara om modellerna faktiskt
+// ändrades (eller ett ärende klickades under tiden), så att till exempel ett
+// färgbyte inte flyttar den.
 async function isfLaddaProjekt(pid) {
   if (_isf.laddar) { _isf.laddaIgen = true; return; }
   _isf.laddar = true;
+  let andrat = false;
   try {
     do {
       _isf.laddaIgen = false;
@@ -162,6 +178,7 @@ async function isfLaddaProjekt(pid) {
       if (_isf.projektId !== pid || _isf.varld !== v) return;
       const filer = ilmFiler(pid).filter(f => f.frag?.itemId);
       const onskade = new Map(filer.map(f => [f.ifc.itemId, f]));
+      let andratNu = false;
 
       for (const [id, info] of [..._isf.laddade]) {
         const f = onskade.get(id);
@@ -169,6 +186,7 @@ async function isfLaddaProjekt(pid) {
         if (_isf.vald?.modelId === id) _isf.vald = null;
         await v.fm.core.disposeModel(id).catch(() => {});
         _isf.laddade.delete(id);
+        andratNu = true;
       }
 
       const nya = filer.filter(f => !_isf.laddade.has(f.ifc.itemId));
@@ -189,7 +207,8 @@ async function isfLaddaProjekt(pid) {
           // Hur långt omvandlingen flyttade modellen mot origo (web-ifc:s
           // COORDINATE_TO_ORIGIN), i meter med Y uppåt. Behövs för ärendenas nålar.
           const koord = (await modell.getCoordinates().catch(() => null))?.slice(0, 3) || [0, 0, 0];
-          _isf.laddade.set(f.ifc.itemId, { versionId: f.frag.versionId, namn: f.ifc.namn, koord });
+          _isf.laddade.set(f.ifc.itemId, { versionId: f.frag.versionId, namn: f.ifc.namn, koord, farg: null });
+          andratNu = true;
         } catch (err) {
           console.warn('Modellvisaren: ladda', f.ifc.namn, err);
           _isf.laddFel.push(`${f.ifc.namn}: ${String(err.message || err).slice(0, 120)}`);
@@ -197,20 +216,50 @@ async function isfLaddaProjekt(pid) {
         _isf.laddning.klara++;
       }
       _isf.laddning = null;
+      await isfFargaModeller(pid);
       v.fm.core.update(true);
-      // Modellerna har ändrats: ärendenas placering räknas om.
-      _isf.platser.clear();
-      _isf.lador.clear();
-      if (forsta && _isf.laddade.size && !_isv.aktiv) await isfVisaAllt();
-      if (_isf.snitt === 'lada' && !_isv.aktiv) isfSnittlada();
+      if (andratNu) {
+        // Modellerna har ändrats: ärendenas placering räknas om.
+        andrat = true;
+        _isf.platser.clear();
+        _isf.lador.clear();
+        if (forsta && _isf.laddade.size && !_isv.aktiv) await isfVisaAllt();
+        if (_isf.snitt === 'lada' && !_isv.aktiv) isfSnittlada();
+      }
     } while (_isf.laddaIgen);
   } finally {
     _isf.laddar = false;
     _isf.laddning = null;
     isvRitaRad();
   }
-  await isfKartlagg(pid);
-  if (_isv.aktiv && _isv.aktiv.projektId === pid) isfGaTillArende(_isv.aktiv, _isv.lank);
+  if (andrat) await isfKartlagg(pid);
+  if (_isv.aktiv && _isv.aktiv.projektId === pid && (andrat || _isf.vantar)) {
+    _isf.vantar = false;
+    isfGaTillArende(_isv.aktiv, _isv.lank);
+  }
+}
+
+// Lägger på varje modells färg ur förteckningen (eller tar bort den), bara där
+// den har ändrats. Färgen och nedtoningen delar biblioteket i samma fält per
+// element men slås ihop, så nedtoningen ligger kvar. Det markerade elementet
+// markeras om efteråt, annars tar färgen över markeringen.
+async function isfFargaModeller(pid) {
+  const v = _isf.varld;
+  if (!v || _isf.projektId !== pid) return;
+  for (const f of ilmFiler(pid)) {
+    const info = _isf.laddade.get(f.ifc.itemId);
+    const modell = v.fm.list.get(f.ifc.itemId);
+    const farg = f.farg || null;
+    if (!info || !modell || info.farg === farg) continue;
+    try {
+      if (farg) await modell.setColor(undefined, new v.THREE.Color(farg));
+      else await modell.resetColor(undefined);
+      info.farg = farg;
+    } catch (err) {
+      console.warn('Modellvisaren: färg', f.ifc.namn, err);
+    }
+    if (_isf.vald?.modelId === f.ifc.itemId) await isfMarkera(_isf.vald);
+  }
 }
 
 async function isfTomVisaren() {
@@ -435,6 +484,7 @@ async function isfRensaArende() {
   if (_isf.markor) { _isf.markor.removeFromParent(); _isf.markor.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); }); _isf.markor = null; }
   if (_isf.tonade) {
     _isf.tonade = false;
+    _isf.behall.clear();
     for (const m of v.fm.list.values()) await m.resetOpacity(undefined).catch(() => {});
   }
 }
@@ -448,7 +498,8 @@ async function isfGaTillArende(arende, lank) {
   if (!lank) { isvSattStatus('Ärendet är inte placerat i någon modell.'); await isfRensaArende(); return; }
   const v = _isf.varld;
   // Laddas modellen fortfarande går isfLaddaProjekt hit när den är klar.
-  if (!v || _isf.laddar || ilmLaddar(arende.projektId) || _isf.projektId !== arende.projektId) return;
+  if (v && _isf.projektId === arende.projektId && (_isf.laddar || ilmLaddar(arende.projektId))) { _isf.vantar = true; return; }
+  if (!v || _isf.projektId !== arende.projektId) return;
   if (!isfHarModell()) return;
 
   let plats = _isf.platser.get(arende.id);
@@ -524,6 +575,7 @@ async function isfTonaNer(plats) {
     // getBoxes ger, som getMergedBox, visarens koordinater.
     const behall = ids.filter((id, i) => boxar[i] && boxar[i].intersectsBox(nara));
     if (m.modelId === plats.modelId && plats.localId != null && !behall.includes(plats.localId)) behall.push(plats.localId);
+    _isf.behall.set(m.modelId, new Set(behall));
     await m.setOpacity(undefined, 0.12);
     if (behall.length) await m.resetOpacity(behall);
   }
@@ -649,10 +701,22 @@ async function isfMarkera(ny) {
   if (!v) return;
   const forra = _isf.vald;
   _isf.vald = ny;
-  if (forra) await v.fm.list.get(forra.modelId)?.resetHighlight([forra.localId]).catch(() => {});
+  if (forra) {
+    // resetHighlight tömmer allt på elementet, även modellens färg och
+    // nedtoningen, så de läggs tillbaka.
+    const m = v.fm.list.get(forra.modelId);
+    await m?.resetHighlight([forra.localId]).catch(() => {});
+    const farg = _isf.laddade.get(forra.modelId)?.farg;
+    if (m && farg) await m.setColor([forra.localId], new v.THREE.Color(farg)).catch(() => {});
+    if (m && _isf.tonade && !_isf.behall.get(forra.modelId)?.has(forra.localId)) await m.setOpacity([forra.localId], 0.12).catch(() => {});
+  }
   if (ny) {
-    await v.fm.list.get(ny.modelId)?.highlight([ny.localId], {
-      color: new v.THREE.Color(ISF_VALD_FARG), renderedFaces: v.FRAGS.RenderedFaces.TWO, opacity: 1, transparent: false,
+    // Biblioteket slår ihop med det som redan ligger på elementet, och en
+    // modellfärg vinner då över markeringens färg. Därför töms elementet först.
+    const m = v.fm.list.get(ny.modelId);
+    if (_isf.laddade.get(ny.modelId)?.farg) await m?.resetHighlight([ny.localId]).catch(() => {});
+    await m?.highlight([ny.localId], {
+      color: new v.THREE.Color(isfValdFarg(ny.modelId)), renderedFaces: v.FRAGS.RenderedFaces.TWO, opacity: 1, transparent: false,
     }).catch(() => {});
   }
   v.fm.core.update(true);
@@ -897,6 +961,8 @@ function isfStang() {
   _isf.projektId = null;
   _isf.fel = null;
   _isf.laddade.clear();
+  _isf.vantar = false;
+  _isf.behall.clear();
   _isf.laddaIgen = false;
   _isf.laddning = null;
   _isf.laddFel = [];
