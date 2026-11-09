@@ -801,14 +801,15 @@ function isfModellMenyHtml() {
   const filer = ilmFiler(pid).filter(f => _isf.laddade.has(f.ifc.itemId));
   const rader = filer.map((f, i) => {
     const dold = _isf.dolda.has(f.ifc.itemId);
-    const gammal = ilmArGammal(f.ifc.datum);
+    const datum = ilmIfcDatum(pid, f);
+    const gammal = ilmArGammal(datum);
     return `
       <label class="flex items-center gap-2 px-3 py-1 hover:bg-ads-gray cursor-pointer ${dold ? 'text-ads-muted' : 'text-ads-text'}">
         <input type="checkbox" ${dold ? '' : 'checked'} onchange="isfVaxlaModell(${i})" class="accent-ads-blue" />
         <span class="shrink-0 w-3 h-3 rounded-full border border-ads-border" style="${ilmFargRuta(f.farg || null)}"></span>
         <span class="truncate flex-1" title="${vkEsc(f.ifc.sokvag ? `${f.ifc.sokvag} / ${f.ifc.namn}` : f.ifc.namn)}">${vkEsc(f.ifc.namn)}</span>
         <span class="shrink-0 text-[10px] ${gammal ? 'text-amber-800 bg-amber-100 rounded px-1' : 'text-ads-muted'}"
-              title="När IFC-versionen i modellen laddades upp till ACC">${ilmDatum(f.ifc.datum) || ''}</span>
+              title="När IFC-versionen i modellen laddades upp till ACC">${ilmDatum(datum) || ''}</span>
       </label>`;
   }).join('');
   return `

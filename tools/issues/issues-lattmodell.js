@@ -280,6 +280,16 @@ function ilmArInaktuell(pid, f) {
   return !!t && !t.borta && t.version != null && f.ifc.version != null && t.version > f.ifc.version;
 }
 
+// När IFC-versionen i modellen laddades upp. Filer omgjorda före 2026-11-09
+// saknar ifc.datum; då tas det från ACC:s senaste version om den är samma.
+function ilmIfcDatum(pid, f) {
+  if (f.ifc.datum) return f.ifc.datum;
+  const t = _ilm.tips.get(`${pid}|${f.ifc.itemId}`);
+  if (t?.datum && t.version === f.ifc.version) return t.datum;
+  const iTrad = ilmTrad(pid)?.data?.filer.find(x => x.itemId === f.ifc.itemId);
+  return iTrad?.version === f.ifc.version ? iTrad.datum : null;
+}
+
 function ilmGammaltFormat(f) {
   return !!f.frag && (f.frag.format || 1) < ILM_FORMAT;
 }
@@ -1624,7 +1634,7 @@ function ilmListaHtml(pid) {
   for (const m of modell.values()) {
     if (!x.filer.has(m.ifc.itemId)) {
       utanfor.push({ itemId: m.ifc.itemId, namn: m.ifc.namn, sokvag: m.ifc.sokvag || '', version: m.ifc.version,
-                     storlek: m.ifc.storlek, datum: m.ifc.datum || null });
+                     storlek: m.ifc.storlek, datum: ilmIfcDatum(pid, m) });
     }
   }
   for (const j of _ilm.jobb.values()) {
