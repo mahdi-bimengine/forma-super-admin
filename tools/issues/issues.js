@@ -80,6 +80,7 @@ function isOppnaFlik() {
   // Fliken visar projektet som är valt i sidomenyn. Är det inte inläst läses
   // det in direkt, och fler projekt läggs till via "Projekt".
   const aktuellt = _currentProject?.id;
+  isvFoljProjekt();
   if (aktuellt && !_is.projekt.has(aktuellt) && !_is.laddar) {
     _is.valda = new Set([aktuellt]);
     _is.valjProjekt = false;

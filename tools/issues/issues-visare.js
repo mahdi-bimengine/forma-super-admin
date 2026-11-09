@@ -49,6 +49,20 @@ function isvLineage(urn) {
   return String(urn || '').split('#')[0].split('?')[0];
 }
 
+// Anropas när fliken öppnas: byter projekt i sidomenyn har modellen att följa
+// med. Det klickade ärendets projekt och det gamla ärendet gäller inte längre.
+function isvFoljProjekt() {
+  const pid = _currentProject?.id;
+  if (!pid || pid === _isv.sagt) return;
+  _isv.sagt = pid;
+  _isv.projektId = pid;
+  _isv.aktiv = null;
+  _isv.lank = null;
+  _isv.status = '';
+  _isv.fel = false;
+  _isv.hopfallt = null;
+}
+
 // Projektet vars modell visas: det senast klickade ärendets, annars det första.
 function isvProjektId() {
   if (_isv.projektId && _is.projekt.has(_isv.projektId)) return _isv.projektId;
@@ -111,6 +125,14 @@ function isvFastsatt() {
   if (!plats) return;
   if (!_isv.ruta) _isv.ruta = isvSkapaRuta();
   plats.appendChild(_isv.ruta);
+  // Visaren visar ett annat projekt än det valda: byt. Redan hämtade filer
+  // ligger kvar i IndexedDB och i IFC-indexet, så inget hämtas eller
+  // omvandlas igen, bara läses in från webbläsarens lager.
+  const pid = isvProjektId();
+  if (_isv.pa && pid && _isf.projektId && _isf.projektId !== pid && _isv.byte !== pid) {
+    _isv.byte = pid;
+    Promise.resolve(isfVisaProjekt(pid)).finally(() => { _isv.byte = null; });
+  }
   isvLasPlaceringar();
   isvRitaRad();
 }
