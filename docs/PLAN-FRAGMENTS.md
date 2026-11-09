@@ -238,3 +238,10 @@ the search; "I modellen" was remembered after a page reload (then set back to "A
   converted or wait in the queue (they are saved in the old folder), but nothing said so. The settings page now
   says why, lists the files and their step, and offers to remove the queued ones (`ilmTomKo`; the file being
   converted must finish). Tested locally with made-up data; the button came back when the last file was done.
+- Colour save error (Mahdi, 2026-11-09: sometimes "APS error 400 … ERR_BAD_INPUT … detail: Fold…", in a client
+  project, not looked at): not reproduced in R&D (8 colour saves in a row went through). A failed colour save is
+  now retried twice (after 4 and 8 s) before the user is told, and the message shows ACC's own "detail" in full
+  (`ilmAccFel`) instead of the cut-off JSON. Tested locally with forced failures.
+- "Färga modellen efter disciplin" is a dialog (Mahdi, 2026-11-09): every discipline code in the model with its
+  files and a colour swatch that opens the palette; suggested colour = the colour the files already share, else
+  `ILM_DISCIPLIN_FARG`, else a spare. "Färga modellen" saves all in one write. Tested locally.
