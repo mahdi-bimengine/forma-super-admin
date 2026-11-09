@@ -63,7 +63,9 @@ const ILM_STOR_IFC = 300 * 1024 * 1024;   // varning: lång tid och mycket minne
 const ILM_FORMAT = 2;
 
 // Mappar med det här i namnet visas aldrig och läses inte (stora som små bokstäver).
-const ILM_ARKIV = /arkiv/i;
+// "archiv" täcker engelskans archive, archived, archives (Mahdi, 2026-11-09) och tyskans Archiv.
+const ILM_ARKIV = /arkiv|archiv/i;
+const ILM_ARKIV_TEXT = '”arkiv” eller ”archive”';
 const ILM_MAX_MAPPAR = 5000;     // skydd mot att läsa ett helt projekt av misstag
 const ILM_GAMMAL_DAGAR = 14;     // IFC-filer äldre än så får gult datum
 // Vanliga disciplinkoder, för att föreslå var i filnamnet koden står.
@@ -748,11 +750,25 @@ async function ilmTradFranLager(pid, t) {
     });
     // Läsningen kan ha hunnit bli klar före lagret: då vinner den.
     if (v?.data && !t.data && _ilm.trad.get(pid) === t) {
-      t.data = v.data;
+      t.data = ilmRensaTrad(v.data);
       t.tid = v.tid;
       ilmRita();
     }
   } catch { /* utan lager läses trädet bara från ACC */ }
+}
+
+// Tar bort arkivmappar (och allt under dem) ur ett träd som sparades i
+// webbläsaren innan regeln för vilka mappar som döljs ändrades. IFC-mappen
+// själv döljs aldrig, även om den heter något med arkiv.
+function ilmRensaTrad(data) {
+  const bort = new Set(data.mappar.filter(m => m.id !== data.rotId && ILM_ARKIV.test(m.namn || '')).map(m => m.id));
+  if (!bort.size) return data;
+  const foralder = new Map(data.mappar.map(m => [m.id, m.foralder]));
+  const under = id => {
+    for (let n = 0; id && n < 200; id = foralder.get(id), n++) if (bort.has(id)) return true;
+    return false;
+  };
+  return { ...data, mappar: data.mappar.filter(m => !under(m.id)), filer: data.filer.filter(f => !under(f.mappId)) };
 }
 
 async function ilmTradTillLager(pid, t) {
@@ -1513,7 +1529,7 @@ function ilmGuideHtml(pid) {
         </div>` : ''}
       <div class="mt-4">
         ${steg(1, 'ifc', ifc, 'Var ligger projektets IFC-filer?',
-               'Välj den översta mappen. Allt under den visas, utom mappar utan IFC-filer och mappar med ”arkiv” i namnet.')}
+               `Välj den översta mappen. Allt under den visas, utom mappar utan IFC-filer och mappar med ${ILM_ARKIV_TEXT} i namnet.`)}
         ${steg(2, 'lagring', lagring, 'Var ska modellen sparas?',
                'Välj en mapp där du får skapa filer, gärna en egen mapp för modellen. Alla i projektet läser modellen därifrån.')}
       </div>
@@ -1545,7 +1561,7 @@ function ilmInstHtml(pid) {
     <div class="max-w-3xl mx-auto px-6 py-3">
       <p class="text-ads-muted">Inställningarna gäller alla i projektet och sparas direkt.</p>
       ${avsnitt('Mappar', `
-        ${mappRad('IFC-filer hämtas från', ifc, 'Allt under mappen visas, utom mappar utan IFC-filer och mappar med ”arkiv” i namnet.',
+        ${mappRad('IFC-filer hämtas från', ifc, `Allt under mappen visas, utom mappar utan IFC-filer och mappar med ${ILM_ARKIV_TEXT} i namnet.`,
                   `${ifc ? ilmAccLank(pid, ifc) : ''}${ilmLank(`ilmOppnaBlad('ifc')`, ifc ? 'Ändra' : 'Välj mapp')}`)}
         ${mappRad('Modellen sparas i', ix?.mapp, 'Den som uppdaterar modellen behöver kunna skapa filer i mappen. Byts mappen kopieras modellen dit.',
                   `${ix?.mapp ? ilmAccLank(pid, ix.mapp) : ''}${ilmLank(`ilmOppnaBlad('lagring')`, ix?.mapp ? 'Ändra' : 'Välj mapp',
@@ -1763,7 +1779,7 @@ function ilmRitaStatus(pid) {
   if (t.data?.ejLasta) delar.push(`<span class="text-amber-700">${t.data.ejLasta} ${t.data.ejLasta === 1 ? 'mapp' : 'mappar'} gick inte att läsa</span>`);
   if (t.data?.forManga) delar.push(`<span class="text-amber-700">fler än ${ILM_MAX_MAPPAR} mappar, välj en IFC-mapp längre ner</span>`);
   ilmSatt(text, `<span class="truncate">${delar.join(' · ')}</span>${ilmHjalp(
-    'Mappar utan IFC-filer och mappar med ”arkiv” i namnet visas inte.\n\n'
+    `Mappar utan IFC-filer och mappar med ${ILM_ARKIV_TEXT} i namnet visas inte.\n\n`
     + 'Kortkommandon: / söker, Ctrl+S sparar, Esc stänger. Shift-klick kryssar i eller ur alla filer mellan två klick.')}`);
 
   const k = [];
@@ -1880,7 +1896,7 @@ function ilmListaHtml(pid) {
       const borta = _ilm.tips.get(`${pid}|${f.itemId}`)?.borta;
       html.push(ilmFilRad(pid, f, 0, modell, del, borta
         ? 'Finns inte längre i ACC'
-        : 'Ligger i en Arkiv-mapp, utanför IFC-mappen eller i en mapp som inte gick att läsa'));
+        : 'Ligger i en arkivmapp, utanför IFC-mappen eller i en mapp som inte gick att läsa'));
     }
   }
 
@@ -2098,7 +2114,7 @@ function ilmNod(post) {
 function ilmBladSkal(b) {
   return `
     <p class="shrink-0 px-5 pt-3 pb-2 text-xs text-ads-muted border-b border-ads-border/60">${b.syfte === 'ifc'
-      ? 'Allt under mappen visas i Modellinställningar, utom mappar utan IFC och mappar med ”arkiv” i namnet. Valet gäller alla i projektet.'
+      ? `Allt under mappen visas i Modellinställningar, utom mappar utan IFC och mappar med ${ILM_ARKIV_TEXT} i namnet. Valet gäller alla i projektet.`
       : 'Här sparas modellens filer, så att alla i projektet ser samma modell. Den som uppdaterar modellen behöver kunna skapa filer i mappen.'}</p>
     <div id="ilm-kropp" class="flex-1 min-h-0 overflow-y-auto px-3 py-2 text-xs"></div>
     <div id="ilm-fot" class="shrink-0 border-t border-ads-border bg-ads-gray/50 rounded-b-lg"></div>`;

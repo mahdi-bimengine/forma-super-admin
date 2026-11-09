@@ -230,3 +230,7 @@ signed in on R&D the same day (read only, nothing changed in ACC): the header ha
 "⚙ Modellinställningar…" opened the main view (27 IFC files, 3 in the model); the settings page showed both folders
 and found the leftover Infra-Rail .frag under "Gamla modellfiler"; Esc went back; "Fler filter" opened; / focused
 the search; "I modellen" was remembered after a page reload (then set back to "Alla").
+- English archive folders (Mahdi, 2026-11-09): folders named with "archive" (Archive, Archived, Archives, and
+  German "Archiv") are hidden like "arkiv" (`ILM_ARKIV = /arkiv|archiv/i`). "Architecture" and "Arkitekt" stay.
+  Trees cached in the browser before the change are cleaned when shown (`ilmRensaTrad`); the chosen IFC folder
+  is never hidden, whatever its name.
