@@ -91,9 +91,12 @@ const _ilm = {
   val:       new Map(),  // projekt-id → { lagg: Map(item-id → fil), tabort: Set(item-id) }, inte sparat än
   oppna:     new Map(),  // projekt-id → Set med öppna mappar i trädet
   filter:    { sok: '', visa: 'alla', datum: 'alla', disciplin: '' },
+  sortering: isvLasVal('ilm-sortering', 'namn'),   // namn | nyast | aldst, per webbläsare
+  gamla:     null,       // { pid, laddar, fel, filer } gamla modellfiler i lagringsmappen (ilmVisaGamla)
   discOppen: false,      // raden där disciplinkoden ställs in är öppen
   rader:     [],         // trädets rader vid senaste ritningen (klick pekar hit med löpnummer)
   skrivKo:   Promise.resolve(),  // sparningar av förteckningen görs en i taget
+  skriver:   0,          // antal sparningar i kön eller på gång
   ritar:     false,      // en omritning är beställd till nästa bildruta
   db:        null,       // löfte om IndexedDB ilm-trad
 };
@@ -111,13 +114,13 @@ function ilmTolka(text) {
   // En flyttad modell lämnar en hänvisning till förteckningen i den nya mappen (ilmFlyttaModell).
   if (d.flyttadTill) return { flyttadTill: d.flyttadTill, mapp: d.mapp || null, filer: [] };
   // disciplin saknas (undefined) när en äldre version av appen sparade; null betyder "föreslå".
-  return { mapp: d.mapp || null, ifcMapp: d.ifcMapp?.id ? d.ifcMapp : null, disciplin: d.disciplin,
+  return { mapp: d.mapp || null, ifcMapp: d.ifcMapp?.id ? d.ifcMapp : null, disciplin: d.disciplin, auto: d.auto,
            filer: Array.isArray(d.filer) ? d.filer.filter(f => f?.ifc?.itemId) : [] };
 }
 
 function ilmIndexText(data) {
   return JSON.stringify({ typ: ILM_TYP, version: 1, mapp: data.mapp, ifcMapp: data.ifcMapp || null,
-                          disciplin: data.disciplin ?? null, filer: data.filer }, null, 2);
+                          disciplin: data.disciplin ?? null, auto: !!data.auto, filer: data.filer }, null, 2);
 }
 
 // IFC-mappen: ur förteckningen, annars det som valts innan lagringsmappen fanns
@@ -179,7 +182,7 @@ function ilmLas(pid, tvinga = false) {
   const post = { laddar: true, fel: null, itemId: null, mapp: null, data: null, dubletter: 0, lokalt: nu?.lokalt || null };
   post.lofte = (async () => {
     try {
-      Object.assign(post, await ilmHittaIndex(pid));
+      Object.assign(post, await ilmHittaIndex(pid), { last: Date.now(), versionerKollade: Date.now() });
       if (post.data?.ifcMapp) isvSparaVal(`ilm-ifcmapp:${pid}`, post.data.ifcMapp);
     } catch (err) {
       post.fel = vkFelText(err);
@@ -197,8 +200,10 @@ function ilmLas(pid, tvinga = false) {
 // sparning i taget, så att två samtidiga (en färdig omvandling och ett
 // borttag) inte skriver över varandra.
 function ilmSkrivIndex(pid, andra, valdMapp) {
+  _ilm.skriver++;
   const p = _ilm.skrivKo.then(() => ilmSkrivIndexNu(pid, andra, valdMapp));
   _ilm.skrivKo = p.catch(() => {});
+  p.then(() => { _ilm.skriver--; }, () => { _ilm.skriver--; });
   return p;
 }
 
@@ -209,6 +214,7 @@ async function ilmSkrivIndexNu(pid, andra, valdMapp) {
   const data = farsk.data || { mapp, filer: [] };
   if (!data.ifcMapp) data.ifcMapp = ilmIfcMapp(pid);
   if (data.disciplin === undefined) data.disciplin = ilmDisciplinVal(pid);
+  if (data.auto === undefined) data.auto = ilmAuto(pid);
   andra(data);
   // Färger som valts men inte sparats än följer med varje sparning, så att en
   // omvandling som blir klar under tiden inte tar bort dem.
@@ -221,7 +227,7 @@ async function ilmSkrivIndexNu(pid, andra, valdMapp) {
   const itemId = await writeTextFile(pid, mapp.id, ILM_FIL, text, farsk.itemId);
   isvSparaVal(`ilm-index:${pid}`, itemId);
   const post = _ilm.index.get(pid) || {};
-  Object.assign(post, { laddar: false, fel: null, itemId, mapp: data.mapp, data, dubletter: farsk.dubletter });
+  Object.assign(post, { laddar: false, fel: null, itemId, mapp: data.mapp, data, dubletter: farsk.dubletter, last: Date.now() });
   _ilm.index.set(pid, post);
   ilmUppdateraVyer(pid);
 }
@@ -238,6 +244,7 @@ async function ilmKollaVersioner(pid) {
   };
   await Promise.all([arbetare(), arbetare(), arbetare(), arbetare()]);
   ilmUppdateraVyer(pid);
+  ilmAutoUppdatera(pid);
 }
 
 async function ilmTip(pid, itemId) {
@@ -571,6 +578,88 @@ async function ilmLasMappar(pid, rot, t) {
   return { rotId: rot.id, rotSokvag: rot.sokvag || '', mappar: [...mappar.values()], filer, ejLasta, forManga };
 }
 
+// Snabbare väg (förbättring 1, 2026-11-09): ACC:s sökning hittar alla IFC-filer
+// under IFC-mappen med några få anrop, och sedan läses bara mapparna på vägen
+// upp från varje fil (ett anrop per mapp, med föräldern i svaret). Ligger en
+// mapp på vägen i en Arkiv-mapp eller är dold hoppas filen över. Sökningen
+// kan sakna filer som laddats upp de senaste minuterna (ACC:s index), och om
+// den inte går används ilmLasMappar, som läser varje mapp.
+async function ilmLasMapparSok(pid, rot, t) {
+  const versioner = new Map();   // item-id → senaste versionen
+  const foralder = new Map();    // item-id → mapp-id
+  let url = `${APS_BASE}/data/v1/projects/${pid}/folders/${encodeURIComponent(rot.id)}/search?filter[fileType]=ifc&page[limit]=200`;
+  for (let sidor = 0; url && sidor < 100; sidor++) {
+    if (_ilm.trad.get(pid) !== t) return null;
+    const res = await bhMedOmforsok(() => apsGetUrl(url));
+    for (const it of res.included || []) if (it.type === 'items') foralder.set(it.id, it.relationships?.parent?.data?.id || null);
+    for (const v of res.data || []) {
+      const a = v.attributes || {};
+      if (/deleted/i.test(a.extension?.type || '')) continue;
+      const itemId = v.relationships?.item?.data?.id;
+      if (!itemId || !/\.ifc$/i.test(a.displayName || '')) continue;
+      if ((versioner.get(itemId)?.attributes?.versionNumber ?? -1) >= (a.versionNumber ?? 0)) continue;
+      versioner.set(itemId, v);
+    }
+    t.lasta++;
+    t.hittade = versioner.size;
+    ilmRita();
+    url = res.links?.next?.href || null;
+  }
+
+  // Mapparna på vägen upp till IFC-mappen.
+  const mappar = new Map([[rot.id, { id: rot.id, namn: String(rot.sokvag || '').split(' / ').pop(), foralder: null, dold: false }]]);
+  const lofte = new Map();
+  let ejLasta = 0;
+  const lasMapp = id => {
+    if (!lofte.has(id)) {
+      lofte.set(id, (async () => {
+        if (mappar.has(id)) return mappar.get(id);
+        try {
+          const res = await bhMedOmforsok(() => apsGet(`/data/v1/projects/${pid}/folders/${encodeURIComponent(id)}`));
+          const m = { id, namn: vkMappNamnAv(res.data), foralder: res.data?.relationships?.parent?.data?.id || null, dold: ilmDoljMapp(res.data) };
+          mappar.set(id, m);
+          t.lasta++;
+          ilmRita();
+          return m;
+        } catch {
+          ejLasta++;
+          return null;
+        }
+      })());
+    }
+    return lofte.get(id);
+  };
+  // Följer vägen uppåt; null om någon mapp på vägen döljs eller inte går att läsa.
+  const vag = async id => {
+    for (let n = 0; id && n < 60; n++) {
+      if (id === rot.id) return true;
+      const m = await lasMapp(id);
+      if (!m || m.dold) return false;
+      id = m.foralder;
+    }
+    return false;
+  };
+  const filer = [];
+  const kandidater = [...versioner.entries()];
+  let i = 0;
+  const arbetare = async () => {
+    while (i < kandidater.length) {
+      const [itemId, v] = kandidater[i++];
+      const mappId = foralder.get(itemId);
+      if (!mappId || !await vag(mappId)) continue;
+      const a = v.attributes || {};
+      filer.push({ itemId, namn: a.displayName, mappId, version: a.versionNumber ?? null, versionId: v.id || null,
+                   storlek: a.storageSize ?? null, datum: a.createTime || a.lastModifiedTime || null,
+                   av: a.createUserName || a.lastModifiedUserName || '' });
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, arbetare));
+  const anvanda = new Set([rot.id]);
+  for (const f of filer) for (let id = f.mappId, n = 0; id && id !== rot.id && n < 60; id = mappar.get(id)?.foralder, n++) anvanda.add(id);
+  return { rotId: rot.id, rotSokvag: rot.sokvag || '', mappar: [...mappar.values()].filter(m => anvanda.has(m.id)).map(({ dold, ...m }) => m),
+           filer, ejLasta, forManga: false, sokning: true };
+}
+
 // Läser IFC-mappens träd en gång per session (eller om, med tvinga). Det
 // senast lästa trädet visas direkt ur webbläsarens lager medan det läses om.
 function ilmTradLas(pid, tvinga = false) {
@@ -586,12 +675,19 @@ function ilmTradLas(pid, tvinga = false) {
   }
   Object.assign(t, { laddar: true, fel: null, lasta: 0, hittade: 0 });
   ilmRita();
-  ilmLasMappar(pid, mapp, t).then(data => {
-    if (_ilm.trad.get(pid) !== t) return;
+  // Sökningen först; går den inte läses mapparna en och en.
+  ilmLasMapparSok(pid, mapp, t).catch(err => {
+    console.warn('Modellinställningar: sökningen gick inte, läser mapparna en och en', err);
+    if (_ilm.trad.get(pid) !== t) return null;
+    Object.assign(t, { lasta: 0, hittade: 0 });
+    return ilmLasMappar(pid, mapp, t);
+  }).then(data => {
+    if (!data || _ilm.trad.get(pid) !== t) return;
     Object.assign(t, { laddar: false, data, tid: Date.now(), farsk: true });
     ilmTradTillLager(pid, t);
     ilmTipsFranTrad(pid, data);
     ilmUppdateraVyer();
+    ilmAutoUppdatera(pid);
   }, err => {
     if (_ilm.trad.get(pid) !== t) return;
     const text = /\b40[34]\b/.test(String(err?.message)) ? 'du har inte behörighet att se mappen, eller så finns den inte längre' : vkFelText(err);
@@ -916,6 +1012,36 @@ async function ilmSparaFarger(pid) {
   }
 }
 
+// Förbättring 3: varje disciplin i modellen får en färg med ett klick.
+// Vanliga koder har fasta färger ur paletten; okända får nästa lediga färg.
+const ILM_DISCIPLIN_FARG = {
+  A: '#FDDAA4', ARK: '#FDDAA4', K: '#999999', KON: '#999999', KONST: '#999999',
+  V: '#006EAF', VVS: '#006EAF', VS: '#4679B9', VE: '#9BD5EF', R: '#268D82', 'RÖR': '#268D82',
+  S: '#EC4A41', SP: '#EC4A41', SPR: '#EC4A41', BR: '#C72877', E: '#FAA21B', EL: '#FAA21B',
+  T: '#8558C5', TELE: '#8558C5', STYR: '#A76EF5', L: '#87B340', LAND: '#87B340',
+  M: '#5D822C', MARK: '#5D822C', G: '#916010', GEO: '#916010', B: '#A84A39',
+};
+const ILM_EXTRA_FARGER = ['#E84396', '#32BCAD', '#F26A52', '#12437F', '#7D510E', '#C9A7F9', '#84D7CE', '#FF9DCE', '#B7D78C', '#523609'];
+
+function ilmFargaEfterDisciplin() {
+  const pid = _ilm.projektId;
+  const del = ilmDisciplinDel(pid);
+  if (del == null) return;
+  const filer = ilmFiler(pid);
+  const koder = [...new Set(filer.map(f => ilmDisciplin(pid, f.ifc.namn, del)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'sv'));
+  if (!koder.length) { alert('Ingen fil i modellen har en disciplinkod.'); return; }
+  const lediga = ILM_EXTRA_FARGER.filter(f => !koder.some(k => ILM_DISCIPLIN_FARG[k] === f));
+  const farg = new Map(koder.map(k => [k, ILM_DISCIPLIN_FARG[k] || lediga.shift() || '#808080']));
+  const utan = filer.filter(f => !ilmDisciplin(pid, f.ifc.namn, del)).length;
+  const antal = n => `${n} ${n === 1 ? 'fil' : 'filer'}`;
+  if (!confirm(`Färga modellen efter disciplin?\n\n${koder.map(k => `${k}: ${antal(filer.filter(f => ilmDisciplin(pid, f.ifc.namn, del) === k).length)}`).join('\n')}`
+      + `${utan ? `\n\n${antal(utan)} utan disciplinkod behåller sin färg.` : ''}\n\nFärgerna går att ändra en och en efteråt. Gäller alla i projektet.`)) return;
+  for (const f of filer) {
+    const k = ilmDisciplin(pid, f.ifc.namn, del);
+    if (k) ilmSattFarg(pid, f.ifc.itemId, farg.get(k));
+  }
+}
+
 // ── Filter ────────────────────────────────────────────────────────────────────
 
 function ilmFilterAktivt() {
@@ -947,6 +1073,18 @@ function ilmSynlig(pid, fil, modell, del) {
   if (!ord.length) return true;
   const text = `${fil.namn} ${fil.sokvag || ''} ${kod}`.toLowerCase();
   return ord.every(o => text.includes(o));
+}
+
+function ilmSorteraFiler(filer) {
+  if (_ilm.sortering === 'namn') return filer;
+  const tid = f => Date.parse(f.datum || '') || 0;
+  return [...filer].sort((a, b) => _ilm.sortering === 'nyast' ? tid(b) - tid(a) : tid(a) - tid(b));
+}
+
+function ilmSattSortering(varde) {
+  _ilm.sortering = varde;
+  isvSparaVal('ilm-sortering', varde);
+  ilmRitaNu();
 }
 
 function ilmSattFilter(namn, varde) {
@@ -993,12 +1131,57 @@ function ilmOppna(projektId) {
   }));
 }
 
-// Förteckningen först (den säger vilken IFC-mappen är), sedan trädet.
+// Förteckningen först (den säger vilken IFC-mappen är), sedan trädet. Är
+// förteckningen redan läst läses den om i bakgrunden, så att andras ändringar syns.
 function ilmLasOchTrad(pid) {
+  const redan = _ilm.index.get(pid);
   Promise.resolve(ilmLas(pid)).then(() => {
-    if (_ilm.oppen && _ilm.projektId === pid) { ilmTradLas(pid); ilmRita(); }
+    if (!(_ilm.oppen && _ilm.projektId === pid)) return;
+    ilmTradLas(pid);
+    ilmRita();
+    if (redan) ilmLasOm(pid);
+    ilmAutoUppdatera(pid);
   });
 }
+
+// ── Andras ändringar ──────────────────────────────────────────────────────────
+// Förbättring 5: förteckningen läses om i bakgrunden när fönstret eller
+// modellen öppnas och var femte minut medan någon av dem är öppen, så att
+// det andra har lagt till, tagit bort eller färgat syns utan omladdning. IFC-
+// versionerna kollas om högst var femte minut. Inget läses medan en egen
+// sparning pågår (den skriver ändå det senaste).
+const ILM_LAS_OM_MS = 30 * 1000;
+const ILM_VERSIONER_OM_MS = 5 * 60 * 1000;
+
+async function ilmLasOm(pid) {
+  const ix = _ilm.index.get(pid);
+  if (!pid || !ix || ix.laddar || ix.lasOm || _ilm.skriver > 0 || Date.now() - (ix.last || 0) < ILM_LAS_OM_MS) return;
+  ix.lasOm = true;
+  try {
+    const fil = await ilmHittaIndex(pid);
+    if (!fil.itemId || _ilm.skriver > 0) return;
+    for (const [id, farg] of _ilm.fargVantar.get(pid) || []) {
+      const f = fil.data?.filer.find(x => x.ifc.itemId === id);
+      if (f) f.farg = farg;
+    }
+    const fore = JSON.stringify(ix.data);
+    Object.assign(ix, { itemId: fil.itemId, mapp: fil.mapp, data: fil.data, dubletter: fil.dubletter, fel: null, last: Date.now() });
+    if (ix.data?.ifcMapp) isvSparaVal(`ilm-ifcmapp:${pid}`, ix.data.ifcMapp);
+    if (JSON.stringify(ix.data) !== fore) ilmUppdateraVyer(pid);
+    if (Date.now() - (ix.versionerKollade || 0) > ILM_VERSIONER_OM_MS) {
+      ix.versionerKollade = Date.now();
+      await ilmKollaVersioner(pid);
+    }
+  } catch { /* nästa gång */ } finally {
+    ix.lasOm = false;
+  }
+}
+
+setInterval(() => {
+  if (document.visibilityState !== 'visible') return;
+  if (_ilm.oppen) ilmLasOm(_ilm.projektId);
+  else if (typeof _isv !== 'undefined' && _isv.pa && _isf.projektId) ilmLasOm(_isf.projektId);
+}, 5 * 60 * 1000);
 
 function ilmStang() {
   if (!_ilm.blad && ilmHarAndringar(_ilm.projektId)
@@ -1114,6 +1297,9 @@ function ilmSkalHtml() {
         <select onchange="ilmSattFilter('datum', this.value)" class="${lista}" title="När IFC-filens senaste version laddades upp till ACC">
           ${val('alla', 'Alla datum', f.datum)}${val('nya', `Nyare än ${ILM_GAMMAL_DAGAR} dagar`, f.datum)}${val('gamla', `Äldre än ${ILM_GAMMAL_DAGAR} dagar`, f.datum)}
         </select>
+        <select onchange="ilmSattSortering(this.value)" class="${lista}" title="Ordningen på filerna i varje mapp">
+          ${val('namn', 'Namn A–Ö', _ilm.sortering)}${val('nyast', 'Nyast först', _ilm.sortering)}${val('aldst', 'Äldst först', _ilm.sortering)}
+        </select>
         <span id="ilm-disc-val" class="flex items-center"></span>
       </div>
       <div id="ilm-disc-rad"></div>
@@ -1157,12 +1343,107 @@ function ilmRitaInstallningar(pid) {
         `${ifc ? `<a href="${ilmAccMappLank(pid, ifc.id)}" target="_blank" rel="noopener" class="text-ads-blue hover:underline whitespace-nowrap">Öppna i ACC</a>` : ''}
          ${lank(`ilmOppnaBlad('ifc')`, ifc ? 'Ändra' : 'Välj mapp')}`),
     rad('Modellen sparas i', ix.mapp ? vag(ix.mapp) : saknas,
-        `${ix.mapp ? `<a href="${ilmAccMappLank(pid, ix.mapp.id)}" target="_blank" rel="noopener" class="text-ads-blue hover:underline whitespace-nowrap">Öppna i ACC</a>` : ''}
+        `${ix.mapp ? `${lank(`ilmVisaGamla('${vkEsc(pid)}')`, _ilm.gamla?.pid === pid ? 'Dölj gamla filer' : 'Gamla filer')}
+                      <a href="${ilmAccMappLank(pid, ix.mapp.id)}" target="_blank" rel="noopener" class="text-ads-blue hover:underline whitespace-nowrap">Öppna i ACC</a>` : ''}
          ${lank(`ilmOppnaBlad('lagring')`, ix.mapp ? 'Ändra' : 'Välj mapp', upptagen && !!ix.mapp)}`),
+    ilmGamlaHtml(pid),
+    ilmAutoHtml(pid),
     ix.dubletter ? `<div class="text-amber-700">${ix.dubletter} äldre ${ix.dubletter === 1 ? 'kopia' : 'kopior'} av ${ILM_FIL} finns också i projektet. Den senast ändrade används.</div>` : '',
     ix.fel ? `<div class="text-red-700">${vkEsc(ix.fel)} ${lank(`ilmLas('${vkEsc(pid)}', true)`, 'Försök igen')}</div>` : '',
     flytt ? `<div class="${flytt.fel ? 'text-red-700' : 'text-ads-blue'}">${vkEsc(flytt.fel || `${flytt.namn}: ${flytt.steg}…`)}</div>` : '',
   ].join(''));
+}
+
+// Förbättring 8: modellfiler (.frag) i lagringsmappen som förteckningen inte
+// längre pekar på, till exempel efter att en IFC tagits bort ur modellen eller
+// modellen flyttats. Appen får inte radera filer i ACC, så de listas med en länk.
+async function ilmVisaGamla(pid) {
+  if (_ilm.gamla?.pid === pid) { _ilm.gamla = null; ilmRitaNu(); return; }
+  const mapp = _ilm.index.get(pid)?.mapp;
+  if (!mapp) return;
+  const g = _ilm.gamla = { pid, laddar: true, fel: null, filer: [] };
+  ilmRitaNu();
+  try {
+    const { poster, tips } = await getFolderContentsWithTips(pid, mapp.id);
+    const anvanda = new Set(ilmFiler(pid).map(f => f.frag?.itemId).filter(Boolean));
+    g.filer = poster.filter(p => p.type === 'items' && /\.frag$/i.test(p.attributes?.displayName || '') && !anvanda.has(p.id))
+      .map(p => {
+        const a = tipVersionOf(p, tips)?.attributes || {};
+        return { namn: p.attributes.displayName, storlek: a.storageSize ?? null, datum: a.createTime || p.attributes?.lastModifiedTime || null };
+      })
+      .sort((a, b) => String(a.datum).localeCompare(String(b.datum)));
+  } catch (err) {
+    g.fel = vkFelText(err);
+  }
+  g.laddar = false;
+  if (_ilm.gamla === g) ilmRitaNu();
+}
+
+function ilmGamlaHtml(pid) {
+  const g = _ilm.gamla;
+  if (!g || g.pid !== pid) return '';
+  const ram = inne => `<div class="ml-[9.5rem] rounded bg-ads-gray/60 px-3 py-2 text-[11px] text-ads-muted">${inne}</div>`;
+  if (g.laddar) return ram('Letar efter gamla modellfiler i mappen…');
+  if (g.fel) return ram(`<span class="text-red-700">Mappen gick inte att läsa: ${vkEsc(g.fel)}</span>`);
+  if (!g.filer.length) return ram('Inga gamla modellfiler. Allt i mappen används av modellen.');
+  const summa = g.filer.reduce((s, f) => s + (f.storlek || 0), 0);
+  return ram(`
+    <div class="text-ads-text">${g.filer.length} ${g.filer.length === 1 ? 'modellfil' : 'modellfiler'} (${ilmStorlek(summa)}) används inte längre.
+      Appen får inte radera filer i ACC, så ta bort dem där om du vill.</div>
+    <div class="mt-1 max-h-24 overflow-y-auto">${g.filer.map(f => `
+      <div class="flex gap-3"><span class="truncate">${vkEsc(f.namn)}</span><span class="ml-auto whitespace-nowrap">${ilmStorlek(f.storlek)} · ${ilmDatum(f.datum)}</span></div>`).join('')}</div>`);
+}
+
+// Förbättring 4: uppdatera automatiskt. Gäller hela projektet (auto i
+// förteckningen). När någon har modellen eller fönstret öppet och en vald IFC
+// har en nyare version görs den om i den personens webbläsare, en gång per
+// session. Filer över ILM_STOR_IFC görs inte om automatiskt.
+function ilmAuto(pid) {
+  return !!_ilm.index.get(pid)?.data?.auto;
+}
+
+function ilmAutoHtml(pid) {
+  const ix = _ilm.index.get(pid);
+  if (!ix?.mapp) return '';
+  return `
+    <label class="flex items-center gap-2 cursor-pointer text-ads-muted" title="Gäller alla i projektet. Modellen görs om i webbläsaren hos den som har modellen eller det här fönstret öppet. Filer över ${ilmStorlek(ILM_STOR_IFC)} uppdateras inte automatiskt.">
+      <span class="w-36 shrink-0"></span>
+      <input type="checkbox" ${ilmAuto(pid) ? 'checked' : ''} onchange="ilmSattAuto(this.checked)" class="accent-ads-blue" />
+      Uppdatera modellen automatiskt när en IFC får en ny version
+    </label>`;
+}
+
+async function ilmSattAuto(pa) {
+  const pid = _ilm.projektId;
+  const ix = _ilm.index.get(pid);
+  if (!ix?.data) return;
+  ix.data.auto = pa;
+  ilmRitaNu();
+  try {
+    await ilmSkrivIndex(pid, d => { d.auto = pa; });
+    if (pa) ilmAutoUppdatera(pid);
+  } catch (err) {
+    alert(`Inställningen kunde inte sparas i ACC: ${vkFelText(err)}`);
+    ilmLas(pid, true);
+  }
+}
+
+const _ilmAutoKord = new Set();
+
+// Varje ny version görs om automatiskt högst en gång per session (misslyckas
+// det visas felet, och den röda bubblan finns kvar).
+function ilmAutoUppdatera(pid) {
+  if (!pid || !ilmAuto(pid) || ilmLaddar(pid)) return;
+  if (!_ilm.oppen && !_isv.pa) return;
+  for (const f of ilmFiler(pid)) {
+    if (!ilmArInaktuell(pid, f) || ilmUpptagen(pid, f.ifc.itemId)) continue;
+    const t = _ilm.tips.get(`${pid}|${f.ifc.itemId}`);
+    const nyckel = `${pid}|${f.ifc.itemId}|${t?.version ?? f.ifc.version}|${ILM_FORMAT}`;
+    if (_ilmAutoKord.has(nyckel)) continue;
+    _ilmAutoKord.add(nyckel);
+    if ((t?.storlek ?? f.ifc.storlek) > ILM_STOR_IFC) continue;
+    ilmKoa(pid, { nyckel: f.ifc.itemId, namn: f.ifc.namn, kalla: f.kalla, ifc: { itemId: f.ifc.itemId, namn: f.ifc.namn, sokvag: f.ifc.sokvag } });
+  }
 }
 
 // Disciplinväljaren, raden där disciplinkoden ställs in, och sökfältets värde.
@@ -1186,7 +1467,9 @@ function ilmRitaVerktyg(pid) {
         ${sortera.map(([k, n]) => `<option value="${vkEsc(k)}" ${_ilm.filter.disciplin === k ? 'selected' : ''}>${vkEsc(k)} (${n})</option>`).join('')}
       </select>` : ''}
     <button onclick="ilmVaxlaDisc()" class="ml-2 text-[11px] text-ads-blue hover:underline whitespace-nowrap" title="Ställ in var i filnamnet disciplinkoden står">
-      ${del == null ? 'Disciplinkod: av' : 'Ställ in disciplinkod'}</button>`);
+      ${del == null ? 'Disciplinkod: av' : 'Ställ in disciplinkod'}</button>
+    ${del != null && ilmFiler(pid).some(f => ilmDisciplin(pid, f.ifc.namn, del)) ? `
+      <button onclick="ilmFargaEfterDisciplin()" class="ml-2 text-[11px] text-ads-blue hover:underline whitespace-nowrap" title="Ge varje disciplin i modellen en egen färg">Färga efter disciplin</button>` : ''}`);
 
   let rad = '';
   if (_ilm.discOppen) {
@@ -1326,7 +1609,7 @@ function ilmListaHtml(pid) {
       html.push(ilmMappRad(pid, m, djup, oppen, filer, modell, aktivt));
       if (oppen) rita(m.id, djup + 1);
     }
-    for (const f of x.filerI.get(mappId) || []) {
+    for (const f of ilmSorteraFiler(x.filerI.get(mappId) || [])) {
       if (syns.has(f.itemId)) html.push(ilmFilRad(pid, { ...f, sokvag: x.sokvag.get(f.mappId) }, djup, modell, del));
     }
   };
@@ -1350,7 +1633,7 @@ function ilmListaHtml(pid) {
       utanfor.push({ itemId: id, namn: j.namn, sokvag: j.ifc.sokvag || '', version: null, storlek: null, datum: null });
     }
   }
-  const utanforSyns = utanfor.filter(f => ilmSynlig(pid, f, modell, del));
+  const utanforSyns = ilmSorteraFiler(utanfor.filter(f => ilmSynlig(pid, f, modell, del)));
   if (utanforSyns.length) {
     html.push(`<div class="mt-3 mb-1 mx-1 pt-3 border-t border-ads-border text-[11px] font-semibold uppercase tracking-wider text-ads-muted">
       Ingår i modellen men syns inte i IFC-mappen (${utanforSyns.length})</div>`);
@@ -1745,6 +2028,7 @@ async function ilmFlyttaModell(pid, mapp) {
     data.mapp = { id: mapp.id, sokvag: mapp.sokvag };
     if (!data.ifcMapp) data.ifcMapp = ilmIfcMapp(pid);
     if (data.disciplin === undefined) data.disciplin = ilmDisciplinVal(pid);
+    if (data.auto === undefined) data.auto = ilmAuto(pid);
     const text = ilmIndexText(data);
     const iNya = await ilmFilIMapp(pid, mapp.id, ILM_FIL);
     const nyttItem = await writeTextFile(pid, mapp.id, ILM_FIL, text, iNya);

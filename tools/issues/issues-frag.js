@@ -33,6 +33,8 @@ const _isf = {
   db:        null,   // löfte om webbläsarens modellcache (isfCacheDb)
   laddade:   new Map(), // modell-id (IFC-lineage) → { versionId, namn, koord, farg (den som är lagd på) }
   vantar:    false,     // ett ärende klickades medan modellerna laddades: gå dit efteråt
+  dolda:     new Set(), // modell-id som användaren har dolt (per webbläsare och projekt, isf-dolda:<id>)
+  modellMeny: false,    // listan Modeller ovanför verktygsraden är öppen
   behall:    new Map(), // modell-id → Set med element som inte tonas ner (isfTonaNer)
   laddar:    false,
   laddaIgen: false,
@@ -147,7 +149,9 @@ function isfStarta() {
 async function isfVisaProjekt(projektId) {
   if (_isf.projektId && _isf.projektId !== projektId) await isfTomVisaren();
   _isf.projektId = projektId;
+  _isf.dolda = new Set(isvLasVal(`isf-dolda:${projektId}`, []));
   ilmLas(projektId);
+  ilmLasOm?.(projektId);
   isvRitaRad();
   try {
     await isfStarta();
@@ -231,6 +235,13 @@ async function isfLaddaProjekt(pid) {
     _isf.laddar = false;
     _isf.laddning = null;
     isvRitaRad();
+    // Stängdes visaren eller byttes projekt medan det laddade, och bad den nya
+    // visaren om en laddning under tiden, görs den nu (annars blev den tom).
+    // (Efter en vanlig körning är laddaIgen alltid falsk.)
+    if (_isf.laddaIgen && _isf.varld && _isf.projektId) {
+      _isf.laddaIgen = false;
+      setTimeout(() => isfLaddaProjekt(_isf.projektId), 0);
+    }
   }
   if (andrat) await isfKartlagg(pid);
   if (_isv.aktiv && _isv.aktiv.projektId === pid && (andrat || _isf.vantar)) {
@@ -242,15 +253,22 @@ async function isfLaddaProjekt(pid) {
 // Lägger på varje modells färg ur förteckningen (eller tar bort den), bara där
 // den har ändrats. Färgen och nedtoningen delar biblioteket i samma fält per
 // element men slås ihop, så nedtoningen ligger kvar. Det markerade elementet
-// markeras om efteråt, annars tar färgen över markeringen.
+// markeras om efteråt, annars tar färgen över markeringen. Dolda modeller
+// (listan Modeller) döljs här också.
 async function isfFargaModeller(pid) {
   const v = _isf.varld;
   if (!v || _isf.projektId !== pid) return;
   for (const f of ilmFiler(pid)) {
     const info = _isf.laddade.get(f.ifc.itemId);
     const modell = v.fm.list.get(f.ifc.itemId);
+    if (!info || !modell) continue;
+    const dold = _isf.dolda.has(f.ifc.itemId);
+    if (!!info.dold !== dold) {
+      await modell.setVisible(undefined, !dold).catch(err => console.warn('Modellvisaren: dölj', f.ifc.namn, err));
+      info.dold = dold;
+    }
     const farg = f.farg || null;
-    if (!info || !modell || info.farg === farg) continue;
+    if (info.farg === farg) continue;
     try {
       if (farg) await modell.setColor(undefined, new v.THREE.Color(farg));
       else await modell.resetColor(undefined);
@@ -260,6 +278,7 @@ async function isfFargaModeller(pid) {
     }
     if (_isf.vald?.modelId === f.ifc.itemId) await isfMarkera(_isf.vald);
   }
+  isfRitaVerktyg();   // listan Modeller visar färgerna
 }
 
 async function isfTomVisaren() {
@@ -280,6 +299,7 @@ function isfModellernasLada() {
   const v = _isf.varld;
   const lada = new v.THREE.Box3();
   for (const m of v.fm.list.values()) {
+    if (_isf.dolda.has(m.modelId)) continue;
     const b = m.box;
     if (b && !b.isEmpty()) lada.union(b);
   }
@@ -733,9 +753,12 @@ function isfRitaVerktyg() {
     <button onclick="${klick}" title="${titel}"
             class="px-2.5 py-1 ${extra} ${pa ? 'bg-ads-blue text-white' : 'bg-white text-ads-text hover:bg-ads-gray'}">${text}</button>`;
   const snittText = { lada: 'Snitt: låda', plan: 'Snitt: plan' }[_isf.snitt] || 'Snitt';
+  const antalDolda = [..._isf.dolda].filter(id => _isf.laddade.has(id)).length;
   ruta.innerHTML = `
     <div class="relative flex items-stretch text-xs border border-ads-border rounded shadow divide-x divide-ads-border bg-white">
       ${knapp(false, 'isfVisaAllt()', '⌂', 'Visa hela modellen', 'rounded-l')}
+      ${knapp(_isf.modellMeny, 'isfVaxlaModellMeny()', `Modeller${antalDolda ? ` (${antalDolda} dolda)` : ''}`, 'Vilka modeller som syns, deras färg och datum')}
+      ${_isf.modellMeny ? isfModellMenyHtml() : ''}
       ${knapp(!!_isf.snitt, `isfSnitt(${_isf.snitt ? 'null' : "'lada'"})`, snittText,
               _isf.snitt ? 'Ta bort snittet' : 'Snittlåda: dra i pilarna för att flytta sidorna')}
       ${knapp(_isf.meny, 'isfSnittMeny()', '▾', 'Fler sätt att snitta')}
@@ -760,7 +783,62 @@ function isfRitaVerktyg() {
 
 function isfSnittMeny() {
   _isf.meny = !_isf.meny;
+  _isf.modellMeny = false;
   isfRitaVerktyg();
+}
+
+// Förbättring 2: listan Modeller, med färg, namn och IFC-datum (gult när det är
+// äldre än ILM_GAMMAL_DAGAR), och en kryssruta som visar eller döljer modellen.
+// Vad som är dolt gäller bara den egna webbläsaren.
+function isfVaxlaModellMeny() {
+  _isf.modellMeny = !_isf.modellMeny;
+  _isf.meny = false;
+  isfRitaVerktyg();
+}
+
+function isfModellMenyHtml() {
+  const pid = _isf.projektId;
+  const filer = ilmFiler(pid).filter(f => _isf.laddade.has(f.ifc.itemId));
+  const rader = filer.map((f, i) => {
+    const dold = _isf.dolda.has(f.ifc.itemId);
+    const gammal = ilmArGammal(f.ifc.datum);
+    return `
+      <label class="flex items-center gap-2 px-3 py-1 hover:bg-ads-gray cursor-pointer ${dold ? 'text-ads-muted' : 'text-ads-text'}">
+        <input type="checkbox" ${dold ? '' : 'checked'} onchange="isfVaxlaModell(${i})" class="accent-ads-blue" />
+        <span class="shrink-0 w-3 h-3 rounded-full border border-ads-border" style="${ilmFargRuta(f.farg || null)}"></span>
+        <span class="truncate flex-1" title="${vkEsc(f.ifc.sokvag ? `${f.ifc.sokvag} / ${f.ifc.namn}` : f.ifc.namn)}">${vkEsc(f.ifc.namn)}</span>
+        <span class="shrink-0 text-[10px] ${gammal ? 'text-amber-800 bg-amber-100 rounded px-1' : 'text-ads-muted'}"
+              title="När IFC-versionen i modellen laddades upp till ACC">${ilmDatum(f.ifc.datum) || ''}</span>
+      </label>`;
+  }).join('');
+  return `
+    <div class="absolute bottom-full left-6 mb-1 w-80 bg-white border border-ads-border rounded shadow-lg py-1 text-xs">
+      <div class="px-3 pt-1 pb-1.5 flex items-center gap-2 text-[11px] text-ads-muted border-b border-ads-border/60">
+        <span class="font-semibold uppercase tracking-wider">Modeller</span><span class="flex-1"></span>
+        ${_isf.dolda.size ? '<button onclick="isfVisaAllaModeller()" class="text-ads-blue hover:underline">Visa alla</button>' : ''}
+        <button onclick="isfVaxlaModellMeny(); ilmOppna()" class="text-ads-blue hover:underline" title="Färger och vilka IFC-filer som ingår">Ändra…</button>
+      </div>
+      <div class="max-h-64 overflow-y-auto py-1">${rader || '<div class="px-3 py-2 text-ads-muted">Inga modeller laddade.</div>'}</div>
+    </div>`;
+}
+
+function isfVaxlaModell(i) {
+  const f = ilmFiler(_isf.projektId).filter(x => _isf.laddade.has(x.ifc.itemId))[i];
+  if (!f) return;
+  if (_isf.dolda.has(f.ifc.itemId)) _isf.dolda.delete(f.ifc.itemId); else _isf.dolda.add(f.ifc.itemId);
+  isfSparaDolda();
+}
+
+function isfVisaAllaModeller() {
+  _isf.dolda.clear();
+  isfSparaDolda();
+}
+
+async function isfSparaDolda() {
+  isvSparaVal(`isf-dolda:${_isf.projektId}`, [..._isf.dolda]);
+  isfRitaVerktyg();
+  await isfFargaModeller(_isf.projektId);
+  _isf.varld?.fm.core.update(true);
 }
 
 // Slår på eller av snittet. 'lada' gör sex plan runt modellen, 'plan' låter
@@ -963,6 +1041,7 @@ function isfStang() {
   _isf.laddade.clear();
   _isf.vantar = false;
   _isf.behall.clear();
+  _isf.modellMeny = false;
   _isf.laddaIgen = false;
   _isf.laddning = null;
   _isf.laddFel = [];

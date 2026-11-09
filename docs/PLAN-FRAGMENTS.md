@@ -174,6 +174,20 @@ from his palette (stored for the whole project).
   elements; selection visible on a coloured model (the element is cleared first, otherwise the library's merge
   keeps the model colour); colour and dimming restored after deselecting; amber selection on a blue model; dimming
   kept through colour changes and "no colour"; no camera move on a colour change. Not yet tested signed in on R&D.
+  Tested signed in on R&D the same day: Building-Architecture coloured green in the viewer and saved in the index
+  (left green on purpose).
+- Improvements (Mahdi asked for 1–5, 7, 8 of the ranked list, not 6 "block large IFCs"), built 2026-11-09:
+  1 the IFC folder is read with ACC's search (`ilmLasMapparSok`: one search, then one call per folder on the way up
+  to each file; falls back to `ilmLasMappar`); 2 "Modeller" in the viewer toolbar: colour, name, IFC date and a
+  checkbox to hide a model (per browser, `isf-dolda:<id>`, `setVisible`); 3 "Färga efter disciplin"
+  (`ILM_DISCIPLIN_FARG`, unknown codes get spare colours); 4 "Uppdatera modellen automatiskt" (`auto` in the
+  index; converts newer versions under 300 MB in the browser of whoever has the model or the window open, once per
+  version and session); 5 the index is re-read in the background when the window or the model opens and every
+  5 minutes while open (`ilmLasOm`, versions at most every 5 minutes, never during a write); 7 sort files by name or
+  date; 8 "Gamla filer" lists .frag files in the storage folder the index no longer uses. Tested locally with
+  made-up data (search path only through the fallback, since there is no sign-in locally). Found and fixed while
+  testing: closing and reopening the model during a load left the new viewer empty (`isfLaddaProjekt` now
+  reloads after the old run ends).
   Palette, measured from Mahdi's image (4 × 10 + "no colour"):
   `#000000 #3C3C3C #4D4D4D #666666 #808080 #999999 #BBBBBB #CCCCCC #DCDCDC #FFFFFF`
   `#A61A1A #916010 #5D822C #12437F #006EAF #268D82 #8558C5 #C72877 #A84A39 #523609`
