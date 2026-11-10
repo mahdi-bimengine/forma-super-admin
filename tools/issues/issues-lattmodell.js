@@ -109,6 +109,9 @@ const _ilm = {
   stegFel:   null,       // felet från senaste Nästa
   fargGrupper: [],       // steg 4: grupperna vid senaste ritningen (klick pekar hit med löpnummer)
   fargOppna: new Set(),  // steg 4: utfällda discipliner
+  omgang:    new Map(),  // projekt-id → { klara, totalt } för det som köats sedan kön senast var tom ("12 av 55")
+  framsteg:  null,       // { klara, totalt } medan Nästa sparar flera saker, annars null
+  utkastSparat: new Map(), // projekt-id → { tid, text } senast sparade utkast (för "Utkast sparat" och ✕)
   gamla:     null,       // { pid, laddar, fel, filer } gamla modellfiler i lagringsmappen (ilmVisaGamla)
   rader:     [],         // trädets rader vid senaste ritningen (klick pekar hit med löpnummer)
   skrivKo:   Promise.resolve(),  // sparningar av förteckningen görs en i taget
@@ -416,6 +419,9 @@ function ilmKoa(pid, jobb) {
   }
   _ilm.jobb.set(k, { ...jobb, pid, steg: 'I kö', andel: null, fel: null });
   _ilm.ko.push(k);
+  const o = _ilm.omgang.get(pid) || { klara: 0, totalt: 0 };
+  o.totalt++;
+  _ilm.omgang.set(pid, o);
   ilmUppdateraVyer();
   if (!_ilm.arbetar) ilmArbeta();
 }
@@ -437,6 +443,10 @@ async function ilmArbeta() {
       j.fel = j.kalla === 'flytt' ? err.message : ilmAccFel(err);
       j.steg = '';
     }
+    const o = _ilm.omgang.get(j.pid);
+    if (o) o.klara++;
+    // Omgången är slut när projektet inte har något kvar i kön.
+    if (!ilmPagar(j.pid).length) _ilm.omgang.delete(j.pid);
     ilmUppdateraVyer(j.pid);
   }
   _ilm.arbetar = false;
@@ -448,8 +458,12 @@ function ilmAvbryt(pid, itemId) {
   const k = `${pid}|${itemId}`;
   const j = _ilm.jobb.get(k);
   if (!j || j.fel) return;
-  if (_ilm.ko.includes(k)) { _ilm.ko = _ilm.ko.filter(x => x !== k); _ilm.jobb.delete(k); }
-  else j.taBort = true;
+  if (_ilm.ko.includes(k)) {
+    _ilm.ko = _ilm.ko.filter(x => x !== k);
+    _ilm.jobb.delete(k);
+    const o = _ilm.omgang.get(pid);
+    if (o) { o.totalt = Math.max(o.klara, o.totalt - 1); if (!ilmPagar(pid).length) _ilm.omgang.delete(pid); }
+  } else j.taBort = true;
   ilmUppdateraVyer(pid);
 }
 
@@ -737,12 +751,18 @@ async function ilmLasMapparSok(pid, rot, t) {
 
 // Läser IFC-mappens träd en gång per session (eller om, med tvinga). Det
 // senast lästa trädet visas direkt ur webbläsarens lager medan det läses om.
-function ilmTradLas(pid, tvinga = false) {
+// Mappstrukturen läses om när den är äldre än så här (när fönstret eller steg 3 öppnas).
+const ILM_TRAD_MAX_ALDER_MS = 5 * 60 * 1000;
+
+// noggrann: läs mapp för mapp i stället för med ACC:s sökning. Sökningen är
+// snabb men kan sakna filer och mappar som lagts till de senaste minuterna;
+// "Läs om" läser därför noggrant.
+function ilmTradLas(pid, tvinga = false, noggrann = false) {
   const mapp = ilmIfcMapp(pid);
   if (!mapp) return;
   let t = _ilm.trad.get(pid);
   if (t && t.mappId !== mapp.id) t = null;
-  if (t && (t.laddar || (t.farsk && !tvinga))) return;
+  if (t && (t.laddar || (t.farsk && !tvinga && Date.now() - (t.tid || 0) < ILM_TRAD_MAX_ALDER_MS))) return;
   if (!t) {
     t = { mappId: mapp.id, laddar: false, data: null, fel: null, tid: null, farsk: false, lasta: 0, hittade: 0 };
     _ilm.trad.set(pid, t);
@@ -751,12 +771,12 @@ function ilmTradLas(pid, tvinga = false) {
   Object.assign(t, { laddar: true, fel: null, lasta: 0, hittade: 0 });
   ilmRita();
   // Sökningen först; går den inte läses mapparna en och en.
-  ilmLasMapparSok(pid, mapp, t).catch(err => {
+  (noggrann ? ilmLasMappar(pid, mapp, t) : ilmLasMapparSok(pid, mapp, t).catch(err => {
     console.warn('Modellinställningar: sökningen gick inte, läser mapparna en och en', err);
     if (_ilm.trad.get(pid) !== t) return null;
     Object.assign(t, { lasta: 0, hittade: 0 });
     return ilmLasMappar(pid, mapp, t);
-  }).then(data => {
+  })).then(data => {
     if (!data || _ilm.trad.get(pid) !== t) return;
     Object.assign(t, { laddar: false, data, tid: Date.now(), farsk: true });
     ilmTradTillLager(pid, t);

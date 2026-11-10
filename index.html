@@ -53,6 +53,11 @@
     }
   }
   </script>
+  <style>
+    @keyframes ilm-stapel-gar { 0% { left: -33%; } 100% { left: 100%; } }
+    .ilm-stapel-gar { animation: ilm-stapel-gar 1.2s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .ilm-stapel-gar { animation: none; left: 0; width: 100%; opacity: .5; } }
+  </style>
 </head>
 <body class="bg-ads-gray text-ads-text min-h-screen flex flex-col">
 

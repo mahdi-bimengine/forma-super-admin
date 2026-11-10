@@ -9,8 +9,8 @@
 //   3 Filer      trädet med kryssrutor; Nästa sparar (läggs till i kön, tas bort).
 //   4 Färger     disciplinkoden och en färg per disciplin eller fil; Nästa sparar.
 //
-// Nedtill: ✕ slänger det som inte är sparat, 💾 sparar ett utkast i
-// webbläsaren (ilm-utkast:<projekt>) och stänger, Tillbaka och Nästa. Inget
+// Nedtill: "Spara utkast" sparar det som gjorts hittills i
+// webbläsaren (ilm-utkast:<projekt>) utan att stänga, Tillbaka och Nästa. Inget
 // grånas medan något görs om: allt som tar tid ligger i kön (ilmKoa), och
 // bannern längst ner i appen visar den även när fönstret är stängt.
 
@@ -24,7 +24,9 @@ const ILM_STEG = [
 // ── Utkastet ──────────────────────────────────────────────────────────────────
 // Det som valts men inte sparats med Nästa: mappar i steg 1 och 2, kryssen i
 // steg 3, färger och disciplinkod i steg 4. Ligger i minnet medan fönstret är
-// öppet och i webbläsaren efter 💾. Gäller bara den egna webbläsaren.
+// öppet och i webbläsaren efter "Spara utkast" (fönstret stängs inte). Gäller
+// bara den egna webbläsaren. Det sparade utkastet hålls i fas med det som
+// sparats med Nästa, så att ett återupptaget utkast aldrig gör om något.
 
 function ilmUtkast(pid) {
   if (!_ilm.utkast.has(pid)) _ilm.utkast.set(pid, { ifcMapp: null, lagring: null, farger: new Map(), disciplin: undefined });
@@ -40,27 +42,60 @@ function ilmSparatUtkast(pid) {
   return isvLasVal(`ilm-utkast:${pid}`, null);
 }
 
-function ilmSparaUtkast(pid) {
+// Utkastets innehåll (utan tid), för att se om något ändrats sedan det sparades.
+function ilmUtkastInnehall(pid) {
   const u = ilmUtkast(pid), v = ilmVal(pid);
-  isvSparaVal(`ilm-utkast:${pid}`, {
-    steg: typeof _ilm.steg === 'number' ? _ilm.steg : 1, sparat: new Date().toISOString(),
+  return {
+    steg: typeof _ilm.steg === 'number' ? _ilm.steg : 1,
     ifcMapp: u.ifcMapp, lagring: u.lagring, farger: [...u.farger], disciplin: u.disciplin ?? null, harDisciplin: u.disciplin !== undefined,
     lagg: [...v.lagg.values()], tabort: [...v.tabort],
-  });
+  };
+}
+
+function ilmSparaUtkast(pid) {
+  const innehall = ilmUtkastInnehall(pid);
+  const sparat = new Date().toISOString();
+  isvSparaVal(`ilm-utkast:${pid}`, { ...innehall, sparat });
+  _ilm.utkastSparat.set(pid, { tid: sparat, text: JSON.stringify({ ...innehall, steg: 0 }) });
+}
+
+// Finns det ändringar som inte är sparade, varken med Nästa eller som utkast?
+function ilmHarOsparat(pid) {
+  if (!ilmHarUtkast(pid)) return false;
+  const s = _ilm.utkastSparat.get(pid);
+  return !s || s.text !== JSON.stringify({ ...ilmUtkastInnehall(pid), steg: 0 });
+}
+
+// "Spara utkast": sparar det som gjorts hittills i webbläsaren. Fönstret stannar öppet.
+function ilmSparaUtkastNu() {
+  const pid = _ilm.projektId;
+  ilmSparaUtkast(pid);
+  ilmRitaNu();
 }
 
 function ilmLasUtkast(pid) {
   const s = ilmSparatUtkast(pid);
   if (!s) return 1;
+  const modell = ilmModellKarta(pid);
   _ilm.utkast.set(pid, { ifcMapp: s.ifcMapp || null, lagring: s.lagring || null, farger: new Map(s.farger || []), disciplin: s.harDisciplin ? s.disciplin : undefined });
-  _ilm.val.set(pid, { lagg: new Map((s.lagg || []).map(f => [f.itemId, f])), tabort: new Set(s.tabort || []) });
+  // Filer som redan ingår (eller redan är borta) hoppas över, så att ett gammalt
+  // utkast aldrig lägger till eller tar bort något två gånger.
+  _ilm.val.set(pid, {
+    lagg: new Map((s.lagg || []).filter(f => !modell.has(f.itemId) && !ilmUpptagen(pid, f.itemId)).map(f => [f.itemId, f])),
+    tabort: new Set((s.tabort || []).filter(id => modell.has(id) || ilmUpptagen(pid, id))),
+  });
+  _ilm.utkastSparat.set(pid, { tid: s.sparat, text: JSON.stringify({ ...ilmUtkastInnehall(pid), steg: 0 }) });
   return s.steg || 1;
 }
 
-function ilmGlomUtkast(pid) {
+// ocksaSparat: också utkastet i webbläsaren ("Släng" på Översikt). Annars bara
+// det som finns i minnet (stängning), och ett sparat utkast finns kvar.
+function ilmGlomUtkast(pid, ocksaSparat = true) {
   _ilm.utkast.delete(pid);
   _ilm.val.delete(pid);
   _ilm.rensaKlar.delete(pid);   // urkryssningen efter ett byte av IFC-mapp görs om nästa gång (ilmRensaUtanfor)
+  if (!ocksaSparat) return;
+  _ilm.utkastSparat.delete(pid);
   try { localStorage.removeItem(`ilm-utkast:${pid}`); } catch { /* inte kritiskt */ }
 }
 
@@ -126,19 +161,18 @@ function ilmStangFonster() {
   setTimeout(() => ruta.remove(), ILM_ANIMERING_MS);
 }
 
-// ✕, Esc och klick utanför: det som inte är sparat slängs (efter en fråga).
-// Det som redan sparats med Nästa, och det som ligger i kön, finns kvar.
+// ✕ uppe till höger, Esc och klick utanför: stänger. Det som inte är sparat
+// (varken med Nästa eller som utkast) slängs efter en fråga. Ett sparat utkast,
+// det som sparats med Nästa och filer som görs om finns kvar.
 function ilmAvsluta() {
   const pid = _ilm.projektId;
-  if (ilmHarUtkast(pid) && !confirm('Ändringar som inte har sparats med Nästa slängs.\n\nDet som redan är sparat, och filer som görs om, påverkas inte.\n\nAvbryta ändå?')) return;
-  ilmGlomUtkast(pid);
-  ilmStangFonster();
-}
-
-// 💾: utkastet sparas i webbläsaren och fönstret stängs. Fortsätt från Översikt.
-function ilmPausa() {
-  const pid = _ilm.projektId;
-  if (ilmHarUtkast(pid) || typeof _ilm.steg === 'number') ilmSparaUtkast(pid);
+  if (ilmHarOsparat(pid)) {
+    const harSparat = _ilm.utkastSparat.has(pid);
+    if (!confirm(harSparat
+      ? 'Ändringar sedan du sparade utkastet slängs. Det sparade utkastet finns kvar.\n\nStäng ändå?'
+      : 'Ändringar som inte har sparats slängs. Spara utkast först om du vill fortsätta senare.\n\nDet som redan sparats med Nästa, och filer som görs om, påverkas inte.\n\nStäng ändå?')) return;
+  }
+  ilmGlomUtkast(pid, false);
   ilmStangFonster();
 }
 
@@ -226,16 +260,19 @@ async function ilmNasta() {
     _ilm.blad = null;
     if (steg === 4) {
       // Klar: utkastet är förbrukat.
-      try { localStorage.removeItem(`ilm-utkast:${pid}`); } catch { /* inte kritiskt */ }
+      ilmGlomUtkast(pid);
       _ilm.steg = 'oversikt';
     } else {
       _ilm.steg = steg + 1;
+      // Ett sparat utkast följer med, utan det som nu är sparat i ACC.
+      if (ilmSparatUtkast(pid)) ilmSparaUtkast(pid);
     }
   } catch (err) {
     console.warn('Modellinställningar: steg', steg, err);
     _ilm.stegFel = ilmAccFel(err);
   } finally {
     _ilm.sparar = false;
+    _ilm.framsteg = null;
     ilmRitaNu();
   }
 }
@@ -274,7 +311,7 @@ function ilmRitaNu() {
       ${steg === 3 ? ilmSkalHtml() : '<div id="ilm-sida" class="flex-1 min-h-0 overflow-y-auto text-xs"></div>'}
       <div id="ilm-fot" class="shrink-0 border-t border-ads-border bg-ads-gray/50 rounded-b-lg"></div>`;
     if (steg === 1 || steg === 2) ilmOppnaMappval(steg);
-    if (steg === 3) _ilm.rensaKlar.delete(pid);
+    if (steg === 3) { _ilm.rensaKlar.delete(pid); ilmTradLas(pid); }
   }
   ilmSatt(document.getElementById('ilm-stegrad'), ilmStegradHtml(pid, steg));
   if (steg === 3) {
@@ -328,25 +365,51 @@ function ilmStegradHtml(pid, steg) {
   return `<div class="flex items-center gap-1 flex-wrap">${delar.join('<span class="text-ads-border">›</span>')}</div>`;
 }
 
-// Foten: ✕ och 💾 till vänster om Tillbaka och Nästa (Mahdi, 2026-11-09).
+// Foten: "Spara utkast" (stänger inte), Tillbaka och Nästa. Stäng med ✕ uppe till höger (Mahdi, 2026-11-10).
 function ilmFotHtml(pid, steg) {
   if (steg === 'oversikt' || steg === 'laddar') {
-    return `<div class="flex items-center gap-2 px-5 py-3"><div class="flex-1"></div>${ilmKnapp('ilmStangFonster()', 'Stäng')}</div>`;
+    return `<div class="flex items-center gap-3 px-5 py-3"><div class="min-w-0 flex-1">${ilmKoStapel(pid)}</div>${ilmKnapp('ilmStangFonster()', 'Stäng')}</div>`;
   }
-  const ikon = (klick, tecken, titel) => `
-    <button onclick="${klick}" title="${titel}" class="w-8 h-8 flex items-center justify-center border border-ads-border rounded bg-white text-ads-muted hover:text-ads-text hover:border-ads-blue">${tecken}</button>`;
+  const sparat = _ilm.utkastSparat.get(pid);
+  const osparat = ilmHarOsparat(pid);
+  const utkastText = sparat && !osparat
+    ? `<span class="text-ads-muted">Utkast sparat ${new Date(sparat.tid).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}</span>` : '';
   const nasta = steg === 4 ? 'Spara och klar' : steg === 3 && ilmHarAndringar(pid) ? 'Spara och nästa' : 'Nästa';
   const kanNasta = !_ilm.sparar && ilmKanGaVidare(pid, steg);
   return `
     <div class="flex items-center gap-2 px-5 py-3">
-      <div class="text-xs min-w-0 truncate">${_ilm.stegFel ? `<span class="text-red-700">${vkEsc(_ilm.stegFel)}</span>`
-        : _ilm.sparar ? '<span class="text-ads-blue">Sparar i ACC…</span>' : ilmStegHint(pid, steg)}</div>
-      <div class="flex-1"></div>
-      ${ikon('ilmAvsluta()', '✕', 'Avbryt: det som inte är sparat slängs')}
-      ${ikon('ilmPausa()', '💾', 'Spara och fortsätt senare: utkastet sparas i din webbläsare')}
+      <div class="text-xs min-w-0 flex-1 truncate">${_ilm.stegFel ? `<span class="text-red-700">${vkEsc(_ilm.stegFel)}</span>`
+        : _ilm.sparar ? ilmStapelHtml(_ilm.framsteg?.totalt > 1 ? `Sparar i ACC: ${_ilm.framsteg.klara} av ${_ilm.framsteg.totalt}` : 'Sparar i ACC…',
+                                      _ilm.framsteg?.totalt > 1 ? _ilm.framsteg.klara / _ilm.framsteg.totalt : null)
+        : ilmKoStapel(pid) || [ilmStegHint(pid, steg), utkastText].filter(Boolean).join(' · ')}</div>
+      ${ilmKnapp('ilmSparaUtkastNu()', 'Spara utkast', '',
+        'title="Sparar det du gjort hittills i den här webbläsaren, så att du kan fortsätta senare (Översikt → Fortsätt setup). Inget skrivs till ACC."')}
       ${ilmKnapp('ilmTillbaka()', 'Tillbaka')}
       ${ilmKnapp('ilmNasta()', nasta, ILM_KNAPP_HUVUD, kanNasta ? '' : 'disabled')}
     </div>`;
+}
+
+// En förloppsstapel med text. andel 0–1, eller null när det inte går att veta
+// hur långt det kommit (stapeln rör sig då fram och tillbaka).
+function ilmStapelHtml(text, andel, rod = false) {
+  const fyll = andel == null
+    ? '<div class="absolute inset-y-0 w-1/3 rounded-full bg-ads-blue ilm-stapel-gar"></div>'
+    : `<div class="h-full rounded-full ${rod ? 'bg-red-500' : 'bg-ads-blue'} transition-all duration-300" style="width: ${Math.round(Math.max(0.03, Math.min(1, andel)) * 100)}%"></div>`;
+  return `
+    <div class="flex items-center gap-3 min-w-0 w-full">
+      <span class="text-xs whitespace-nowrap ${rod ? 'text-red-700' : 'text-ads-blue'}">${text}</span>
+      <div class="relative flex-1 min-w-[6rem] max-w-[16rem] h-1.5 rounded-full bg-ads-gray overflow-hidden">${fyll}</div>
+    </div>`;
+}
+
+// Kön för projektet: "Modellen uppdateras: 12 av 55 klara", eller null.
+function ilmKoStapel(pid) {
+  const o = _ilm.omgang.get(pid);
+  const pagar = ilmPagar(pid);
+  if (!o || !pagar.length) return '';
+  const nu = pagar.find(j => !_ilm.ko.includes(`${j.pid}|${j.nyckel}`));
+  const andel = (o.klara + (nu?.andel ?? 0)) / Math.max(1, o.totalt);
+  return ilmStapelHtml(`Modellen uppdateras: ${o.klara} av ${o.totalt} klara`, andel);
 }
 
 // Nästa kräver ett val i steg 1 och 2 (antingen redan sparat eller nyss valt).
@@ -460,7 +523,7 @@ async function ilmSparaSteg1(pid) {
   if (!u.ifcMapp) return;
   const mapp = u.ifcMapp;
   // Filer utanför den nya mappen kryssas ur i steg 3 när trädet är läst. Det
-  // minns (också i webbläsaren) tills steg 3 sparas, så ✕ eller 💾 hoppar inte över det.
+  // minns (också i webbläsaren) tills steg 3 sparas, så att stänga eller spara utkast inte hoppar över det.
   if (ilmFiler(pid).length) { _ilm.rensa.set(pid, mapp.id); isvSparaVal(`ilm-rensa:${pid}`, mapp.id); }
   await ilmSattIfcMapp(pid, mapp);
   u.ifcMapp = null;
@@ -526,15 +589,21 @@ async function ilmSparaSteg3(pid) {
   const lagg = [...v.lagg.values()];
   const tabort = [...v.tabort];
   if (!lagg.length && !tabort.length) { ilmRensaKlar(pid); return true; }
+  const iModellen = tabort.filter(id => ilmFiler(pid).some(f => f.ifc.itemId === id));
   if (tabort.length) {
     const namn = tabort.map(id => ilmFiler(pid).find(f => f.ifc.itemId === id)?.ifc.namn || ilmJobbFor(pid, id)?.namn).filter(Boolean).map(n => `• ${n}`);
     const lista = namn.slice(0, 15).join('\n') + (namn.length > 15 ? `\n… och ${namn.length - 15} till` : '');
     if (!confirm(`Ta bort ${tabort.length} ${tabort.length === 1 ? 'fil' : 'filer'} ur modellen?\n\n${lista}\n\nIFC-filerna ligger kvar i ACC.`)) return false;
-    for (const id of tabort) ilmAvbryt(pid, id);
-    const iModellen = tabort.filter(id => ilmFiler(pid).some(f => f.ifc.itemId === id));
-    if (iModellen.length) await ilmSkrivIndex(pid, d => { d.filer = d.filer.filter(x => !iModellen.includes(x.ifc.itemId)); });
   }
-  ilmLaggTillFranAcc(pid, lagg.map(f => ({ itemId: f.itemId, namn: f.namn, sokvag: f.sokvag || '', storlek: f.storlek })));
+  // Förloppet: borttagningen ur modellen är en sparning, varje fil som läggs till en till.
+  const f = _ilm.framsteg = { klara: 0, totalt: (iModellen.length ? 1 : 0) + lagg.length };
+  const steg = () => { f.klara++; ilmSatt(document.getElementById('ilm-fot'), ilmFotHtml(pid, _ilm.steg)); };
+  for (const id of tabort) ilmAvbryt(pid, id);
+  if (iModellen.length) { await ilmSkrivIndex(pid, d => { d.filer = d.filer.filter(x => !iModellen.includes(x.ifc.itemId)); }); steg(); }
+  for (const x of lagg) {
+    ilmLaggTillFranAcc(pid, [{ itemId: x.itemId, namn: x.namn, sokvag: x.sokvag || '', storlek: x.storlek }]);
+    steg();
+  }
   _ilm.val.delete(pid);
   ilmRensaKlar(pid);
   return true;
@@ -744,8 +813,9 @@ function ilmRitaBanner() {
     document.body.appendChild(el);
   }
   const nu = jobb.find(j => !_ilm.ko.includes(`${j.pid}|${j.nyckel}`)) || jobb[0];
+  const o = _ilm.omgang.get(nu.pid);
   ilmSatt(el, `<span class="w-2 h-2 rounded-full bg-ads-blue animate-pulse"></span>
-    <span>Modellen uppdateras: ${vkEsc(nu.namn)} – ${vkEsc(ilmJobbText(nu))}${jobb.length > 1 ? ` · ${jobb.length - 1} till i kön` : ''}</span>
+    <span>Modellen uppdateras${o?.totalt > 1 ? ` (${o.klara} av ${o.totalt} klara)` : ''}: ${vkEsc(nu.namn)} – ${vkEsc(ilmJobbText(nu))}</span>
     <span class="text-white/60">Stäng inte sidan</span>`);
 }
 
@@ -948,7 +1018,9 @@ function ilmRitaStatus(pid) {
   else if (t.tid) {
     const d = new Date(t.tid);
     const idag = d.toDateString() === new Date().toDateString();
-    delar.push(`läst ${idag ? `i dag ${d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}` : d.toLocaleString('sv-SE').slice(0, 16)}`);
+    const min = Math.round((Date.now() - t.tid) / 60000);
+    const sedan = min < 1 ? 'nyss' : min < 60 ? `för ${min} min sedan` : min < 24 * 60 ? `för ${Math.round(min / 60)} h sedan` : `för ${Math.round(min / 1440)} dagar sedan`;
+    delar.push(`mappstrukturen läst ${idag ? `i dag ${d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}` : d.toLocaleString('sv-SE').slice(0, 16)} (${sedan})`);
   }
   if (t.fel && t.data) delar.push(`<span class="text-red-700">läsningen gick inte: ${vkEsc(t.fel)}</span>`);
   if (t.data?.ejLasta) delar.push(`<span class="text-amber-700">${t.data.ejLasta} ${t.data.ejLasta === 1 ? 'mapp' : 'mappar'} gick inte att läsa</span>`);
@@ -967,7 +1039,7 @@ function ilmRitaStatus(pid) {
     }
     k.push(ilmLank('ilmRensaFilter()', 'Rensa filter'));
   }
-  if (!t.laddar) k.push(ilmLank('ilmTradLas(_ilm.projektId, true)', 'Läs om', 'title="Läs IFC-mappen från ACC igen, till exempel om en ny fil har laddats upp"'));
+  if (!t.laddar) k.push(ilmLank('ilmTradLas(_ilm.projektId, true, true)', 'Läs om', 'title="Läser varje mapp under IFC-mappen direkt i ACC, så att även filer och mappar som just lagts till kommer med. Tar längre tid än den vanliga läsningen."'));
   k.push(ilmLank('ilmVaxlaDetaljer()', _ilm.detaljer ? 'Dölj detaljer' : 'Visa detaljer', 'title="Version, storlek och disciplinkod på varje fil"'));
   ilmSatt(knappar, k.join(''));
 }
