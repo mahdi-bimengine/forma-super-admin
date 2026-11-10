@@ -19,7 +19,7 @@ correctly (`sortBy=-createdAt`), and a new comment bumps the issue's `updatedAt`
    resolved. A project where a model set fails gets "Kunde inte kontrolleras" (`fel`) for all its issues instead
    of a partial result. A run started earlier never writes over a newer one (`_is.modellGen`). The meeting sheet
    fills "Clashar kvar" only for Löst/Delvis/Kvar.
-Tested locally with made-up issues and a pretend ACC/Model Coordination. Not yet tested on the live site.
+Tested locally with made-up issues and a pretend ACC/Model Coordination, and on the live site on 2026-11-10 in R&D BIM ENGINE with three test clash issues (#25–#27, now closed). ACC does not let this account set "completed" (only the assignee's workflow can), so the test issues (status in_review) were counted as completed inside that browser tab only. Live results: 1 and 2 (send-back kept, hidden tick dropped), 3 (#26 closed, #27 changed in ACC between review and save was skipped as "ändrad i ACC"), 5 (filter reset after Uppdatera), and the model check ran without errors (no linked clash groups in R&D, so all "Ej kopplad"). 4 and the model-check rules in 6 were tested locally only.
 
 ## Still open (by severity)
 - Bulk close does not warn about issues the model check shows as "Finns kvar"/"Delvis".
