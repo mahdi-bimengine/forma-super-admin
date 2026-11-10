@@ -173,11 +173,14 @@ function isvRitaRad() {
     <span class="${_isv.fel ? 'text-red-700' : 'text-ads-muted'} whitespace-nowrap">${vkEsc(_isv.status || isfStatus())}</span>
     <div class="flex-1"></div>
     ${isfArendeVisas() ? `
-      <label class="flex items-center gap-1 cursor-pointer text-ads-muted whitespace-nowrap" title="Skär bort allt över ärendet och visa det uppifrån, som en planritning">
-        <input type="checkbox" ${_isf.arendeSnitt ? 'checked' : ''} onchange="isfVaxlaArendeval('arendeSnitt')" class="accent-ads-blue" /> Plansnitt</label>
-      <label class="flex items-center gap-1 cursor-pointer text-ads-muted whitespace-nowrap" title="Visa elementen vid nålen tydligt och resten genomskinligt">
-        <input type="checkbox" ${_isf.tona ? 'checked' : ''} onchange="isfVaxlaArendeval('tona')" class="accent-ads-blue" /> Tona ner omgivningen</label>
-      <button onclick="isfGaTillArende(_isv.aktiv, _isv.lank)" class="hover:text-ads-blue whitespace-nowrap" title="Gå tillbaka till ärendets plats">Ärendets vy</button>` : ''}
+      <label class="flex items-center gap-1 cursor-pointer text-ads-muted whitespace-nowrap" title="Visa elementen vid markören tydligt och resten genomskinligt">
+        <input type="checkbox" ${_isf.tona ? 'checked' : ''} onchange="isfVaxlaTona()" class="accent-ads-blue" /> Tona ner omgivningen</label>
+      <span class="flex items-center whitespace-nowrap">
+        <button onclick="isfTillArendetsVy()" title="Ärendets egen vy, som den sparades i Model Coordination. Återställer det du ändrat för hand."
+                class="px-1.5 py-0.5 border rounded-l ${_isf.arendePlan ? 'border-ads-border hover:border-ads-blue' : 'border-ads-blue bg-ads-blue text-white'}">Ärendets vy</button>
+        <button onclick="isfVaxlaPlan()" title="Visa ärendets läge uppifrån, som en planritning. Klicka igen för att gå tillbaka."
+                class="px-1.5 py-0.5 border border-l-0 rounded-r ${_isf.arendePlan ? 'border-ads-blue bg-ads-blue text-white' : 'border-ads-border hover:border-ads-blue'}">Plan</button>
+      </span>` : ''}
     <button onclick="isvVaxla()" class="text-ads-muted hover:text-ads-text" title="Stäng modellen">✕</button>`;
 
   // Meddelandet mitt i modellrutan (inget valt underlag, laddar, fel).
@@ -407,6 +410,7 @@ function isvVisa(a) {
   _isv.lank  = _isv.arenden.get(a.id) || null;
   _isv.status = '';
   _isv.fel = false;
+  _isf.arendePlan = false;   // ett nytt ärende öppnas alltid i sin egen vy, aldrig i planen
   if (a.projektId !== isvProjektId()) {
     // Ärendet hör till ett annat projekt: visa det projektets modell.
     _isv.projektId = a.projektId;

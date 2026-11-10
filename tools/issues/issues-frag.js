@@ -51,17 +51,18 @@ const _isf = {
   lage:      new Map(), // ärende-id → 'ja' | 'nej': finns ärendets modell eller element i den lätta modellen
   markor:    null,      // nålen i scenen
   tonade:    false,     // omgivningen är nedtonad
-  arendeSnitt: isvLasVal('isf-arendesnitt', true),  // plansnitt vid ärendet, sett uppifrån
-  tona:      isvLasVal('isf-tona', true),           // tona ner allt utom elementen vid nålen
+  arendePlan: false,    // planen uppifrån visas (knappen Plan); aldrig första vyn, nollställs vid nytt ärende
+  tona:      isvLasVal('isf-tona2', false),         // tona ner allt utom elementen vid nålen (av från början, Mahdi 2026-11-10)
   lador:     new Map(), // modell-id → löfte om { ids, boxar } för nedtoningen
 };
 
-// Fokus på ärendet. Mått i meter.
+// Vyn vid ett ärende (docs/SPEC-ARENDEVISARE.md, Mahdi 2026-11-10). Mått i meter.
 const ISF_NARA_M     = 0.3;  // element inom så här långt från nålen hör till ärendet (krockar)
-const ISF_MARGINAL_M = 3;    // vyn visar minst så här långt runt nålen
-const ISF_PLAN_OVER_M = 1.2; // plansnittet ligger så här högt över ärendet, som en planritning (Mahdi, 2026-11-09)
-const ISF_ELEMENT_M  = 8;    // och tar med elementet upp till så här långt bort
+const ISF_RUM_M      = 6;    // utan sparat snitt skärs en låda så här långt åt varje håll (rummet, 12 m)
+const ISF_PLAN_OVER_M = 1.2; // planens snitt ligger så här högt över ärendet, som en planritning (Mahdi, 2026-11-09)
+const ISF_PLAN_RADIE_M = 15; // planen visar ungefär så här långt runt ärendet; zooma ut för hela våningen
 const ISF_EXAKT_M    = 0.5;  // en omräknad nål längre än så från sitt element räknas som fel
+const ISF_SNITT_SLACK_M = 0.5; // ett sparat snitt får inte skära bort ärendets punkt med mer än så
 
 const ISF_VALD_FARG = '#0696D7';
 // Markeringen på en modell med en blå färg nära ISF_VALD_FARG (finns i paletten).
@@ -454,7 +455,7 @@ async function isfPlacera(lank) {
   }
 
   // Exakt: nålen på en IFC (samma fil, eller samma GlobalId som i en IFC) räknas om.
-  let punkt = null, kamera = null, exakt = false;
+  let punkt = null, kamera = null, exakt = false, snitt = [];
   const ifcNal = fil.ifc.itemId === lineage || isfArIfcGuid(lank.details?.externalId);
   if (ifcNal && lank.details?.position) {
     const vs = lank.details.viewerState || {};
@@ -464,12 +465,42 @@ async function isfPlacera(lank) {
       exakt = true;
       const oga = isfFranAutodesk(vs.viewport?.eye, vs.globalOffset, fil, m);
       const mal = isfFranAutodesk(vs.viewport?.target, vs.globalOffset, fil, m);
-      if (oga && mal && oga.distanceTo(mal) > 1e-6) kamera = { oga, mal };
+      if (oga && mal && oga.distanceTo(mal) > 1e-6) {
+        kamera = { oga, mal, fov: Number(vs.viewport?.fieldOfView) || null, orto: !!vs.viewport?.isOrthographic };
+      }
+      snitt = isfSparadeSnitt(vs, fil, m, p);
     }
   }
   if (!punkt && elementLada) punkt = elementLada.getCenter(new T.Vector3());
   if (!punkt) return null;
-  return { modelId: fil.ifc.itemId, localId, punkt, elementLada, kamera, exakt };
+  return { modelId: fil.ifc.itemId, localId, punkt, elementLada, kamera, exakt, snitt };
+}
+
+// Snitten som sparades med ärendet i ACC (viewerState.cutplanes, [a, b, c, d]
+// per plan i Autodesks koordinater), omräknade till visarens. Autodesk skär
+// bort sidan där a·x + b·y + c·z + d > 0, så normalen vänds: three.js behåller
+// sidan normalen pekar mot. Skulle ett omräknat snitt skära bort ärendets egen
+// punkt är något fel (okänt format eller tecken), och då används inget av dem;
+// vyn faller tillbaka på lådan runt ärendet. Inte provat mot ett riktigt ärende
+// med sparat snitt (2026-11-10).
+function isfSparadeSnitt(vs, fil, m, punkt) {
+  const ut = [];
+  for (const cp of Array.isArray(vs.cutplanes) ? vs.cutplanes : []) {
+    const t = Array.isArray(cp) ? cp.map(Number) : cp && typeof cp === 'object' ? [+cp.x, +cp.y, +cp.z, +cp.w] : null;
+    if (!t || t.length < 4 || t.some(n => !Number.isFinite(n))) return [];
+    const [a, b, c, d] = t;
+    const l2 = a * a + b * b + c * c;
+    if (l2 < 1e-12) continue;
+    const l = Math.sqrt(l2);
+    const p0 = [-a * d / l2, -b * d / l2, -c * d / l2];
+    const pa = isfFranAutodesk(p0, vs.globalOffset, fil, m);
+    const pb = isfFranAutodesk([p0[0] + a / l, p0[1] + b / l, p0[2] + c / l], vs.globalOffset, fil, m);
+    if (!pa || !pb || pa.distanceTo(pb) < 1e-9) return [];
+    const normal = pa.clone().sub(pb).normalize();
+    if (normal.dot(punkt.clone().sub(pa)) < -ISF_SNITT_SLACK_M) return [];
+    ut.push({ normal, punkt: pa });
+  }
+  return ut;
 }
 
 // Finns varje placerat ärende i projektets lätta modell? En sökning per modell
@@ -539,53 +570,86 @@ async function isfGaTillArende(arende, lank) {
     return;
   }
   const T = v.THREE;
+  const punkt = plats.punkt;
 
-  // Markören: en cirkel med vit kant i ärendets statusfärg från ACC, lika stor
-  // på skärmen oavsett avstånd och synlig genom det som ligger framför.
+  // 1. Kameran först, så att vyn börjar röra sig direkt vid klicket (Mahdi,
+  //    2026-11-10); resten görs medan den glider.
+  //    - Planen (knappen Plan): rakt uppifrån.
+  //    - Ärendets sparade kamera: samma plats och riktning som i Model
+  //      Coordination, med dess bildvinkel. Mittpunkten för snurrandet läggs på
+  //      ärendets djup längs blicken, vilket inte ändrar bilden.
+  //    - Ingen användbar kamera (till exempel nål på en Revit-modell): snett
+  //      uppifrån, så att rummet runt ärendet fyller bilden.
+  const kam = v.world.camera.three;
+  if (v.fovStandard == null) v.fovStandard = kam.fov || 60;
+  const sparad = !_isf.arendePlan && plats.kamera && !plats.kamera.orto ? plats.kamera : null;
+  const fovGrader = sparad?.fov >= 10 && sparad.fov <= 120 ? sparad.fov : v.fovStandard;
+  if (kam.isPerspectiveCamera && kam.fov !== fovGrader) { kam.fov = fovGrader; kam.updateProjectionMatrix(); }
+  const fov = fovGrader * Math.PI / 180;
+  let oga, mal;
+  if (_isf.arendePlan) {
+    mal = punkt.clone();
+    oga = punkt.clone().add(new T.Vector3(0, 1, -0.0001).normalize().multiplyScalar(ISF_PLAN_RADIE_M / Math.tan(fov / 2)));
+  } else if (sparad) {
+    const riktning = sparad.mal.clone().sub(sparad.oga).normalize();
+    const djup = punkt.clone().sub(sparad.oga).dot(riktning);
+    oga = sparad.oga.clone();
+    mal = oga.clone().add(riktning.multiplyScalar(djup > 0.5 ? djup : sparad.oga.distanceTo(sparad.mal)));
+  } else {
+    const riktning = plats.kamera ? plats.kamera.mal.clone().sub(plats.kamera.oga).normalize() : new T.Vector3(-1, -0.8, -1).normalize();
+    mal = punkt.clone();
+    oga = punkt.clone().sub(riktning.multiplyScalar(ISF_RUM_M * Math.sqrt(3) / Math.sin(fov / 2) * 0.9));
+  }
+  v.world.camera.controls.setLookAt(oga.x, oga.y, oga.z, mal.x, mal.y, mal.z, true);
+
+  // 2. Markören: en cirkel med vit kant i ärendets statusfärg från ACC, lika
+  //    stor på skärmen oavsett avstånd och synlig genom det som ligger framför.
   const markor = isfMarkorSprite(T, IS_STATUS[arende.status]?.farg || '#E8590C');
-  markor.position.copy(plats.punkt);
+  markor.position.copy(punkt);
   _isf.markor = markor;
   v.world.scene.three.add(markor);
 
-  // Området runt ärendet: några meter runt nålen plus elementet (begränsat).
-  const lada = new T.Box3(plats.punkt.clone(), plats.punkt.clone()).expandByScalar(ISF_MARGINAL_M);
-  if (plats.elementLada) {
-    const tak = new T.Box3(plats.punkt.clone(), plats.punkt.clone()).expandByScalar(ISF_ELEMENT_M);
-    lada.union(plats.elementLada.clone().intersect(tak));
+  // 3. Snittet, i eget läge ('arende': planen ritas inte ut och dubbelklick
+  //    lägger inte till fler). Det ersätter det användaren ändrat för hand.
+  //    - Planen: ett vågrätt snitt en bit över ärendet.
+  //    - Snitt sparade med ärendet i ACC: exakt de.
+  //    - Annars: en låda i rumsstorlek, så att väggar och bjälklag framför
+  //      ärendet inte skymmer.
+  isfSnitt('plan');
+  const clipper = v.components.get(v.OBC.Clipper);
+  if (_isf.arendePlan) {
+    clipper.createFromNormalAndCoplanarPoint(v.world, new T.Vector3(0, -1, 0), punkt.clone().add(new T.Vector3(0, ISF_PLAN_OVER_M, 0)));
+  } else if (plats.snitt?.length) {
+    for (const s of plats.snitt) clipper.createFromNormalAndCoplanarPoint(v.world, s.normal.clone(), s.punkt.clone());
+  } else {
+    isfSnittlada(new T.Box3(punkt.clone(), punkt.clone()).expandByScalar(ISF_RUM_M));
   }
-  // Plansnittet: ett vågrätt plan en bit över ärendet; allt ovanför skärs bort
-  // och kameran ser ner på ärendet uppifrån (Mahdi, 2026-11-09).
-  if (_isf.arendeSnitt) {
-    // Eget läge ('arende'): planet ritas inte ut och dubbelklick lägger inte till fler.
-    isfSnitt('plan');
-    const clipper = v.components.get(v.OBC.Clipper);
-    clipper.createFromNormalAndCoplanarPoint(v.world, new T.Vector3(0, -1, 0), plats.punkt.clone().add(new T.Vector3(0, ISF_PLAN_OVER_M, 0)));
-    clipper.visible = false;
-    _isf.snitt = 'arende';
-    isfRitaVerktyg();
-    v.fm.core.update(true);
-  } else if (_isf.snitt) {
-    isfSnitt(null);
-  }
+  clipper.visible = false;
+  _isf.snitt = 'arende';
+  isfRitaVerktyg();
+  v.fm.core.update(true);
 
-  await isfMarkera(plats.localId != null ? { modelId: plats.modelId, localId: plats.localId } : null);
+  // 4. Elementen behåller modellens färger: inget markeras (Mahdi, 2026-11-10).
+  await isfMarkera(null);
   if (nr !== _isfArendeNr) return;
   if (_isf.tona) await isfTonaNer(plats);
   if (nr !== _isfArendeNr) return;
-
-  // Kameran: med plansnitt rakt uppifrån mot ärendet, annars ärendets egen
-  // blickriktning; så nära att området fyller bilden.
-  const riktning = _isf.arendeSnitt ? new T.Vector3(0, -1, 0.0001).normalize()
-    : plats.kamera ? plats.kamera.mal.clone().sub(plats.kamera.oga).normalize() : new T.Vector3(-1, -0.8, -1).normalize();
-  const mitt = _isf.arendeSnitt ? plats.punkt.clone() : lada.getCenter(new T.Vector3());
-  const radie = lada.getBoundingSphere(new T.Sphere()).radius;
-  const fov = (v.world.camera.three.fov || 45) * Math.PI / 180;
-  const avstand = Math.max(2, radie / Math.sin(fov / 2) * 0.9);
-  const oga = mitt.clone().sub(riktning.multiplyScalar(avstand));
-  await v.world.camera.controls.setLookAt(oga.x, oga.y, oga.z, mitt.x, mitt.y, mitt.z, true);
   v.fm.core.update(true);
-  if (nr !== _isfArendeNr) return;
-  isvSattStatus(plats.exakt ? '' : 'Ungefärlig placering: nålen visas mitt på elementet.');
+  isvSattStatus(plats.exakt ? '' : 'Ungefärlig placering: markören visas mitt på elementet.');
+}
+
+// Knappen Plan: växlar mellan planen uppifrån och ärendets egen vy.
+function isfVaxlaPlan() {
+  _isf.arendePlan = !_isf.arendePlan;
+  isvRitaRad();
+  if (_isv.aktiv) isfGaTillArende(_isv.aktiv, _isv.lank);
+}
+
+// Knappen Ärendets vy: tillbaka till ärendets egen vy, också från planen.
+function isfTillArendetsVy() {
+  _isf.arendePlan = false;
+  isvRitaRad();
+  if (_isv.aktiv) isfGaTillArende(_isv.aktiv, _isv.lank);
 }
 
 // Markören: en rund bild (canvas) med statusfärgen och vit kant, som alltid
@@ -637,9 +701,9 @@ async function isfTonaNer(plats) {
   v.fm.core.update(true);
 }
 
-function isfVaxlaArendeval(namn) {
-  _isf[namn] = !_isf[namn];
-  isvSparaVal(namn === 'tona' ? 'isf-tona' : 'isf-arendesnitt', _isf[namn]);
+function isfVaxlaTona() {
+  _isf.tona = !_isf.tona;
+  isvSparaVal('isf-tona2', _isf.tona);
   isvRitaRad();
   if (_isv.aktiv) isfGaTillArende(_isv.aktiv, _isv.lank);
 }
@@ -787,7 +851,7 @@ function isfRitaVerktyg() {
   const knapp = (pa, klick, text, titel, extra = '') => `
     <button onclick="${klick}" title="${titel}"
             class="px-2.5 py-1 ${extra} ${pa ? 'bg-ads-blue text-white' : 'bg-white text-ads-text hover:bg-ads-gray'}">${text}</button>`;
-  const snittText = { lada: 'Snitt: låda', plan: 'Snitt: plan', arende: 'Plansnitt' }[_isf.snitt] || 'Snitt';
+  const snittText = { lada: 'Snitt: låda', plan: 'Snitt: plan', arende: 'Snitt: ärendet' }[_isf.snitt] || 'Snitt';
   const antalDolda = [..._isf.dolda].filter(id => _isf.laddade.has(id)).length;
   const prick = ilmHarUppdateringar(_isf.projektId)
     ? '<span class="inline-block w-2 h-2 ml-1 rounded-full bg-red-600 align-middle" title="Det finns nyare IFC-versioner"></span>' : '';
