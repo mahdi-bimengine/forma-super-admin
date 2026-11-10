@@ -47,9 +47,13 @@ function mdBas() {
 // token och anropet görs om en gång. Går det inte visas "Logga in igen".
 async function apsFetch(url, opt = {}) {
   if (!_token) throw new Error('No APS token set. Call setToken() first.');
-  const huvuden = { ...(opt.headers || {}), Authorization: `Bearer ${_token}` };
-  if (APS_REGIONSTYRDA.some(s => url.includes(s))) huvuden['x-ads-region'] = apsRegion();
-  const gor = () => fetch(url, { ...opt, headers: huvuden });
+  // Huvudena byggs vid varje försök, så att omförsöket efter en förnyad
+  // inloggning skickar den nya token och inte den som just gick ut.
+  const gor = () => {
+    const huvuden = { ...(opt.headers || {}), Authorization: `Bearer ${_token}` };
+    if (APS_REGIONSTYRDA.some(s => url.includes(s))) huvuden['x-ads-region'] = apsRegion();
+    return fetch(url, { ...opt, headers: huvuden });
+  };
   let res = await gor();
   if (res.status === 401 && await apsFornyaToken()) res = await gor();
   if (res.status === 401) _tokenUtgangen?.();

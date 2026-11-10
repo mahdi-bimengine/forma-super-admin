@@ -7,12 +7,18 @@
 //
 // Kontrollen blir aldrig färskare än senaste uppladdningen till model setet.
 
+// "Löst" visas bara när varje clashgrupp i ärendet har jämförts och inga
+// clashar finns kvar. Saknas något (grupp som inte körts om, svar utan
+// clashlista, model set som inte gick att läsa) blir läget aldrig "Löst"
+// (granskning 2026-11-09, blocker 6).
 const IS_MODELL_LAGE = {
-  lost:    { titel: 'Löst i modellen',   kort: '✓ Löst',      farg: 'bg-emerald-100 text-emerald-800' },
-  delvis:  { titel: 'Delvis löst',       kort: '◐ Delvis',    farg: 'bg-amber-100 text-amber-900' },
-  kvar:    { titel: 'Finns kvar',        kort: '✕ Kvar',      farg: 'bg-red-100 text-red-800' },
-  ingenNy: { titel: 'Ingen ny körning',  kort: '– Ej omkörd', farg: 'bg-ads-gray text-ads-muted' },
-  okand:   { titel: 'Ej kopplad',        kort: '–',           farg: 'text-ads-muted' },
+  lost:    { titel: 'Löst i modellen',          kort: '✓ Löst',          farg: 'bg-emerald-100 text-emerald-800' },
+  delvis:  { titel: 'Delvis löst',              kort: '◐ Delvis',        farg: 'bg-amber-100 text-amber-900' },
+  kvar:    { titel: 'Finns kvar',               kort: '✕ Kvar',          farg: 'bg-red-100 text-red-800' },
+  ofull:   { titel: 'Inte helt kontrollerad',   kort: '? Ej helt',       farg: 'bg-amber-50 text-amber-800' },
+  ingenNy: { titel: 'Ingen ny körning',         kort: '– Ej omkörd',     farg: 'bg-ads-gray text-ads-muted' },
+  fel:     { titel: 'Kunde inte kontrolleras',  kort: '! Ej kontrollerad', farg: 'bg-red-50 text-red-700' },
+  okand:   { titel: 'Ej kopplad',               kort: '–',               farg: 'text-ads-muted' },
 };
 
 const IS_MAX_VERSIONER = 5;   // så många versioner bakåt som letas efter en lyckad körning
@@ -29,6 +35,10 @@ function isModellLage(a) {
 async function isKorModellkontroll(tvinga = false) {
   if (_is.modellStatus?.laddar) return;
   if (!tvinga && _is.modellStatus?.klar) return;
+  // Varje körning får ett nummer. Startar en ny (Uppdatera, byte av konto)
+  // slutar den gamla skriva i läget, så att gamla resultat aldrig blandas in.
+  const gen = _is.modellGen = (_is.modellGen || 0) + 1;
+  const aktuell = () => _is.modellGen === gen;
 
   const arenden = isClashSlutforda();
   const perProjekt = new Map();
@@ -37,22 +47,29 @@ async function isKorModellkontroll(tvinga = false) {
     perProjekt.get(a.projektId).add(a.id);
   }
 
-  _is.modellStatus = { laddar: true, klara: 0, totalt: perProjekt.size, fel: [], text: 'Kontrollerar mot Model Coordination…' };
+  const status = _is.modellStatus = { laddar: true, klara: 0, totalt: perProjekt.size, fel: [], text: 'Kontrollerar mot Model Coordination…' };
   isRitaModellStatus();
 
   const nya = new Map();
   await Promise.all([...perProjekt.entries()].map(async ([projektId, ids]) => {
+    // Projektets resultat samlas för sig och läggs in först när hela projektet
+    // gick att kontrollera. Går något fel får projektets ärenden läget "fel",
+    // aldrig ett halvt resultat.
+    const egna = new Map();
     try {
-      await isKontrolleraProjekt(projektId, ids, nya);
+      await isKontrolleraProjekt(projektId, ids, egna, status);
+      for (const [id, r] of egna) nya.set(id, r);
     } catch (err) {
-      _is.modellStatus.fel.push(`${_is.projekt.get(projektId)?.namn || projektId}: ${String(err.message || err).slice(0, 300)}`);
+      status.fel.push(`${_is.projekt.get(projektId)?.namn || projektId}: ${String(err?.message || err).slice(0, 300)}`);
+      for (const id of ids) nya.set(id, { lage: 'fel', kvar: 0, lost: 0, totalt: 0, grupper: 0, modelSet: new Set(), version: null });
     }
-    _is.modellStatus.klara++;
-    isRitaModellStatus();
+    status.klara++;
+    if (aktuell()) isRitaModellStatus();
   }));
 
+  if (!aktuell()) return;
   _is.modell = nya;
-  _is.modellStatus = { ..._is.modellStatus, laddar: false, klar: true, tid: new Date() };
+  _is.modellStatus = { ...status, laddar: false, klar: true, tid: new Date() };
   if (_is.yta === 'clash') isRita();
 }
 
@@ -76,11 +93,11 @@ async function isMcLas(steg, fn) {
   }
 }
 
-async function isKontrolleraProjekt(projektId, ids, ut) {
+async function isKontrolleraProjekt(projektId, ids, ut, status) {
   const set = await isMcLas('Läsa model set', () => listModelSets(projektId));
   for (const ms of set) {
-    _is.modellStatus.text = `Kontrollerar ${ms.name || 'model set'}…`;
-    isRitaModellStatus();
+    status.text = `Kontrollerar ${ms.name || 'model set'}…`;
+    if (_is.modellStatus === status) isRitaModellStatus();
     const grupper = (await isMcLas(`Läsa ärendekopplade clashgrupper i "${ms.name}"`, () => listAssignedClashGroups(projektId, ms.id)))
       .filter(g => ids.has(g.issueId));
     if (!grupper.length) continue;
@@ -106,8 +123,8 @@ async function isKontrolleraProjekt(projektId, ids, ut) {
           () => postAssignedClashState(projektId, test.id, omgang));
         for (const s of svar) lage.set(s.id, s);
         klara += omgang.length;
-        _is.modellStatus.text = `Jämför ${ms.name}: ${klara} av ${grupper.length} clashgrupper`;
-        isRitaModellStatus();
+        status.text = `Jämför ${ms.name}: ${klara} av ${grupper.length} clashgrupper`;
+        if (_is.modellStatus === status) isRitaModellStatus();
       }
     };
     await Promise.all(Array.from({ length: Math.min(3, omgangar.length) }, arbetare));
@@ -120,7 +137,13 @@ async function isKontrolleraProjekt(projektId, ids, ut) {
       }
       // Skapades gruppen från just den här körningen har ingen ny körning gjorts.
       const ingenNy = g.clashTestId === test.id || (s.createdAtVersion != null && test.modelSetVersion <= s.createdAtVersion);
-      const { kvar, lost, totalt } = isRaknaClashar(g, s);
+      const rakning = isRaknaClashar(g, s);
+      // Svaret saknar clashlistan: gruppen kunde inte jämföras (räknas aldrig som löst).
+      if (!rakning) {
+        isLaggTill(ut, g.issueId, { okandGrupp: true, modelSet: ms.name, version: test.modelSetVersion });
+        continue;
+      }
+      const { kvar, lost, totalt } = rakning;
       isLaggTill(ut, g.issueId, {
         kvar:   ingenNy ? 0 : kvar,
         lost:   ingenNy ? 0 : lost,
@@ -138,6 +161,8 @@ async function isKontrolleraProjekt(projektId, ids, ut) {
 // de clashar som finns i körningen (POST-varianten), som jämförs med gruppens
 // ursprungliga clashar.
 function isRaknaClashar(g, s) {
+  // Varken existing/resolved eller en clashlista: svaret går inte att tolka.
+  if (!s.existing && !s.resolved && !Array.isArray(s.clashData?.clashes)) return null;
   if (s.existing || s.resolved) {
     const kvar = (s.existing || []).length, lost = (s.resolved || []).length;
     return { kvar, lost, totalt: (g.clashes || []).length || kvar + lost };
@@ -176,12 +201,14 @@ function isLaggTill(ut, issueId, del) {
   if (del.modelSet) r.modelSet.add(del.modelSet);
   if (del.version != null) r.version = Math.max(r.version ?? 0, del.version);
 
-  // Läget avgörs av grupperna som faktiskt kunde jämföras.
+  // Läget avgörs av grupperna som kunde jämföras. Finns det clashar kvar i
+  // någon av dem är det Kvar eller Delvis. Annars är det Löst bara om alla
+  // grupper jämfördes; saknas någon är det "Inte helt kontrollerad".
   const jamforda = r.grupper - r.ingenNy - r.ingenKorning;
   r.lage = jamforda <= 0 ? (r.ingenNy ? 'ingenNy' : 'okand')
-         : r.kvar === 0 ? 'lost'
-         : r.lost === 0 ? 'kvar'
-         : 'delvis';
+         : r.kvar > 0 ? (r.lost === 0 ? 'kvar' : 'delvis')
+         : jamforda < r.grupper ? 'ofull'
+         : 'lost';
   ut.set(issueId, r);
 }
 
@@ -211,7 +238,10 @@ function isModellCellHtml(a) {
   const lage = IS_MODELL_LAGE[r?.lage || 'okand'];
   if (!r) return `<span class="text-[11px] text-ads-muted" title="Ärendet är inte kopplat till någon clashgrupp i Model Coordination">–</span>`;
   const detalj = r.lage === 'lost' || r.lage === 'delvis' || r.lage === 'kvar'
-    ? `${r.kvar} av ${r.kvar + r.lost} kvar` : r.lage === 'ingenNy' ? 'Ingen körning sedan ärendet skapades' : '';
+    ? `${r.kvar} av ${r.kvar + r.lost} kvar`
+    : r.lage === 'ofull' ? `${r.grupper - r.ingenNy - r.ingenKorning} av ${r.grupper} clashgrupper kunde jämföras, utan clashar kvar. Övriga har ingen ny körning eller kunde inte läsas.`
+    : r.lage === 'fel' ? 'Projektet kunde inte kontrolleras, se felet ovanför listan.'
+    : r.lage === 'ingenNy' ? 'Ingen körning sedan ärendet skapades' : '';
   const titel = [lage.titel, detalj, [...r.modelSet].join(', '), r.version != null ? `model set-version ${r.version}` : ''].filter(Boolean).join(' · ');
   return `<span class="text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap ${lage.farg}" title="${vkEsc(titel)}">${lage.kort}</span>
           ${r.lage === 'delvis' ? `<div class="text-[10px] text-ads-muted mt-0.5">${r.kvar} av ${r.kvar + r.lost} kvar</div>` : ''}`;

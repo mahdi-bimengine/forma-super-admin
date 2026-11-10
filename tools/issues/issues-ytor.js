@@ -174,6 +174,7 @@ function isAdminRadHtml(a, s) {
 
 function isSokYta(text) {
   _is.sok = text;
+  if (_is.yta === 'clash') isRensaClashVal();
   // Ytorna är enkla nog att ritas om helt, men fokus ska stanna i sökfältet.
   const pos = document.activeElement?.selectionStart;
   isRita();
@@ -219,16 +220,36 @@ async function isLasClashKommentarer() {
 
 function isSattClashLage(lage) {
   _is.clashLage = lage;
+  isRensaClashVal();
   isRita();
 }
 
 function isClashUrval() {
   const q = _is.sok.trim().toLowerCase();
+  // Modellfiltret gäller bara när modellkontrollens rad syns (blocker 5).
+  const modellFilter = isVisaModell() ? _is.modellFilter : 'alla';
   return isClashSlutforda().filter(a =>
     (_is.clashLage === 'alla' || isClashLage(a) === _is.clashLage) &&
-    (_is.modellFilter === 'alla' || isModellLage(a) === _is.modellFilter) &&
+    (modellFilter === 'alla' || isModellLage(a) === modellFilter) &&
     (!q || [a.rubrik, a.tilldelad, String(a.nr), a.projekt, isKommentarText(isSenasteKommentar(a)?.text), isSenasteKommentar(a)?.av]
       .some(s => (s || '').toLowerCase().includes(q))));
+}
+
+// Kan ärendet markeras för stängning? Inte om ACC nekar, och inte om det redan
+// har en väntande ändring (t.ex. Skicka tillbaka), som annars skulle skrivas över.
+function isKanMarkeraClash(a) {
+  return a.tillatnaStatusar.includes('closed') && isFarAndra(a, 'status') && !isVantande(a);
+}
+
+// Markerade som syns i listan och fortfarande kan stängas. Bara de räknas och
+// stängs; markeringar som döljs av ett filter tas bort (granskning 2026-11-09).
+function isGiltigaClashVal() {
+  return isClashUrval().filter(a => _is.clashValda.has(a.id) && isKanMarkeraClash(a));
+}
+
+function isRensaClashVal() {
+  const giltiga = new Set(isGiltigaClashVal().map(a => a.id));
+  for (const id of [..._is.clashValda]) if (!giltiga.has(id)) _is.clashValda.delete(id);
 }
 
 function isMarkeraClash(ref, pa) {
@@ -239,24 +260,28 @@ function isMarkeraClash(ref, pa) {
 }
 
 function isMarkeraAllaClash(pa) {
-  for (const a of isClashUrval()) if (pa) _is.clashValda.add(a.id); else _is.clashValda.delete(a.id);
+  for (const a of isClashUrval()) if (pa && isKanMarkeraClash(a)) _is.clashValda.add(a.id); else _is.clashValda.delete(a.id);
   isRita();
 }
 
 // Lägger "Stängd" på de markerade ärendena i ändringslistan och öppnar granskningen.
+// Bara markerade som syns och kan stängas tas med: ett ärende som döljs av ett
+// filter, eller som redan har en väntande ändring, stängs aldrig.
 function isStangValdaClash() {
+  const valda = isGiltigaClashVal();
+  const borta = _is.clashValda.size - valda.length;
   let lagda = 0, nekade = 0;
-  for (const a of isClashSlutforda().filter(x => _is.clashValda.has(x.id))) {
+  for (const a of valda) {
     if (isForeslaStatus(a, 'closed')) lagda++; else nekade++;
   }
   _is.clashValda = new Set();
-  if (nekade) alert(`${nekade} av ärendena kan du inte stänga enligt ACC. De togs inte med.`);
+  if (nekade || borta) alert(`${nekade + borta} markerade ärenden togs inte med: de syns inte i listan längre, har redan en väntande ändring eller får inte stängas enligt ACC.`);
   if (lagda) _is.dialog = 'granska';
   isRita();
 }
 
 function isClashKnappHtml() {
-  const n = _is.clashValda.size;
+  const n = isGiltigaClashVal().length;
   return `<button id="is-clash-knapp" onclick="isStangValdaClash()" ${n ? '' : 'disabled'}
                   class="bg-be-charcoal hover:bg-black text-white text-xs font-medium py-1.5 px-3 rounded disabled:opacity-40">
             Stäng markerade${n ? ` (${n})` : ''}</button>`;
@@ -291,7 +316,7 @@ function isClashHtml() {
         <div class="px-3 py-2 border-b border-ads-border flex items-center gap-3">
           <label class="flex items-center gap-1.5 text-xs cursor-pointer">
             <input type="checkbox" onchange="isMarkeraAllaClash(this.checked)" class="accent-ads-blue"
-                   ${lista.length && lista.every(a => _is.clashValda.has(a.id)) ? 'checked' : ''} /> Markera alla i listan</label>
+                   ${lista.some(isKanMarkeraClash) && lista.filter(isKanMarkeraClash).every(a => _is.clashValda.has(a.id)) ? 'checked' : ''} /> Markera alla i listan</label>
           <div class="flex-1"></div>
           ${isClashKnappHtml()}
         </div>
@@ -324,9 +349,9 @@ function isClashRadHtml(a) {
   return `
     <tr ${isvRadAttr(a)} class="border-t border-ads-border/60 align-top ${vant ? 'bg-amber-50/60' : ''}">
       <td class="pl-3 py-2">
-        <input type="checkbox" ${_is.clashValda.has(a.id) ? 'checked' : ''} ${kanStanga && !vant ? '' : 'disabled'}
+        <input type="checkbox" ${_is.clashValda.has(a.id) && !vant ? 'checked' : ''} ${kanStanga && !vant ? '' : 'disabled'}
                onchange="isMarkeraClash(${isRef(a.id)}, this.checked)" class="accent-ads-blue"
-               title="${kanStanga ? '' : 'ACC tillåter inte att du stänger ärendet'}" /></td>
+               title="${!kanStanga ? 'ACC tillåter inte att du stänger ärendet' : vant ? 'Ärendet har redan en väntande ändring. Ångra den först.' : ''}" /></td>
       <td class="px-2 py-2 min-w-[220px]">
         <a href="${isLank(a)}" target="_blank" rel="noopener" class="font-mono text-xs text-ads-blue hover:underline">#${a.nr} ↗</a>
         <span class="font-medium">${vkEsc(a.rubrik)}</span>
@@ -351,7 +376,7 @@ function isExporteraClash() {
   for (const a of isClashUrval()) {
     const k = isSenasteKommentar(a);
     const v = isVantande(a);
-    aoa.push([IS_CLASH_LAGE[isClashLage(a)].titel, a.nr, a.rubrik, a.projekt, a.tilldelad, IS_MODELL_LAGE[isModellLage(a)].titel, isModellResultat(a) ? isModellResultat(a).kvar : '', k?.av || '', k?.tid || '', isKommentarText(k?.text),
+    aoa.push([IS_CLASH_LAGE[isClashLage(a)].titel, a.nr, a.rubrik, a.projekt, a.tilldelad, IS_MODELL_LAGE[isModellLage(a)].titel, (['lost', 'delvis', 'kvar'].includes(isModellLage(a)) ? isModellResultat(a).kvar : ''), k?.av || '', k?.tid || '', isKommentarText(k?.text),
               v ? `${isStatusLabel(v.efter.status)}${v.kommentar ? `: ${v.kommentar}` : ''}` : '', isLank(a)]);
   }
   isSparaXlsx(aoa, 'Clash att godkänna', `clash_underlag_${new Date().toISOString().slice(0, 10)}.xlsx`,
@@ -361,6 +386,7 @@ function isExporteraClash() {
 // Filter på vad modellkontrollen visar, plus status för senaste kontrollen.
 function isSattModellFilter(f) {
   _is.modellFilter = f;
+  isRensaClashVal();
   isRita();
 }
 
@@ -392,7 +418,9 @@ function isModellFilterHtml(alla) {
       ${chip('lost', '✓ Löst i modellen', antal('lost'))}
       ${chip('delvis', '◐ Delvis löst', antal('delvis'))}
       ${chip('kvar', '✕ Finns kvar', antal('kvar'))}
+      ${antal('ofull') ? chip('ofull', '? Inte helt kontrollerad', antal('ofull')) : ''}
       ${chip('ingenNy', 'Ej omkörd', antal('ingenNy'))}
+      ${antal('fel') ? chip('fel', '! Kunde inte kontrolleras', antal('fel')) : ''}
       ${chip('okand', 'Ej kopplad', antal('okand'))}
       <span id="is-modell-status" class="ml-2">${isModellStatusHtml()}</span>
     </div>`;

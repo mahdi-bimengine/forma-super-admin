@@ -115,6 +115,8 @@ function isHamtaAndring(a) {
 // Sätter en status direkt, utan omritning. Används för bulkåtgärder.
 function isForeslaStatus(a, status) {
   if (!a.tillatnaStatusar.includes(status) || !isFarAndra(a, 'status')) return false;
+  // Ett ärende som skickas tillbaka (väntande kommentar) får inte en annan status ovanpå.
+  if (isVantande(a)?.kommentar) return false;
   const andring = isHamtaAndring(a);
   andring.efter.status = status;
   return true;
@@ -131,6 +133,7 @@ function isSkickaTillbaka(ref) {
   const andring = isHamtaAndring(a);
   andring.efter.status = status;
   andring.kommentar = text.trim() || null;
+  _is.clashValda.delete(a.id);
   isRita();
 }
 
@@ -165,7 +168,18 @@ async function isSpara() {
       try {
         const sokvag = `/construction/issues/v1/projects/${r.accId}/issues/${r.id}`;
         const farsk  = await bhMedOmforsok(() => apsGet(sokvag));
+        const granskad = r.fore;
         r.fore = isFore({ ra: farsk }, Object.keys(r.efter));
+        // Har någon annan ändrat ett av fälten sedan ärendet lästes in (t.ex.
+        // projektören öppnat det igen) sparas ingenting för ärendet. Bevakare
+        // spelas upp på det aktuella läget och jämförs därför inte.
+        const andrade = Object.keys(r.efter).filter(k => k !== 'watchers' && k !== 'assignedToType' && k in granskad && !isLika(r.fore[k], granskad[k]));
+        if (andrade.length) {
+          r.status = 'ändrad i ACC';
+          r.fel = `Ändrat i ACC sedan det lästes in (${andrade.map(k => `${isFaltNamn(k)}: ${isVardeText(k, r.fore)}`).join(', ')}). Ingenting sparades.`;
+          isUppdateraArende(r.projektId, farsk);
+          throw null;
+        }
         if (r.bevakarSteg) r.efter.watchers = isBevakareEfterSteg(r.fore.watchers, r.bevakarSteg);
         const kropp = {};
         if ('watchers' in r.efter && !isLika(r.efter.watchers, r.fore.watchers)) {
@@ -195,8 +209,10 @@ async function isSpara() {
         r.status  = Object.keys(r.efter).every(k => isLika(r.faktisk[k], r.efter[k])) ? 'klar' : 'avviker';
         isUppdateraArende(r.projektId, svar);
       } catch (err) {
-        r.status = 'fel';
-        r.fel    = bhKortFel(err);
+        if (err !== null) {
+          r.status = 'fel';
+          r.fel    = bhKortFel(err);
+        }
       }
       _is.kor.klara++;
       const el = document.getElementById('is-dialog');
@@ -409,7 +425,7 @@ function isAndringsradHtml() {
 }
 
 function isAndringsTabell(rader, medAngra, medStatus) {
-  const stil = { klar: 'text-emerald-700', avviker: 'text-amber-700', fel: 'text-red-700', väntar: 'text-ads-muted' };
+  const stil = { klar: 'text-emerald-700', avviker: 'text-amber-700', fel: 'text-red-700', väntar: 'text-ads-muted', 'ändrad i ACC': 'text-amber-700' };
   return `
     <table class="w-full text-sm">
       <thead class="text-[10px] uppercase tracking-wider text-ads-muted text-left sticky top-0 bg-white">
@@ -475,11 +491,11 @@ function isDialogHtml() {
     const n = s => k.rader.filter(r => r.status === s).length;
     return isDialogRam(`
       ${isDialogHuvud(k.klar ? 'Ändringarna är sparade' : 'Sparar till ACC',
-        k.klar ? `Klart: ${n('klar')} klara, ${n('avviker')} avviker, ${n('fel')} fel.` : `Sparar… ${k.klara} av ${k.rader.length} ärenden.`)}
+        k.klar ? `Klart: ${n('klar')} klara, ${n('avviker')} avviker${n('ändrad i ACC') ? `, ${n('ändrad i ACC')} ändrade i ACC under tiden` : ''}, ${n('fel')} fel.` : `Sparar… ${k.klara} av ${k.rader.length} ärenden.`)}
       <div class="flex-1 overflow-y-auto px-3 py-2">${isAndringsTabell(k.rader, false, true)}</div>
       ${k.klar ? `
         <div class="px-5 py-3 border-t border-ads-border flex items-center gap-3">
-          <p class="text-[11px] text-ads-muted flex-1">"Avviker" betyder att ACC svarade med ett annat värde än det som sattes. ${n('fel') ? 'Ärenden med fel ligger kvar i listan.' : ''}</p>
+          <p class="text-[11px] text-ads-muted flex-1">"Avviker" betyder att ACC svarade med ett annat värde än det som sattes. ${n('ändrad i ACC') ? '"Ändrad i ACC" betyder att någon annan ändrat ärendet efter att det lästes in, så inget sparades; listan visar nu läget i ACC. ' : ''}${n('fel') ? 'Ärenden med fel ligger kvar i listan.' : ''}</p>
           <button onclick="isStangDialog()" class="bg-be-charcoal hover:bg-black text-white text-sm font-medium py-2 px-4 rounded">Stäng</button>
         </div>` : ''}`);
   }

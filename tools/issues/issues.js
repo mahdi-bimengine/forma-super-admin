@@ -71,6 +71,7 @@ function isOppnaFlik() {
     Object.assign(_is, { hubId: hub?.id, projekt: new Map(), valda: null, hamtad: null, fel: null,
                          andringar: [], markerade: new Set(), hoppade: [], kolumner: null, dialog: null, kor: null, logg: null, vyer: null, inst: null,
                          kommentarer: new Map(), clashValda: new Set(), yta: 'start', platsNamn: null,
+                         modell: new Map(), modellStatus: null, modellFilter: 'alla', modellGen: (_is.modellGen || 0) + 1,
                          medlem: isNyttMedlemTillstand() });
   }
   if (!_is.vyer)  _is.vyer  = isLasVyer();
@@ -144,7 +145,7 @@ async function isHamta() {
   await Promise.all([arbetare(), arbetare(), arbetare()]);
 
   Object.assign(_is, { projekt: nya, laddar: false, hamtad: new Date(), fel: fel.length ? fel : null, clashValda: new Set(),
-                       modell: new Map(), modellStatus: null,
+                       modell: new Map(), modellStatus: null, modellFilter: 'alla', modellGen: (_is.modellGen || 0) + 1,
                        medlem: { ...isNyttMedlemTillstand(), flik: _is.medlem.flik, foretag: _is.medlem.foretag, logg: _is.medlem.logg } });
   // Var "Visa stängda" påslaget hämtas de stängda direkt också.
   if (_is.visaStangda) { _is.visaStangda = false; return isVaxlaStangda(); }
